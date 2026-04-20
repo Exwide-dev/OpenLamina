@@ -67,51 +67,51 @@ struct CompositeTypeNode final : TypeNode {
     std::vector<TypeNode*> subtypes;
 
     CompositeTypeNode(const std::string& n, std::vector<TypeNode*> subtypes)
-        : TypeNode(n), subtypes(subtypes) {
+        : TypeNode(n), subtypes(std::move(subtypes)) {
         kind = ASTNodeType::CompositeType;
     }
-    ~CompositeTypeNode() {
-        for (auto type : subtypes) {
+    ~CompositeTypeNode() override {
+        for (const auto type : subtypes) {
             delete type;
         }
     }
 };
 
-struct NumberNode : ExprNode {
+struct NumberNode final : ExprNode {
     std::string value;
 
-    explicit NumberNode(const std::string& v) : ExprNode(ASTNodeType::Number), value(v) {}
-    virtual ~NumberNode() = default;
+    explicit NumberNode(std::string  v) : ExprNode(ASTNodeType::Number), value(std::move(v)) {}
+    ~NumberNode() override = default;
 };
 
-struct BoolNode : ExprNode {
+struct BoolNode final : ExprNode {
     bool value;
 
-    explicit BoolNode(bool v) : ExprNode(ASTNodeType::Bool), value(v) {}
-    virtual ~BoolNode() = default;
+    explicit BoolNode(const bool v) : ExprNode(ASTNodeType::Bool), value(v) {}
+    ~BoolNode() override = default;
 };
 
-struct StringNode : ExprNode {
+struct StringNode final : ExprNode {
     std::string value;
 
-    explicit StringNode(const std::string& v) : ExprNode(ASTNodeType::String), value(v) {}
-    virtual ~StringNode() = default;
+    explicit StringNode(std::string  v) : ExprNode(ASTNodeType::String), value(std::move(v)) {}
+    ~StringNode() override = default;
 };
 
 struct VarRefNode : ExprNode {
     std::string name;
 
-    explicit VarRefNode(const std::string& n) : ExprNode(ASTNodeType::VarRef), name(n) {}
-    virtual ~VarRefNode() = default;
+    explicit VarRefNode(std::string  n) : ExprNode(ASTNodeType::VarRef), name(std::move(n)) {}
+    ~VarRefNode() override = default;
 };
 
-struct UnaryNode : ExprNode {
+struct UnaryNode final : ExprNode {
     std::string op;
     ExprNode* operand;
 
-    UnaryNode(const std::string& o, ExprNode* oper)
-        : ExprNode(ASTNodeType::Unary), op(o), operand(oper) {}
-    ~UnaryNode() {
+    UnaryNode(std::string  o, ExprNode* oper)
+        : ExprNode(ASTNodeType::Unary), op(std::move(o)), operand(oper) {}
+    ~UnaryNode() override {
         delete operand;
     }
 };
@@ -121,76 +121,76 @@ struct BinaryNode : ExprNode {
     ExprNode* left;
     ExprNode* right;
 
-    BinaryNode(ExprNode* l, ExprNode* r, const std::string& o)
-        : ExprNode(ASTNodeType::Binary), left(l), right(r), op(o) {}
-    ~BinaryNode() {
+    BinaryNode(ExprNode* l, ExprNode* r, std::string  o)
+        : ExprNode(ASTNodeType::Binary), op(std::move(o)), left(l), right(r) {}
+    ~BinaryNode() override {
         delete left;
         delete right;
     }
 };
 
-struct FuncCallExprNode : ExprNode {
+struct FuncCallExprNode final : ExprNode {
     std::string func_name;
     std::vector<ASTNode*> args;
 
-    FuncCallExprNode(const std::string& n, std::vector<ASTNode*> a)
-        : ExprNode(ASTNodeType::FuncCallExpr), func_name(n), args(a) {}
-    ~FuncCallExprNode() {
-        for (auto arg : args) {
+    FuncCallExprNode(std::string  n, std::vector<ASTNode*> a)
+        : ExprNode(ASTNodeType::FuncCallExpr), func_name(std::move(n)), args(std::move(a)) {}
+    ~FuncCallExprNode() override {
+        for (const auto arg : args) {
             delete arg;
         }
     }
 };
 
-struct VMCallNode : ExprNode {
+struct VMCallNode final : ExprNode {
     std::string index;
     std::vector<ASTNode*> args;
 
-    VMCallNode(const std::string& idx, std::vector<ASTNode*> a)
-        : ExprNode(ASTNodeType::VMCall), index(idx), args(a) {}
-    ~VMCallNode() {
-        for (auto arg : args) {
+    VMCallNode(std::string  idx, std::vector<ASTNode*> a)
+        : ExprNode(ASTNodeType::VMCall), index(std::move(idx)), args(std::move(a)) {}
+    ~VMCallNode() override {
+        for (const auto arg : args) {
             delete arg;
         }
     }
 };
 
-struct BlockStmtNode : ASTNode {
+struct BlockStmtNode final : ASTNode {
     std::vector<ASTNode*> stmts;
 
     explicit BlockStmtNode(std::vector<ASTNode*> s)
-        : ASTNode(ASTNodeType::BlockStmt), stmts(s) {}
-    ~BlockStmtNode() {
-        for (auto stmt : stmts) {
+        : ASTNode(ASTNodeType::BlockStmt), stmts(std::move(s)) {}
+    ~BlockStmtNode() override {
+        for (const auto stmt : stmts) {
             delete stmt;
         }
     }
 };
 
-struct VarDeclNode : ASTNode {
+struct VarDeclNode final : ASTNode {
     std::string name;
     ExprNode* init;
     bool is_redecl;
 
-    VarDeclNode(const std::string& n, ExprNode* i, bool redec = true)
-        : ASTNode(ASTNodeType::VarDecl), name(n), init(i), is_redecl(redec) {}
-    ~VarDeclNode() {
+    VarDeclNode(std::string  n, ExprNode* i, bool redec = true)
+        : ASTNode(ASTNodeType::VarDecl), name(std::move(n)), init(i), is_redecl(redec) {}
+    ~VarDeclNode() override {
         delete init;
     }
 };
 
-struct FuncDeclNode : ASTNode {
+struct FuncDeclNode final : ASTNode {
     std::string name;
     std::vector<std::string> params;
     BlockStmtNode* body;
     std::vector<TypeNode*> args_type;
-    TypeNode* ret_type;
+    TypeNode* ret_type{};
 
-    FuncDeclNode(const std::string& n, std::vector<std::string> p, BlockStmtNode* b)
-        : ASTNode(ASTNodeType::FuncDecl), name(n), params(p), body(b) {}
-    ~FuncDeclNode() {
+    FuncDeclNode(std::string  n, std::vector<std::string> p, BlockStmtNode* b)
+        : ASTNode(ASTNodeType::FuncDecl), name(std::move(n)), params(std::move(p)), body(b) {}
+    ~FuncDeclNode() override {
         delete body;
-        for (auto type : args_type) {
+        for (const auto type : args_type) {
             delete type;
         }
         delete ret_type;
@@ -204,12 +204,12 @@ struct ExternFuncNode : ASTNode {
     StringNode* lib_name;
     TypeNode* ret_type;
 
-    ExternFuncNode(const std::string& n, std::vector<std::string> p,
+    ExternFuncNode(std::string  n, std::vector<std::string> p,
                    std::vector<TypeNode*> a, StringNode* l,
                    TypeNode* r)
-        : ASTNode(ASTNodeType::ExternFunc), name(n), params(p),
-          args_type(a), lib_name(l), ret_type(r) {}
-    ~ExternFuncNode() {
+        : ASTNode(ASTNodeType::ExternFunc), name(std::move(n)), params(std::move(p)),
+          args_type(std::move(a)), lib_name(l), ret_type(r) {}
+    ~ExternFuncNode() override {
         delete lib_name;
         for (auto type : args_type) {
             delete type;
@@ -218,39 +218,39 @@ struct ExternFuncNode : ASTNode {
     }
 };
 
-struct ReturnStmtNode : ASTNode {
+struct ReturnStmtNode final : ASTNode {
     ExprNode* expr;
 
     explicit ReturnStmtNode(ExprNode* e)
         : ASTNode(ASTNodeType::ReturnStmt), expr(e) {}
-    ~ReturnStmtNode() {
+    ~ReturnStmtNode() override {
         delete expr;
     }
 };
 
-struct LoopNode : ASTNode {
+struct LoopNode final : ASTNode {
     ExprNode* condition;
     BlockStmtNode* body;
 
     LoopNode(ExprNode* cond, BlockStmtNode* b)
         : ASTNode(ASTNodeType::Loop), condition(cond), body(b) {}
-    ~LoopNode() {
+    ~LoopNode() override {
         delete condition;
         delete body;
     }
 };
 
-struct BreakNode : ASTNode {
+struct BreakNode final : ASTNode {
     BreakNode() : ASTNode(ASTNodeType::Break) {}
-    virtual ~BreakNode() = default;
+    ~BreakNode() override = default;
 };
 
-struct ContinueNode : ASTNode {
+struct ContinueNode final : ASTNode {
     ContinueNode() : ASTNode(ASTNodeType::Continue) {}
-    virtual ~ContinueNode() = default;
+    ~ContinueNode() override = default;
 };
 
-struct IfStmtNode : ASTNode {
+struct IfStmtNode final : ASTNode {
     ExprNode* condition;
     BlockStmtNode* then_block;
     BlockStmtNode* else_block;
@@ -259,14 +259,14 @@ struct IfStmtNode : ASTNode {
               BlockStmtNode* e)
         : ASTNode(ASTNodeType::IfStmt), condition(cond),
           then_block(t), else_block(e) {}
-    ~IfStmtNode() {
+    ~IfStmtNode() override {
         delete condition;
         delete then_block;
         delete else_block;
     }
 };
 
-struct ModuleNode : ASTNode {
+struct ModuleNode final : ASTNode {
     enum class Types { ord, dyn };
 
     std::string name;
@@ -277,38 +277,38 @@ struct ModuleNode : ASTNode {
     std::vector<ExternFuncNode*> dyn_funcs;
     std::vector<ModuleNode*> children;
 
-    ModuleNode(const std::string& n, Types t, StringNode* l,
+    ModuleNode(std::string  n, const Types t, StringNode* l,
               std::vector<VarDeclNode*> v,
               std::vector<FuncDeclNode*> o,
               std::vector<ExternFuncNode*> d,
               std::vector<ModuleNode*> c)
-        : ASTNode(ASTNodeType::Module), name(n), type(t), lib(l),
-          vars(v), ord_funcs(o), dyn_funcs(d),
-          children(c) {}
-    ~ModuleNode() {
+        : ASTNode(ASTNodeType::Module), name(std::move(n)), type(t), lib(l),
+          vars(std::move(v)), ord_funcs(std::move(o)), dyn_funcs(std::move(d)),
+          children(std::move(c)) {}
+    ~ModuleNode() override {
         delete lib;
-        for (auto var : vars) {
+        for (const auto var : vars) {
             delete var;
         }
-        for (auto func : ord_funcs) {
+        for (const auto func : ord_funcs) {
             delete func;
         }
-        for (auto func : dyn_funcs) {
+        for (const auto func : dyn_funcs) {
             delete func;
         }
-        for (auto child : children) {
+        for (const auto child : children) {
             delete child;
         }
     }
 };
 
-struct ProgramASTNode : ASTNode {
+struct ProgramASTNode final : ASTNode {
     std::vector<ASTNode*> stmts;
 
     explicit ProgramASTNode(std::vector<ASTNode*> s)
-        : ASTNode(ASTNodeType::Program), stmts(s) {}
-    ~ProgramASTNode() {
-        for (auto stmt : stmts) {
+        : ASTNode(ASTNodeType::Program), stmts(std::move(s)) {}
+    ~ProgramASTNode() override {
+        for (const auto stmt : stmts) {
             delete stmt;
         }
     }
