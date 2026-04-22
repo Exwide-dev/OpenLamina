@@ -29,6 +29,8 @@ using namespace lexer;
 %}
 
 %option noyywrap
+%option outfile="lexer_generated.cpp"
+%option header-file="lexer_generated.h"
 
 %%
 

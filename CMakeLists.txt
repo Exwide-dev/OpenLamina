@@ -17,7 +17,7 @@ set(PARSER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/parser/parser.y")
 
 # 定义 Flex 和 Bison 的生成目标
 # 这里会生成 lexer.cpp 和 parser.cpp 等文件
-FLEX_TARGET(OpenLaminaScanner ${LEXER_SRC} ${CMAKE_CURRENT_BINARY_DIR}/lexer.cpp)
+FLEX_TARGET(OpenLaminaScanner ${LEXER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/lexer_generated.cpp)
 BISON_TARGET(OpenLaminaParser ${PARSER_SRC} ${CMAKE_CURRENT_BINARY_DIR}/parser.tab.cpp)
 
 # 声明 Flex 和 Bison 的依赖关系
@@ -39,6 +39,9 @@ add_executable(
     main.cpp
     ${FLEX_OpenLaminaScanner_OUTPUTS}
     ${BISON_OpenLaminaParser_OUTPUTS}
+        src/irgen/generator.cpp
+        src/irgen/generator.hpp
+        src/lexer/lex.cpp
 )
 
 # ==============================================

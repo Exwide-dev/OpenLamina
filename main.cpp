@@ -1,12 +1,12 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include "lexer_generated.h"
 #include "parser.tab.hpp"
+#include "lexer/lex.hpp"
+#include "lexer/token.hpp"
 #include "parser/ast.hpp"
 
-// 声明 Bison 和 Flex 解析函数
-extern int yyparse();
-extern void yyrestart(FILE*);
 
 // 存储解析结果
 lmx::ASTNode* result = nullptr;
@@ -14,8 +14,8 @@ lmx::ASTNode* result = nullptr;
 // yylval 由 Bison 自动定义
 
 // 声明 Flex 函数
+
 extern "C" {
-    void* yy_scan_string(const char*);
     void yy_delete_buffer(void*);
 }
 
@@ -173,31 +173,28 @@ int main() {
 
     std::cout << "Source code:\n" << source << "\n";
 
+
+
     // 解析并显示 AST
     // 将源代码写入临时文件
-    if (FILE* temp_file = fopen("__temp_source.tmp", "w")) {
-        fprintf(temp_file, "%s", source.c_str());
-        fclose(temp_file);
 
-        // 重新打开文件进行解析
-        temp_file = fopen("__temp_source.tmp", "r");
-        if (temp_file) {
-            yyrestart(temp_file);
+    const std::vector<lexer::Token> tokens = lexer::Lexer(source).tokenize();
+    for (const auto& token : tokens) {
+        std::cout << token.value << std::endl;
+    }
+
+            yy_scan_string(source.c_str());
             std::cout << "\nParsing...\n";
             const int parse_result = yyparse();
-            fclose(temp_file);
 
             if (parse_result == 0) {
                 std::cout << "\nParsing successful!\n";
                 std::cout << "AST:\n";
                 printAST(result);
-                // 释放 AST 内存
                 delete result;
             } else {
                 std::cout << "\nParsing failed!\n";
             }
-        }
-    }
     std::cin.get();
     return 0;
 }
