@@ -40,10 +40,28 @@ using namespace lexer;
 "*"            { addToken(OPER_MUL, yytext); yylval.string_val = new std::string(yytext); return OPER_MUL; }
 "/"            { addToken(OPER_DIV, yytext); yylval.string_val = new std::string(yytext); return OPER_DIV; }
 "="            { addToken(ASSIGN, yytext); yylval.string_val = new std::string(yytext); return ASSIGN; }
+","            { addToken(OPER_COMMA, yytext); yylval.string_val = new std::string(yytext); return OPER_COMMA; }
 "("            { addToken(LPAREN, yytext); yylval.string_val = new std::string(yytext); return LPAREN; }
 ")"            { addToken(RPAREN, yytext); yylval.string_val = new std::string(yytext); return RPAREN; }
+"{"            { addToken(LBRACE, yytext); yylval.string_val = new std::string(yytext); return LBRACE; }
+"}"            { addToken(RBRACE, yytext); yylval.string_val = new std::string(yytext); return RBRACE; }
+"!"            { addToken(OPER_NOT, yytext); yylval.string_val = new std::string(yytext); return OPER_NOT; }
+"=="           { addToken(OPER_EQ, yytext); yylval.string_val = new std::string(yytext); return OPER_EQ; }
+"!="           { addToken(OPER_NE, yytext); yylval.string_val = new std::string(yytext); return OPER_NE; }
+"<"            { addToken(OPER_LT, yytext); yylval.string_val = new std::string(yytext); return OPER_LT; }
+">"            { addToken(OPER_GT, yytext); yylval.string_val = new std::string(yytext); return OPER_GT; }
+"<="           { addToken(OPER_LE, yytext); yylval.string_val = new std::string(yytext); return OPER_LE; }
+">="           { addToken(OPER_GE, yytext); yylval.string_val = new std::string(yytext); return OPER_GE; }
 
 "let"          { addToken(KW_LET, yytext); yylval.string_val = new std::string(yytext); return KW_LET; }
+"func"         { addToken(KW_FUNC, yytext); yylval.string_val = new std::string(yytext); return KW_FUNC; }
+"do"           { addToken(KW_DO, yytext); yylval.string_val = new std::string(yytext); return KW_DO; }
+"return"       { addToken(KW_RETURN, yytext); yylval.string_val = new std::string(yytext); return KW_RETURN; }
+"if"           { addToken(KW_IF, yytext); yylval.string_val = new std::string(yytext); return KW_IF; }
+"else"         { addToken(KW_ELSE, yytext); yylval.string_val = new std::string(yytext); return KW_ELSE; }
+"loop"         { addToken(KW_LOOP, yytext); yylval.string_val = new std::string(yytext); return KW_LOOP; }
+"break"        { addToken(KW_BREAK, yytext); yylval.string_val = new std::string(yytext); return KW_BREAK; }
+"continue"     { addToken(KW_CONTINUE, yytext); yylval.string_val = new std::string(yytext); return KW_CONTINUE; }
 
 [0-9][0-9_]*  { 
     std::string num = yytext;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include "parser.tab.hpp" // Bison 生成的头文件，包含 Token 类型宏
 
 namespace lexer {
@@ -14,8 +15,8 @@ namespace lexer {
         int line;
         int column;
         
-        Token(TokenType type, const std::string& value, int line, int column)
-            : type(type), value(value), line(line), column(column) {}
+        Token(const TokenType type, std::string  value, const int line, const int column)
+            : type(type), value(std::move(value)), line(line), column(column) {}
     };
 
     // 定义 Token 类型到字符串的映射
@@ -25,10 +26,28 @@ namespace lexer {
             case OPER_MINUS: return "OPER_MINUS";
             case OPER_MUL: return "OPER_MUL";
             case OPER_DIV: return "OPER_DIV";
+            case OPER_NOT: return "OPER_NOT";
+            case OPER_EQ: return "OPER_EQ";
+            case OPER_NE: return "OPER_NE";
+            case OPER_LT: return "OPER_LT";
+            case OPER_GT: return "OPER_GT";
+            case OPER_LE: return "OPER_LE";
+            case OPER_GE: return "OPER_GE";
+            case OPER_COMMA: return "OPER_COMMA";
             case ASSIGN: return "ASSIGN";
             case LPAREN: return "LPAREN";
             case RPAREN: return "RPAREN";
+            case LBRACE: return "LBRACE";
+            case RBRACE: return "RBRACE";
             case KW_LET: return "KW_LET";
+            case KW_FUNC: return "KW_FUNC";
+            case KW_DO: return "KW_DO";
+            case KW_RETURN: return "KW_RETURN";
+            case KW_IF: return "KW_IF";
+            case KW_ELSE: return "KW_ELSE";
+            case KW_LOOP: return "KW_LOOP";
+            case KW_BREAK: return "KW_BREAK";
+            case KW_CONTINUE: return "KW_CONTINUE";
             case NUM_LITERAL: return "NUM_LITERAL";
             case IDENTIFIER: return "IDENTIFIER";
             case 0: return "EOF";

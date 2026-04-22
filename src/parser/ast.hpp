@@ -12,6 +12,7 @@ enum class ASTNodeType {
     BlockStmt,
     Expr,
     VarDecl,
+    Assign,     // 新增：赋值语句
     FuncDecl,
     ExternFunc,
     ReturnStmt,
@@ -176,6 +177,18 @@ struct VarDeclNode final : ASTNode {
         : ASTNode(ASTNodeType::VarDecl), name(std::move(n)), init(i), is_redecl(redec) {}
     ~VarDeclNode() override {
         delete init;
+    }
+};
+
+// 新增：赋值语句节点
+struct AssignNode final : ASTNode {
+    std::string name;
+    ExprNode* value;
+
+    AssignNode(std::string  n, ExprNode* v)
+        : ASTNode(ASTNodeType::Assign), name(std::move(n)), value(v) {}
+    ~AssignNode() override {
+        delete value;
     }
 };
 
