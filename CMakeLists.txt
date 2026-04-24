@@ -42,6 +42,11 @@ add_executable(
         src/irgen/generator.cpp
         src/irgen/generator.hpp
         src/lexer/lex.cpp
+        src/front-end/front_end.cpp
+        src/front-end/front_end.hpp
+        src/irgen/opcode.hpp
+        src/repl/repl.cpp
+        src/repl/repl.hpp
 )
 
 # ==============================================

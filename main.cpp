@@ -6,10 +6,13 @@
 #include "lexer/lex.hpp"
 #include "lexer/token.hpp"
 #include "parser/ast.hpp"
+#include "front-end/front_end.hpp"
+#include "irgen/generator.hpp"
+#include "irgen/opcode.hpp"
+#include "repl/repl.hpp"
 
 
 // 存储解析结果
-lmx::ASTNode* result = nullptr;
 
 // yylval 由 Bison 自动定义
 
@@ -150,7 +153,7 @@ void printAST(const lmx::ASTNode* node, const int indent = 0) {
     }
 }
 
-int main() {
+[[noreturn]] int main() {
     const std::string source = R"(
     func add(a, b) {
         return a + b
@@ -173,28 +176,39 @@ int main() {
 
     std::cout << "Source code:\n" << source << "\n";
 
-
-
     // 解析并显示 AST
-    // 将源代码写入临时文件
+    std::cout << "\nParsing...\n";
+    const lmx::ProgramASTNode* ast = parse(source);
+    printAST(ast);
 
-    const std::vector<lexer::Token> tokens = lexer::Lexer(source).tokenize();
-    for (const auto& token : tokens) {
-        std::cout << token.value << std::endl;
+    // 手动构建一个简单的 AST 进行测试
+    std::cout << "\nTesting with manually built AST...\n";
+    const auto* manual_ast = parse("let a = 10 + 5 * 2\na");
+    printAST(manual_ast);
+
+    const ::irgen::Value manual_result = lm::irgen::execute(manual_ast);
+    if (!manual_result.isNone()) {
+        std::cout << "Manual AST execution result: " << manual_result << std::endl;
+    } else {
+        std::cout << "Manual AST execution resulted in no value" << std::endl;
     }
 
-            yy_scan_string(source.c_str());
-            std::cout << "\nParsing...\n";
-            const int parse_result = yyparse();
+    // 释放内存
+    delete ast;
+    delete manual_ast;
 
-            if (parse_result == 0) {
-                std::cout << "\nParsing successful!\n";
-                std::cout << "AST:\n";
-                printAST(result);
-                delete result;
-            } else {
-                std::cout << "\nParsing failed!\n";
-            }
-    std::cin.get();
-    return 0;
+    std::cout << "Then, REPL" << std::endl;
+
+    auto repl = repl::REPL();
+    while (true) {
+        repl.exec_input([&]() -> std::string {
+            std::cout << "\n>>> ";
+            std::string line;
+            std::getline(std::cin, line);  // 先读取，再返回
+            return line;
+        });
+        if (!repl.vm.op_stack.empty()) {
+            std::cout << repl.vm.op_stack.top();
+        }
+    }
 }
