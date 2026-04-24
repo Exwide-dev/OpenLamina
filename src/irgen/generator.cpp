@@ -136,14 +136,11 @@ namespace lm::irgen {
             code.insert(code.end(), stmt_code.begin(), stmt_code.end());
         }
 
-        std::cerr << "LOGGING CODE" << std::endl;
-
         int i = 0;
         for (const auto& c : code) {
             std::cerr << std::format("{} | {} {}", i, c->name(), [&]()->std::string {
                 std::string str;
                 for (const auto& op : c->operands) {
-                    // std::cerr << "Try to asString()" << std::endl;
                     str.append(op.toString() + " ");
                 }
                 return str;
@@ -151,7 +148,7 @@ namespace lm::irgen {
             i++;
         }
 
-        std::cerr << "VM Exec" << std::endl;
+        LOG("VM Exec");
 
         ::irgen::VM vm(code);
         vm.run();

@@ -10,8 +10,9 @@ namespace repl {
         irgen::VM vm{};
         REPL() = default;
         ~REPL() = default;
-        void exec_input(
-            const std::function<std::string()>& input_func = []() -> std::string {
+
+        bool exec_input(
+            const std::function<std::string()> &input_func = []() -> std::string {
                 std::string line;
                 std::getline(std::cin, line);
                 return line;

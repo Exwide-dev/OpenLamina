@@ -201,14 +201,20 @@ void printAST(const lmx::ASTNode* node, const int indent = 0) {
 
     auto repl = repl::REPL();
     while (true) {
-        repl.exec_input([&]() -> std::string {
-            std::cout << "\n>>> ";
-            std::string line;
-            std::getline(std::cin, line);  // 先读取，再返回
-            return line;
-        });
-        if (!repl.vm.op_stack.empty()) {
-            std::cout << repl.vm.op_stack.top();
+        try {
+            if (repl.exec_input([&]() -> std::string {
+               std::cout << "\n>>> ";
+               std::string line;
+               std::getline(std::cin, line);
+               return line;
+           })) {
+                if (!repl.vm.op_stack.empty()) {
+                    std::cout << repl.vm.op_stack.top() << std::endl;
+                }
+           }
+        } catch (const std::exception& e) {
+            std::cout << "Runtime Error: " << e.what() << std::endl;
+            repl.vm.pc = repl.vm.code.size();
         }
     }
 }

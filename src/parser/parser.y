@@ -1,4 +1,5 @@
 %defines "parser.tab.hpp"
+%define parse.error detailed
 %output  "parser.tab.cpp"
 
 // 必须在 %union 之前包含所需的类型声明
@@ -10,19 +11,26 @@
 
 %code {
     #include <iostream>
+    #include <cstring>
+    #include "../tools/debug.hpp"
     using namespace lmx;
-    
-    // 调试输出宏
-    #define DEBUG 1
-    #if DEBUG
-        #define LOG(msg) std::cout << "[DEBUG] " << msg << std::endl
-    #else
-        #define LOG(msg) do {} while (0)
-    #endif
+    bool has_err = false;
+    std::string detail_msg;
 }
 
 %code {
     extern lmx::ASTNode* result;
+}
+
+%code {
+    extern int yylineno;
+    extern char* yytext;
+    std::string error_msg() {
+         std::string err_msg;
+         err_msg += std::string("Error at line ") + std::to_string(yylineno)
+                  + ", near '" + (yytext ? yytext : "") + "'\n" + detail_msg;
+         return err_msg;
+    }
 }
 
 %union {
@@ -497,5 +505,6 @@ identifier:
 %%
 
 void yyerror(const char* s) {
-    std::cerr << "Find ParserError: " << s << std::endl;
+    has_err = true;
+    detail_msg = std::string("Details: ") + s;
 }

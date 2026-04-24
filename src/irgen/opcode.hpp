@@ -9,6 +9,8 @@
 #include <variant>
 #include <unordered_map>
 
+#include "../tools/debug.hpp"
+
 namespace irgen {
     class VM;
 
@@ -76,7 +78,7 @@ namespace irgen {
         [[nodiscard]] bool isFunction() const { return type == Type::Function; }
 
         friend std::ostream& operator<<(std::ostream& os, const Value& value) {
-            std::cerr << "Access <<" << std::endl;
+            LOG("access <<");
             os << value.toString();
             return os;
         }
@@ -115,7 +117,7 @@ namespace irgen {
         }
 
         void push(Value&& value) {
-            std::cerr << "Pushing back: " << value.toString() << std::endl;
+            LOG("Pushing back: " << value.toString());
             data.push_back(std::move(value));
         }
 
@@ -239,7 +241,7 @@ namespace irgen {
         }
 
         void emit(VM& vm) override {
-            std::cerr << "PUSH " << operands[0].toString() << std::endl;
+            LOG("PUSH " << operands[0].toString());
             vm.op_stack.push(operands[0]);
         }
     };
@@ -254,7 +256,6 @@ namespace irgen {
         void emit(VM& vm) override {
             auto b = vm.op_stack.popValue().asInt();
             auto a = vm.op_stack.popValue().asInt();
-            std::cerr << "ADD OK" << std::endl;
             vm.op_stack.push(Value(a + b));
         }
     };
@@ -267,12 +268,9 @@ namespace irgen {
         MUL() = default;
 
         void emit(VM& vm) override {
-            std::cerr << "MUL" << std::endl;
             auto b = vm.op_stack.popValue().asInt();
             auto a = vm.op_stack.popValue().asInt();
-            std::cerr << "OK" << std::endl;
             vm.op_stack.push(Value(a * b));
-            std::cerr << "DONE" << std::endl;
         }
     };
 

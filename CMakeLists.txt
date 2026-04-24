@@ -47,6 +47,8 @@ add_executable(
         src/irgen/opcode.hpp
         src/repl/repl.cpp
         src/repl/repl.hpp
+        tools/debug.cpp
+        tools/debug.hpp
 )
 
 # ==============================================
