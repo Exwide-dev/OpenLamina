@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../src/parser/ast.hpp"
+
 #define DEBUG
 //#undef DEBUG
 #ifdef DEBUG
@@ -19,6 +21,13 @@ std::string(#expr) + ": " + fn(expr)
 std::string(#expr) + ": " + fn(expr)suffix
 
 #define LOG(msg) \
-std::cout << "\033[33m[DEBUG] " << __FILE_NAME__ << " | " << msg << "\033[0m" << std::endl
+std::cout << "\033[33m[DEBUG] " << __FILE__ << " | " << msg << "\033[0m" << std::endl
+
+#else
+
+#define LOG(msg)
+#define ITIS(...)
 
 #endif
+
+void printAST(const lmx::ASTNode* node, int indent = 0);

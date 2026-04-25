@@ -185,9 +185,9 @@ struct AssignNode final : ASTNode {
     std::string name;
     ExprNode* value;
 
-    AssignNode(std::string  n, ExprNode* v)
-        : ASTNode(ASTNodeType::Assign), name(std::move(n)), value(v) {}
-    ~AssignNode() override {
+    AssignNode(std::string n, ExprNode* v)
+        : ASTNode(ASTNodeType::Assign), name(n), value(v) {}
+    ~AssignNode() {
         delete value;
     }
 };

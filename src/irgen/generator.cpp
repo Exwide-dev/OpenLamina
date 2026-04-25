@@ -1,10 +1,13 @@
 #include "generator.hpp"
+#include "../tools/debug.hpp"
+#include "../tools/lang/builtins.hpp"
 
 #include <format>
 
 #include "opcode.hpp"
 
 namespace lm::irgen {
+    static int label_counter = 0;
     std::vector<::irgen::Opcode*> gen_code(lmx::ASTNode* node) {
         std::vector<::irgen::Opcode*> code;
 
@@ -64,7 +67,15 @@ namespace lm::irgen {
             const auto* var_ref_node = dynamic_cast<lmx::VarRefNode*>(node);
             code.push_back(new ::irgen::LOAD(var_ref_node->name));
         } else if (node->kind == lmx::ASTNodeType::FuncCallExpr) {
-            // 函数调用暂时不处理，需要函数表支持
+            const auto* func_call_node = dynamic_cast<lmx::FuncCallExprNode*>(node);
+            for (auto const& tnode : func_call_node->args) {
+                auto bcode = gen_code(tnode);
+                code.insert(code.end(), bcode.begin(), bcode.end());
+            }
+            code.push_back(new ::irgen::CALL(
+                func_call_node->func_name,
+                func_call_node->args.size()
+            ));
         } else if (node->kind == lmx::ASTNodeType::VMCall) {
             // VM调用暂时不处理
         } else if (node->kind == lmx::ASTNodeType::BlockStmt) {
@@ -86,7 +97,16 @@ namespace lm::irgen {
             code.insert(code.end(), value_code.begin(), value_code.end());
             code.push_back(new ::irgen::STORE(assign_node->name));
         } else if (node->kind == lmx::ASTNodeType::FuncDecl) {
-            // 函数声明暂时不处理，需要函数表支持
+            const auto* func_decl_node = dynamic_cast<lmx::FuncDeclNode*>(node);
+            // 创建函数对象
+            auto func = ::irgen::Value([func_decl_node](::irgen::VM& vm, const std::vector<::irgen::Value>& args) -> ::irgen::Value {
+                // 这里可以实现函数体的执行逻辑
+                // 暂时返回一个空值
+                return {};
+            });
+            // 将函数存储到符号表
+            code.push_back(new ::irgen::PUSH(func));
+            code.push_back(new ::irgen::STORE(func_decl_node->name));
         } else if (node->kind == lmx::ASTNodeType::ExternFunc) {
             // 外部函数声明暂时不处理
         } else if (node->kind == lmx::ASTNodeType::ReturnStmt) {
@@ -102,7 +122,40 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::Continue) {
             // continue语句暂时不处理
         } else if (node->kind == lmx::ASTNodeType::IfStmt) {
-            // if语句暂时不处理
+            const auto* if_node = dynamic_cast<lmx::IfStmtNode*>(node);
+
+            std::string else_label = std::format("else_{}", label_counter);
+            std::string end_label = std::format("endif_{}", label_counter);
+            label_counter++;
+
+            // 条件表达式：压入结果到栈
+            auto cond_code = gen_code(if_node->condition);
+            code.insert(code.end(), cond_code.begin(), cond_code.end());
+
+            // 对条件取反 → 如果原条件 false，则栈顶为 true → 跳到 else
+            code.push_back(new ::irgen::NOT());
+            code.push_back(new ::irgen::IFTRUEGOTO(else_label));
+
+            // Then 块
+            if (if_node->then_block) {
+                auto then_code = gen_code(if_node->then_block);
+                code.insert(code.end(), then_code.begin(), then_code.end());
+            }
+
+            // 跳过 else 块（如果有）
+            if (if_node->else_block) {
+                code.push_back(new ::irgen::GOTO(end_label));
+            }
+
+            // Else 块
+            code.push_back(new ::irgen::LABEL(else_label));
+            if (if_node->else_block) {
+                auto else_code = gen_code(if_node->else_block);
+                code.insert(code.end(), else_code.begin(), else_code.end());
+            }
+
+            // 结束标签
+            code.push_back(new ::irgen::LABEL(end_label));
         } else if (node->kind == lmx::ASTNodeType::Module) {
             // 模块暂时不处理
         } else if (node->kind == lmx::ASTNodeType::Program) {
@@ -112,18 +165,19 @@ namespace lm::irgen {
                 code.insert(code.end(), stmt_code.begin(), stmt_code.end());
             }
         }
-
         return code;
     }
 
     std::vector<::irgen::Opcode*> Generator::gen() const {
         std::vector<::irgen::Opcode*> code;
+        printAST(ast);
 
         for (const auto& stmt : ast->stmts) {
             auto stmt_code = gen_code(stmt);
             code.insert(code.end(), stmt_code.begin(), stmt_code.end());
         }
 
+        for (auto const elem : code) LOG(elem->toString());
         return code;
     }
 
@@ -153,9 +207,16 @@ namespace lm::irgen {
         ::irgen::VM vm(code);
         vm.run();
 
+
         if (!vm.op_stack.empty()) {
             return vm.op_stack.top();
         }
         return {};
+    }
+}
+
+namespace irgen {
+    void VM::init_builtins() {
+        lang::init_builtins(symbols);
     }
 }

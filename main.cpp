@@ -10,6 +10,7 @@
 #include "irgen/generator.hpp"
 #include "irgen/opcode.hpp"
 #include "repl/repl.hpp"
+#include "tools/error.hpp"
 
 
 // 存储解析结果
@@ -23,137 +24,69 @@ extern "C" {
 }
 
 // 打印 AST 节点
-void printAST(const lmx::ASTNode* node, const int indent = 0) {
-    if (not node) return;
 
-    // 打印缩进
-    const std::string indent_str(indent * 2, ' ');
 
-    // 打印节点类型
-    switch (node->kind) {
-        case lmx::ASTNodeType::Program: std::cout << indent_str << "Program\n";
-            for (const auto& stmt : dynamic_cast<lmx::ProgramASTNode*>(const_cast<lmx::ASTNode*>(node))->stmts) {
-                printAST(stmt, indent + 1);
-            }
-            break;
-        case lmx::ASTNodeType::VarDecl: {
-            const auto var = dynamic_cast<lmx::VarDeclNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "VarDecl: " << var->name << "\n";
-            if (var->init) {
-                std::cout << indent_str << "  Init:\n";
-                printAST(var->init, indent + 2);
-            }
-            break;
-        }
-        case lmx::ASTNodeType::Binary: {
-            const auto bin = dynamic_cast<lmx::BinaryNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "Binary: " << bin->op << "\n";
-            std::cout << indent_str << "  Left:\n";
-            printAST(bin->left, indent + 2);
-            std::cout << indent_str << "  Right:\n";
-            printAST(bin->right, indent + 2);
-            break;
-        }
-        case lmx::ASTNodeType::Number: {
-            const auto num = dynamic_cast<lmx::NumberNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "Number: " << num->value << "\n";
-            break;
-        }
-        case lmx::ASTNodeType::VarRef: {
-            const auto var = dynamic_cast<lmx::VarRefNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "VarRef: " << var->name << "\n";
-            break;
-        }
-        case lmx::ASTNodeType::Unary: {
-            const auto un = dynamic_cast<lmx::UnaryNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "Unary: " << un->op << "\n";
-            std::cout << indent_str << "  Operand:\n";
-            printAST(un->operand, indent + 2);
-            break;
-        }
-        case lmx::ASTNodeType::BlockStmt: {
-            const auto block = dynamic_cast<lmx::BlockStmtNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "BlockStmt\n";
-            for (const auto& stmt : block->stmts) {
-                printAST(stmt, indent + 1);
-            }
-            break;
-        }
-        case lmx::ASTNodeType::IfStmt: {
-            const auto if_node = dynamic_cast<lmx::IfStmtNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "IfStmt\n";
-            std::cout << indent_str << "  Condition:\n";
-            printAST(if_node->condition, indent + 2);
-            std::cout << indent_str << "  Then:\n";
-            printAST(if_node->then_block, indent + 2);
-            if (if_node->else_block != nullptr) {
-                std::cout << indent_str << "  Else:\n";
-                printAST(if_node->else_block, indent + 2);
-            }
-            break;
-        }
-        case lmx::ASTNodeType::Loop: {
-            const auto loop = dynamic_cast<lmx::LoopNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "Loop\n";
-            if (loop->condition != nullptr) {
-                std::cout << indent_str << "  Condition:\n";
-                printAST(loop->condition, indent + 2);
-            }
-            std::cout << indent_str << "  Body:\n";
-            printAST(loop->body, indent + 2);
-            break;
-        }
-        case lmx::ASTNodeType::Break: {
-            std::cout << indent_str << "Break\n";
-            break;
-        }
-        case lmx::ASTNodeType::Continue: {
-            std::cout << indent_str << "Continue\n";
-            break;
-        }
-        case lmx::ASTNodeType::Assign: {
-            const auto assign = dynamic_cast<lmx::AssignNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "Assign: " << assign->name << "\n";
-            std::cout << indent_str << "  Value:\n";
-            printAST(assign->value, indent + 2);
-            break;
-        }
-        case lmx::ASTNodeType::FuncDecl: {
-            const auto func = dynamic_cast<lmx::FuncDeclNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "FuncDecl: " << func->name << "\n";
-            std::cout << indent_str << "  Params: ";
-            for (size_t i = 0; i < func->params.size(); ++i) {
-                if (i > 0) std::cout << ", ";
-                std::cout << func->params[i];
-            }
-            std::cout << "\n";
-            std::cout << indent_str << "  Body:\n";
-            printAST(func->body, indent + 2);
-            break;
-        }
-        case lmx::ASTNodeType::FuncCallExpr: {
-            const auto call = dynamic_cast<lmx::FuncCallExprNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "FuncCallExpr: " << call->func_name << "\n";
-            std::cout << indent_str << "  Args:\n";
-            for (const auto& arg : call->args) {
-                printAST(arg, indent + 2);
-            }
-            break;
-        }
-        case lmx::ASTNodeType::ReturnStmt: {
-            const auto ret = dynamic_cast<lmx::ReturnStmtNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "ReturnStmt\n";
-            if (ret->expr) {
-                std::cout << indent_str << "  Value:\n";
-                printAST(ret->expr, indent + 2);
-            }
-            break;
-        }
-        default: std::cout << indent_str << "Unknown Node Type\n";
-    }
+std::string get_compiler() {
+#if defined(__clang__)
+    return "Clang " + std::to_string(__clang_major__) + "." + std::to_string(__clang_minor__);
+#elif defined(__GNUC__)
+    return "GCC " + std::to_string(__GNUC__) + "." + std::to_string(__GNUC_MINOR__);
+#elif defined(_MSC_VER)
+    return "MSVC " + std::to_string(_MSC_VER);
+#else
+    return "Unknown compiler";
+#endif
 }
 
-[[noreturn]] int main() {
+// 编译日期和时间（自动获取）
+#define OPENLAMINA_BUILD_DATE __DATE__
+#define OPENLAMINA_BUILD_TIME __TIME__
+
+// Git 提交哈希（需要在编译时通过 CMake 传入）
+#ifndef OPENLAMINA_BUILD_HASH
+#define OPENLAMINA_BUILD_HASH ""
+#endif
+
+namespace {
+    std::string welcome = std::format(
+        R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {}
+Powered by Flex and Bison
+Contact OpenLamina-Developing for more information)",
+        OPENLAMINA_VERSION_MAJOR,
+        OPENLAMINA_VERSION_MINOR,
+        OPENLAMINA_VERSION_PATCH,
+        get_compiler(),
+#if defined(__x86_64__) || defined(_M_X64)
+        "x86_64"
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        "ARM64"
+#else
+        "Unknown"
+#endif
+        ,OPENLAMINA_BUILD_DATE,
+        OPENLAMINA_BUILD_HASH
+    );
+}
+void test_code1() {
+    LOG("Test LABEL & DOTO");
+
+    irgen::VM vm;
+    const std::vector<irgen::Opcode*> test_code = {
+        new irgen::PUSH(irgen::Value(static_cast<size_t>(1))),
+        new irgen::GOTO(irgen::Value(std::string("skip"))),
+        new irgen::PUSH(irgen::Value(static_cast<size_t>(2))),
+        new irgen::LABEL(irgen::Value("skip")),
+        new irgen::PUSH(irgen::Value(static_cast<size_t>(3))),
+    };
+
+    for (auto* op : test_code) {
+        vm.code.push_back(op);
+    }
+
+    vm.run();
+}
+
+void test_code2() {
     const std::string source = R"(
     func add(a, b) {
         return a + b
@@ -196,9 +129,10 @@ void printAST(const lmx::ASTNode* node, const int indent = 0) {
     // 释放内存
     delete ast;
     delete manual_ast;
+}
 
-    std::cout << "Then, REPL" << std::endl;
-
+[[noreturn]] int main() {
+    std::cout << welcome << std::endl;
     auto repl = repl::REPL();
     while (true) {
         try {
@@ -211,10 +145,12 @@ void printAST(const lmx::ASTNode* node, const int indent = 0) {
                 if (!repl.vm.op_stack.empty()) {
                     std::cout << repl.vm.op_stack.top() << std::endl;
                 }
-           }
-        } catch (const std::exception& e) {
-            std::cout << "Runtime Error: " << e.what() << std::endl;
+            }
+        } catch (const RuntimeError &e) {
+            std::cout << "RuntimeError: " << e.what() << std::endl;
             repl.vm.pc = repl.vm.code.size();
+        } catch (const SyntaxError &e) {
+            std::cout << "SyntaxError: " << e.what() << std::endl;
         }
     }
 }

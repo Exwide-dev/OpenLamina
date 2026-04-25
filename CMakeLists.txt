@@ -1,8 +1,12 @@
 # 修正 CMake 最低版本要求
 cmake_minimum_required(VERSION 3.15)
-project(OpenLamina)
+project(OpenLamina
+        VERSION 0.1.0
+        DESCRIPTION "OpenLamina"
+        HOMEPAGE_URL ""
+)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ==============================================
@@ -39,16 +43,22 @@ add_executable(
     main.cpp
     ${FLEX_OpenLaminaScanner_OUTPUTS}
     ${BISON_OpenLaminaParser_OUTPUTS}
+        tools/debug.cpp
+        tools/debug.hpp
+        tools/error.cpp
+        tools/error.hpp
+        tools/lang/builtins.cpp
+        tools/lang/builtins.hpp
+
         src/irgen/generator.cpp
         src/irgen/generator.hpp
         src/lexer/lex.cpp
         src/front-end/front_end.cpp
         src/front-end/front_end.hpp
+
         src/irgen/opcode.hpp
         src/repl/repl.cpp
         src/repl/repl.hpp
-        tools/debug.cpp
-        tools/debug.hpp
 )
 
 # ==============================================
@@ -61,3 +71,9 @@ target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # 链接 SymEngine 库
 target_link_libraries(OpenLamina PRIVATE ${SYMENGINE_LIBRARIES})
+
+target_compile_definitions(OpenLamina PRIVATE
+        OPENLAMINA_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        OPENLAMINA_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+)
