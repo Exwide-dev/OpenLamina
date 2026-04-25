@@ -47,6 +47,11 @@ void printAST(const lmx::ASTNode* node, int indent) {
             std::cout << indent_str << "VarRef: " << var->name << "\n";
             break;
         }
+        case lmx::ASTNodeType::String: {
+            const auto num = dynamic_cast<lmx::StringNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "String: " << num->value << "\n";
+            break;
+        }
         case lmx::ASTNodeType::Unary: {
             const auto un = dynamic_cast<lmx::UnaryNode*>(const_cast<lmx::ASTNode*>(node));
             std::cout << indent_str << "Unary: " << un->op << "\n";

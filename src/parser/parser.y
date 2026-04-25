@@ -23,12 +23,15 @@
 }
 
 %code {
+    #include "lexer/lexer_vars.hpp"
+    extern std::string lexer::details;
     extern int yylineno;
     extern char* yytext;
     std::string error_msg() {
          std::string err_msg;
          err_msg += std::string("Error at line ") + std::to_string(yylineno)
-                  + ", near '" + (yytext ? yytext : "") + "'\n" + detail_msg;
+                  + ", near '" + (yytext ? yytext : "") + "'\nLexer Details: " + lexer::details
+                  + "\nParser Details: " + detail_msg;
          return err_msg;
     }
 }
@@ -65,6 +68,7 @@
 %token <string_val> LBRACE
 %token <string_val> RBRACE
 %token <string_val> NUM_LITERAL
+%token <string_val> STRING_LITERAL
 %token <string_val> IDENTIFIER
 %token <string_val> KW_LET
 %token <string_val> KW_FUNC
@@ -477,6 +481,12 @@ factor:
     | identifier { 
         LOG("Parsing factor: identifier");
         $$ = $1; 
+    }
+    | STRING_LITERAL {
+        LOG("Parsing factor: string literal");
+        $$ = new StringNode(*$1);
+        LOG("string literal parsed successfully");
+        delete $1;
     }
     | LPAREN expr RPAREN { 
         LOG("Parsing factor: (expr)");

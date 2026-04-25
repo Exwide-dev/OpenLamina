@@ -1,7 +1,7 @@
 # 修正 CMake 最低版本要求
 cmake_minimum_required(VERSION 3.15)
 project(OpenLamina
-        VERSION 0.1.0
+        VERSION 0.1.1
         DESCRIPTION "OpenLamina"
         HOMEPAGE_URL ""
 )
@@ -59,6 +59,7 @@ add_executable(
         src/irgen/opcode.hpp
         src/repl/repl.cpp
         src/repl/repl.hpp
+        src/lexer/lexer_vars.hpp
 )
 
 # ==============================================

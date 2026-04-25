@@ -49,7 +49,7 @@ std::string get_compiler() {
 
 namespace {
     std::string welcome = std::format(
-        R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {}
+        R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {} {}
 Powered by Flex and Bison
 Contact OpenLamina-Developing for more information)",
         OPENLAMINA_VERSION_MAJOR,
@@ -64,6 +64,7 @@ Contact OpenLamina-Developing for more information)",
         "Unknown"
 #endif
         ,OPENLAMINA_BUILD_DATE,
+        OPENLAMINA_BUILD_TIME,
         OPENLAMINA_BUILD_HASH
     );
 }

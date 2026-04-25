@@ -283,9 +283,11 @@ namespace irgen {
                 }
                 LOG("Now done a term. VM " << op_stack.toString());
                 LOG("Clear the op_stack, save the top");
-                const Value top = op_stack.popValue();
-                op_stack.clear();
-                op_stack.push(top);
+                if (not op_stack.empty()){
+                    const Value top = op_stack.popValue();
+                    op_stack.clear();
+                    op_stack.push(top);
+                }
             } catch ([[maybe_unused]] const std::exception& e) {
                 op_stack.clear();
                 throw;

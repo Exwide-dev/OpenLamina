@@ -3,19 +3,23 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include "../tools/debug.hpp"
 #include "parser.tab.hpp" // Bison 生成的头文件
 #include "lexer/token.hpp"
+#include "lexer/lexer_vars.hpp"
 
 namespace lexer {
     std::vector<Token> tokens;
     int line = 1;
     int column = 1;
-    
+    std::string string_buf;
+    std::string details;
+
     void addToken(TokenType type, const std::string& value) {
         tokens.emplace_back(type, value, line, column);
         column += value.length();
     }
-    
+
     void handleUnknown(char c) {
         std::cerr << "Error at line " << line << ", column " << column << ": Unknown character '" << c << "'" << std::endl;
         addToken(1, std::string(1, c));
@@ -24,18 +28,18 @@ namespace lexer {
 }
 
 using namespace lexer;
-
-
 %}
 
 %option noyywrap
 %option outfile="lexer_generated.cpp"
 %option header-file="lexer_generated.h"
 
+%x STRING
+
 %%
 
 [ \t\r]+       { column += yyleng; }
-\n             { line++; column = 1; }
+\n             { line++; column = 1; LOG("Out of STRING, \\n collect!"); }
 
 "+"            { addToken(OPER_PLUS, yytext); yylval.string_val = new std::string(yytext); return OPER_PLUS; }
 "-"            { addToken(OPER_MINUS, yytext); yylval.string_val = new std::string(yytext); return OPER_MINUS; }
@@ -65,7 +69,7 @@ using namespace lexer;
 "break"        { addToken(KW_BREAK, yytext); yylval.string_val = new std::string(yytext); return KW_BREAK; }
 "continue"     { addToken(KW_CONTINUE, yytext); yylval.string_val = new std::string(yytext); return KW_CONTINUE; }
 
-[0-9][0-9_]*  { 
+[0-9][0-9_]*  {
     std::string num = yytext;
     num.erase(std::remove(num.begin(), num.end(), '_'), num.end());
     addToken(NUM_LITERAL, num);
@@ -73,13 +77,40 @@ using namespace lexer;
     return NUM_LITERAL;
 }
 
-[a-zA-Z_][a-zA-Z0-9_]* { 
+[a-zA-Z_][a-zA-Z0-9_]* {
     addToken(IDENTIFIER, yytext);
     yylval.string_val = new std::string(yytext);
     return IDENTIFIER;
 }
 
-.             { 
+\"              { string_buf.clear(); BEGIN(STRING); }
+
+<STRING>{
+    \"          { BEGIN(INITIAL); addToken(STRING_LITERAL, string_buf); yylval.string_val = new std::string(string_buf); return STRING_LITERAL; }
+    \\n         { string_buf += '\n'; }
+    \\t         { string_buf += '\t'; }
+    \\r         { string_buf += '\r'; }
+    \\\"        { string_buf += '"'; }
+    \\\\        { string_buf += '\\'; }
+    \\.         { string_buf += yytext[1]; }
+    [^\\\"\n]+  { string_buf += yytext; }
+    \n          { LOG("In STRING, \\n collect!");
+                  BEGIN(INITIAL);
+                  details = "Lexer SyntaxError at line " + std::to_string(line) + ": unclosed string literal";
+                  addToken(1, string_buf);
+                  yylval.string_val = new std::string(string_buf);
+                  return 1;
+                }
+    <<EOF>>     { LOG("In STRING, EOF collect!");
+                  BEGIN(INITIAL);
+                  details = "Lexer SyntaxError at line " + std::to_string(line) + ": unclosed string literal at end of file";
+                  addToken(1, string_buf);
+                  yylval.string_val = new std::string(string_buf);
+                  return 1;
+                }
+}
+
+.             {
     handleUnknown(yytext[0]);
     return 1;
 }
@@ -91,14 +122,15 @@ namespace lexer {
         tokens.clear();
         line = 1;
         column = 1;
+        details.clear();
         yy_scan_string(source.c_str());
-        
+
         // 循环获取所有 token
         int token;
         while ((token = yylex()) != 0) {
             // 已经在规则中添加了 token
         }
-        
+
         yy_delete_buffer(YY_CURRENT_BUFFER);
         tokens.emplace_back(0, "", line, column);
         return tokens;

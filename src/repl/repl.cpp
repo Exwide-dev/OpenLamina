@@ -6,6 +6,9 @@
 extern bool has_err;
 extern std::string error_msg();
 
+std::string get_complete_err_msg() {
+    return error_msg();
+}
 
 bool repl::REPL::exec_input(const std::function<std::string()> &input_func) {
     const std::string input = input_func();
