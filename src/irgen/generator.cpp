@@ -3,24 +3,25 @@
 #include "../tools/lang/builtins.hpp"
 
 #include <format>
+#include <ranges>
 
 #include "opcode.hpp"
 
 namespace lm::irgen {
     static int label_counter = 0;
-    std::vector<::irgen::Opcode*> gen_code(lmx::ASTNode* node) {
-        std::vector<::irgen::Opcode*> code;
+    std::vector<::irgen::Opcode> gen_code(lmx::ASTNode* node) {
+        std::vector<::irgen::Opcode> code;
 
         if (node->kind == lmx::ASTNodeType::Number) {
             const auto* num_node = dynamic_cast<lmx::NumberNode*>(node);
             ptrdiff_t value = std::stoll(num_node->value);
-            code.push_back(new ::irgen::PUSH(::irgen::Value(value)));
+            code.emplace_back(::irgen::PUSH(::irgen::Value(value)));
         } else if (node->kind == lmx::ASTNodeType::Bool) {
             const auto* bool_node = dynamic_cast<lmx::BoolNode*>(node);
-            code.push_back(new ::irgen::PUSH(::irgen::Value(bool_node->value)));
+            code.emplace_back(::irgen::PUSH(::irgen::Value(bool_node->value)));
         } else if (node->kind == lmx::ASTNodeType::String) {
             const auto* string_node = dynamic_cast<lmx::StringNode*>(node);
-            code.push_back(new ::irgen::PUSH(::irgen::Value(string_node->value)));
+            code.emplace_back(::irgen::PUSH(::irgen::Value(string_node->value)));
         } else if (node->kind == lmx::ASTNodeType::Binary) {
             const auto* bin_node = dynamic_cast<lmx::BinaryNode*>(node);
             auto left_code = gen_code(bin_node->left);
@@ -29,29 +30,29 @@ namespace lm::irgen {
             code.insert(code.end(), right_code.begin(), right_code.end());
 
             if (bin_node->op == "+") {
-                code.push_back(new ::irgen::ADD());
+                code.emplace_back(::irgen::ADD());
             } else if (bin_node->op == "*") {
-                code.push_back(new ::irgen::MUL());
+                code.emplace_back(::irgen::MUL());
             } else if (bin_node->op == "-") {
-                code.push_back(new ::irgen::SUB());
+                code.emplace_back(::irgen::SUB());
             } else if (bin_node->op == "/") {
-                code.push_back(new ::irgen::DIV());
+                code.emplace_back(::irgen::DIV());
             } else if (bin_node->op == "&&") {
-                code.push_back(new ::irgen::AND());
+                code.emplace_back(::irgen::AND());
             } else if (bin_node->op == "||") {
-                code.push_back(new ::irgen::OR());
+                code.emplace_back(::irgen::OR());
             } else if (bin_node->op == "==") {
-                code.push_back(new ::irgen::EQ());
+                code.emplace_back(::irgen::EQ());
             } else if (bin_node->op == "!=") {
-                code.push_back(new ::irgen::NEQ());
+                code.emplace_back(::irgen::NEQ());
             } else if (bin_node->op == "<") {
-                code.push_back(new ::irgen::LT());
+                code.emplace_back(::irgen::LT());
             } else if (bin_node->op == "<=") {
-                code.push_back(new ::irgen::LTE());
+                code.emplace_back(::irgen::LTE());
             } else if (bin_node->op == ">") {
-                code.push_back(new ::irgen::GT());
+                code.emplace_back(::irgen::GT());
             } else if (bin_node->op == ">=") {
-                code.push_back(new ::irgen::GTE());
+                code.emplace_back(::irgen::GTE());
             }
         } else if (node->kind == lmx::ASTNodeType::Unary) {
             const auto* unary_node = dynamic_cast<lmx::UnaryNode*>(node);
@@ -59,26 +60,26 @@ namespace lm::irgen {
             code.insert(code.end(), operand_code.begin(), operand_code.end());
 
             if (unary_node->op == "-") {
-                code.push_back(new ::irgen::NEG());
+                code.emplace_back(::irgen::NEG());
             } else if (unary_node->op == "!") {
-                code.push_back(new ::irgen::NOT());
+                code.emplace_back(::irgen::NOT());
             }
         } else if (node->kind == lmx::ASTNodeType::VarRef) {
             const auto* var_ref_node = dynamic_cast<lmx::VarRefNode*>(node);
-            code.push_back(new ::irgen::LOAD(var_ref_node->name));
+            code.emplace_back(::irgen::LOAD(var_ref_node->name));
         } else if (node->kind == lmx::ASTNodeType::FuncCallExpr) {
             const auto* func_call_node = dynamic_cast<lmx::FuncCallExprNode*>(node);
             // 从右到左压入实参
-            for (auto it = func_call_node->args.rbegin(); it != func_call_node->args.rend(); ++it) {
-                auto bcode = gen_code(*it);
+            for (auto arg : std::ranges::reverse_view(func_call_node->args)) {
+                auto bcode = gen_code(arg);
                 code.insert(code.end(), bcode.begin(), bcode.end());
             }
-            code.push_back(new ::irgen::CALL(
+            code.emplace_back(::irgen::CALL(
                 func_call_node->func_name,
                 func_call_node->args.size()
             ));
         } else if (node->kind == lmx::ASTNodeType::VMCall) {
-            // VM调用暂时不处理
+            // TODO: VM调用暂时不处理
         } else if (node->kind == lmx::ASTNodeType::BlockStmt) {
             const auto* block_node = dynamic_cast<lmx::BlockStmtNode*>(node);
             for (const auto& stmt : block_node->stmts) {
@@ -90,13 +91,13 @@ namespace lm::irgen {
             if (var_decl_node->init) {
                 auto init_code = gen_code(var_decl_node->init);
                 code.insert(code.end(), init_code.begin(), init_code.end());
-                code.push_back(new ::irgen::STORE(var_decl_node->name));
+                code.emplace_back(::irgen::STORE(var_decl_node->name));
             }
         } else if (node->kind == lmx::ASTNodeType::Assign) {
             const auto* assign_node = dynamic_cast<lmx::AssignNode*>(node);
             auto value_code = gen_code(assign_node->value);
             code.insert(code.end(), value_code.begin(), value_code.end());
-            code.push_back(new ::irgen::STORE(assign_node->name));
+            code.emplace_back(::irgen::STORE(assign_node->name));
         } else if (node->kind == lmx::ASTNodeType::FuncDecl) {
             const auto* func_decl_node = dynamic_cast<lmx::FuncDeclNode*>(node);
             
@@ -110,18 +111,18 @@ namespace lm::irgen {
             func_obj->location = func_label; // 设置函数位置标签
             
             // 生成函数体的指令序列
-            std::vector<::irgen::Opcode*> func_body;
+            std::vector<::irgen::Opcode> func_body;
             
             // 函数开始标签
-            func_body.push_back(new ::irgen::GOTO(func_end_label));
-            func_body.push_back(new ::irgen::LABEL(func_label));
+            func_body.emplace_back(::irgen::GOTO(func_end_label));
+            func_body.emplace_back(::irgen::LABEL(func_label));
             
             // ENTER_SCOPE
-            func_body.push_back(new ::irgen::ENTER_SCOPE());
+            func_body.emplace_back(::irgen::ENTER_SCOPE());
             
             // 从栈中弹出参数并存储到当前作用域
             for (const auto& param : func_decl_node->params) {
-                func_body.push_back(new ::irgen::STORE(param));
+                func_body.emplace_back(::irgen::STORE(param));
             }
             
             // 生成函数体的字节码
@@ -131,24 +132,24 @@ namespace lm::irgen {
             }
             
             // 默认返回值 None
-            func_body.push_back(new ::irgen::PUSH(::irgen::Value()));
+            func_body.emplace_back(::irgen::PUSH(::irgen::Value()));
             
             // LEAVE_SCOPE
-            func_body.push_back(new ::irgen::LEAVE_SCOPE());
+            func_body.emplace_back(::irgen::LEAVE_SCOPE());
             
             // RET
-            func_body.push_back(new ::irgen::RET());
+            func_body.emplace_back(::irgen::RET());
             
             // 函数结束标签（可选）
-            func_body.push_back(new ::irgen::LABEL(func_end_label));
+            func_body.emplace_back(::irgen::LABEL(func_end_label));
             
             // 将函数体指令添加到主代码中
             code.insert(code.end(), func_body.begin(), func_body.end());
             
             // 创建函数对象并存储到符号表
             auto func = ::irgen::Value(func_obj);
-            code.push_back(new ::irgen::PUSH(func));
-            code.push_back(new ::irgen::STORE(func_decl_node->name));
+            code.emplace_back(::irgen::PUSH(func));
+            code.emplace_back(::irgen::STORE(func_decl_node->name));
         } else if (node->kind == lmx::ASTNodeType::ExternFunc) {
             // 外部函数声明暂时不处理
         } else if (node->kind == lmx::ASTNodeType::ReturnStmt) {
@@ -159,12 +160,12 @@ namespace lm::irgen {
                 code.insert(code.end(), expr_code.begin(), expr_code.end());
             } else {
                 // 如果没有返回值，压入一个None值
-                code.push_back(new ::irgen::PUSH(::irgen::Value()));
+                code.emplace_back(::irgen::PUSH(::irgen::Value()));
             }
             // LEAVE_SCOPE
-            code.push_back(new ::irgen::LEAVE_SCOPE());
+            code.emplace_back(::irgen::LEAVE_SCOPE());
             // RET
-            code.push_back(new ::irgen::RET());
+            code.emplace_back(::irgen::RET());
         } else if (node->kind == lmx::ASTNodeType::Loop) {
             // 循环语句暂时不处理
         } else if (node->kind == lmx::ASTNodeType::Break) {
@@ -183,8 +184,8 @@ namespace lm::irgen {
             code.insert(code.end(), cond_code.begin(), cond_code.end());
 
             // 对条件取反 → 如果原条件 false，则栈顶为 true → 跳到 else
-            code.push_back(new ::irgen::NOT());
-            code.push_back(new ::irgen::IFTRUEGOTO(else_label));
+            code.emplace_back(::irgen::NOT());
+            code.emplace_back(::irgen::IFTRUEGOTO(else_label));
 
             // Then 块
             if (if_node->then_block) {
@@ -194,18 +195,18 @@ namespace lm::irgen {
 
             // 跳过 else 块（如果有）
             if (if_node->else_block) {
-                code.push_back(new ::irgen::GOTO(end_label));
+                code.emplace_back(::irgen::GOTO(end_label));
             }
 
             // Else 块
-            code.push_back(new ::irgen::LABEL(else_label));
+            code.emplace_back(::irgen::LABEL(else_label));
             if (if_node->else_block) {
                 auto else_code = gen_code(if_node->else_block);
                 code.insert(code.end(), else_code.begin(), else_code.end());
             }
 
             // 结束标签
-            code.push_back(new ::irgen::LABEL(end_label));
+            code.emplace_back(::irgen::LABEL(end_label));
         } else if (node->kind == lmx::ASTNodeType::Module) {
             // 模块暂时不处理
         } else if (node->kind == lmx::ASTNodeType::Program) {
@@ -218,8 +219,8 @@ namespace lm::irgen {
         return code;
     }
 
-    std::vector<::irgen::Opcode*> Generator::gen() const {
-        std::vector<::irgen::Opcode*> code;
+    std::vector<::irgen::Opcode> Generator::gen() const {
+        std::vector<::irgen::Opcode> code;
 #ifdef DEBUG
         printAST(ast);
 #endif
@@ -231,8 +232,10 @@ namespace lm::irgen {
 #ifdef DEBUG
         std::string codes;
         size_t i = 0;
-        for (auto const elem : code) {
-            codes.append(std::format("{:3} | {}\n", i, elem->toString()));
+        for (auto const& elem : code) {
+            std::visit([&](auto& op) {
+                codes.append(std::format("{:3} | {}\n", i, op.toString()));
+            }, elem);
             i++;
         }
         std::cerr << codes << std::endl;
@@ -242,7 +245,7 @@ namespace lm::irgen {
 
     // 包装函数：接收 ProgramASTNode，生成字节码并执行
     ::irgen::Value execute(const lmx::ProgramASTNode* program) {
-        std::vector<::irgen::Opcode*> code;
+        std::vector<::irgen::Opcode> code;
 
         for (const auto& stmt : program->stmts) {
             auto stmt_code = gen_code(stmt);
@@ -251,13 +254,15 @@ namespace lm::irgen {
 
         int i = 0;
         for (const auto& c : code) {
-            std::cerr << std::format("{} | {} {}", i, c->name(), [&]()->std::string {
-                std::string str;
-                for (const auto& op : c->operands) {
-                    str.append(op.toString() + " ");
-                }
-                return str;
-            }()) << std::endl;
+            std::visit([&](const auto& op) {
+                std::cerr << std::format("{} | {} {}", i, op.name(), [&]()->std::string {
+                    std::string str;
+                    for (const auto& operand : op.operands) {
+                        str.append(operand.toString() + " ");
+                    }
+                    return str;
+                }()) << std::endl;
+            }, c);
             i++;
         }
 
@@ -271,11 +276,5 @@ namespace lm::irgen {
             return vm.op_stack.top();
         }
         return {};
-    }
-}
-
-namespace irgen {
-    void VM::init_builtins() {
-        lang::init_builtins(symbols);
     }
 }

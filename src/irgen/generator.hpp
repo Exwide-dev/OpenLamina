@@ -9,7 +9,7 @@ namespace lm::irgen {
         explicit Generator(lmx::ProgramASTNode* ast) : ast(ast) {};
         ~Generator() = default;
 
-        [[nodiscard]] std::vector<::irgen::Opcode*> gen() const;
+        [[nodiscard]] std::vector<::irgen::Opcode> gen() const;
     };
 
     // 包装函数：接收 ProgramASTNode，生成字节码并执行

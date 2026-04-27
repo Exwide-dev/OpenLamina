@@ -15,13 +15,49 @@
 
 #include "../tools/debug.hpp"
 #include "../tools/error.hpp"
-#include "../tools/lang/builtins.hpp"
+
+#define COMMON(ClassName) \
+[[nodiscard]] std::string name() const { return #ClassName; } \
+[[nodiscard]] std::string stringArgs() const { \
+std::string s; \
+for (size_t i = 0; i < operands.size(); ++i) { \
+if (i > 0) s += ' '; \
+s += operands[i].toString(); \
+} \
+return s; \
+} \
+[[nodiscard]] std::string toString() const { \
+return std::format("{} {}", name(), stringArgs()); \
+}
 
 namespace irgen {
-    class Opcode;
+    // 前置声明
     class Value;
     class VM;
+    class PUSH;
+    class ADD;
+    class MUL;
+    class SUB;
+    class DIV;
+    class NEG;
+    class NOT;
+    class AND;
+    class OR;
+    class EQ;
+    class NEQ;
+    class LT;
+    class LTE;
+    class GT;
+    class GTE;
+    class STORE;
+    class LOAD;
     class LABEL;
+    class GOTO;
+    class IFTRUEGOTO;
+    class ENTER_SCOPE;
+    class LEAVE_SCOPE;
+    class CALL;
+    class RET;
 
     template<typename T>
     concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
@@ -29,14 +65,42 @@ namespace irgen {
     template<typename T>
     concept StringType = std::convertible_to<T, std::string> and !IntegerType<T>;
 
+    // 定义 Opcode 为 std::variant
+    using Opcode = std::variant<
+        PUSH,
+        ADD,
+        MUL,
+        SUB,
+        DIV,
+        NEG,
+        NOT,
+        AND,
+        OR,
+        EQ,
+        NEQ,
+        LT,
+        LTE,
+        GT,
+        GTE,
+        STORE,
+        LOAD,
+        LABEL,
+        GOTO,
+        IFTRUEGOTO,
+        ENTER_SCOPE,
+        LEAVE_SCOPE,
+        CALL,
+        RET
+    >;
+
     // 函数对象，包含函数的参数列表、函数体和位置标签
     struct FunctionObject {
         std::vector<std::string> params;
-        std::vector<Opcode*> body;
+        std::vector<Opcode> body;
         std::string location; // 函数所在的标签名
     };
-    
-    using FunctionType = std::function<Value(VM&, const std::vector<Value>&)>;
+
+    using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
 
     // Value 类型，支持多种类型的值
     class Value {
@@ -51,24 +115,42 @@ namespace irgen {
 
     private:
         Type type;
-        std::variant<ptrdiff_t, bool, std::string, FunctionType, std::shared_ptr<FunctionObject>> data;
+        std::variant<ptrdiff_t, bool, std::string, FunctionType, std::shared_ptr<FunctionObject> > data;
 
     public:
-        Value() : type(Type::None) {}
+        Value() : type(Type::None) {
+        }
 
         template<IntegerType T>
         explicit Value(T value)
-            : type(Type::Int), data(static_cast<ptrdiff_t>(value)) {}
+            : type(Type::Int), data(static_cast<ptrdiff_t>(value)) {
+        }
 
         template<StringType T>
         explicit Value(T value)
-            : type(Type::String), data(static_cast<std::string>(std::move(value))) {}
+            : type(Type::String), data(static_cast<std::string>(std::move(value))) {
+        }
 
-        explicit Value(FunctionType value) : type(Type::Function), data(value) {}
-        explicit Value(std::shared_ptr<FunctionObject> value) : type(Type::Function), data(value) {}
-        explicit Value(bool value) : type(Type::Bool), data(value) {}
+        explicit Value(FunctionType value) : type(Type::Function), data(value) {
+        }
 
-        Value operator()(VM& vm, const std::vector<Value>& args) const;
+        explicit Value(std::shared_ptr<FunctionObject> value) : type(Type::Function), data(value) {
+        }
+
+        explicit Value(bool value) : type(Type::Bool), data(value) {
+        }
+
+        // 实现 Value::operator()
+        Value operator()(VM &vm, const std::vector<Value> &args) const {
+            if (type != Type::Function) {
+                throw RuntimeError("Value is not a function");
+            }
+            if (std::holds_alternative<FunctionType>(data)) {
+                return std::get<FunctionType>(data)(vm, args);
+            } else {
+                throw RuntimeError("User-defined functions should be called via CALL instruction");
+            }
+        }
 
         [[nodiscard]] Type getType() const { return type; }
 
@@ -91,33 +173,33 @@ namespace irgen {
 
 #define DEFINE_AS_METHOD(FieldName, EnumValue, CppType, ErrorMsg) \
 [[nodiscard]] CppType as##FieldName() const { \
-    if (type != Type::EnumValue) { \
-        throw RuntimeError("Value is not " ErrorMsg); \
-    } \
-    return std::get<CppType>(data); \
+if (type != Type::EnumValue) { \
+throw RuntimeError("Value is not " ErrorMsg); \
+} \
+return std::get<CppType>(data); \
 }
 
         DEFINE_AS_METHOD(Int, Int, ptrdiff_t, "an integer")
         DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
-        
+
         // 获取函数对象
         [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
             if (type != Type::Function) {
                 throw RuntimeError("Value is not a function");
             }
-            if (std::holds_alternative<std::shared_ptr<FunctionObject>>(data)) {
-                return std::get<std::shared_ptr<FunctionObject>>(data);
+            if (std::holds_alternative<std::shared_ptr<FunctionObject> >(data)) {
+                return std::get<std::shared_ptr<FunctionObject> >(data);
             }
             throw RuntimeError("Value is not a user-defined function");
         }
-        
+
         // 检查是否为用户定义函数
         [[nodiscard]] bool isUserFunction() const {
-            return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject>>(data);
+            return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject> >(data);
         }
-        
+
         // 检查是否为内置函数
         [[nodiscard]] bool isBuiltinFunction() const {
             return type == Type::Function and std::holds_alternative<FunctionType>(data);
@@ -131,7 +213,7 @@ namespace irgen {
         [[nodiscard]] bool isString() const { return type == Type::String; }
         [[nodiscard]] bool isFunction() const { return type == Type::Function; }
 
-        friend std::ostream& operator<<(std::ostream& os, const Value& value) {
+        friend std::ostream &operator<<(std::ostream &os, const Value &value) {
             LOG("access <<");
             os << value.toString();
             return os;
@@ -144,13 +226,16 @@ namespace irgen {
 
     public:
         SymbolTable() = default;
-        explicit SymbolTable(std::unordered_map<std::string, Value> symbols) : symbols(std::move(symbols)) {};
 
-        void set(const std::string& name, const Value& value) {
+        explicit SymbolTable(std::unordered_map<std::string, Value> symbols) : symbols(std::move(symbols)) {
+        };
+
+        void set(const std::string &name, const Value &value) {
+            LOG("To set");
             symbols[name] = value;
         }
 
-        Value get(const std::string& name) const {
+        Value get(const std::string &name) const {
             const auto it = symbols.find(name);
             if (it == symbols.end()) {
                 throw RuntimeError("Variable not found: " + name);
@@ -158,99 +243,104 @@ namespace irgen {
             return it->second;
         }
 
-        bool exists(const std::string& name) const {
+        bool exists(const std::string &name) const {
             return symbols.contains(name);
         }
     };
 
-    template <typename T>
+    template<typename T>
     concept Stackable =
-        std::copyable<T> and std::movable<T>
-        and requires(T t) {
-            { t.toString() } -> StringType;
-        };
+            std::copyable<T> and std::movable<T>
+            and requires(T t)
+            {
+                { t.toString() } -> StringType;
+            };
 
-    template <typename Stackable>
+    template<typename Stackable>
     class Stack {
-            std::vector<Stackable> data;
+        std::vector<Stackable> data;
 
-        public:
-            Stack() = default;
+    public:
+        Stack() = default;
 
-            explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {}
+        explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
+        }
 
-            void push(const Stackable& value) {
-                data.push_back(value);
+        void push(const Stackable &value) {
+            data.push_back(value);
+        }
+
+        void push(Stackable &&value) {
+            LOG("Pushing back: " << value.toString());
+            data.push_back(std::move(value));
+        }
+
+        void pop() {
+            if (data.empty()) {
+                throw std::out_of_range("Stack::pop(): stack is empty");
             }
+            data.pop_back();
+        }
 
-            void push(Stackable&& value) {
-                LOG("Pushing back: " << value.toString());
-                data.push_back(std::move(value));
+        Stackable popValue() {
+            if (data.empty()) {
+                LOG("Empty Stack...");
+                throw std::out_of_range("Stack::popValue(): stack is empty");
             }
+            Stackable value = data.back();
+            data.pop_back();
+            return value;
+        }
 
-            void pop() {
-                if (data.empty()) {
-                    throw std::out_of_range("Stack::pop(): stack is empty");
-                }
-                data.pop_back();
+        Stackable &top() {
+            if (data.empty()) {
+                throw std::out_of_range("Stack::top(): stack is empty");
             }
+            return data.back();
+        }
 
-            Stackable popValue() {
-                if (data.empty()) {
-                    throw std::out_of_range("Stack::popValue(): stack is empty");
-                }
-                Stackable value = data.back();
-                data.pop_back();
-                return value;
+        [[nodiscard]] const Stackable &top() const {
+            if (data.empty()) {
+                throw std::out_of_range("Stack::top(): stack is empty");
             }
+            return data.back();
+        }
 
-            Stackable& top() {
-                if (data.empty()) {
-                    throw std::out_of_range("Stack::top(): stack is empty");
-                }
-                return data.back();
-            }
+        [[nodiscard]] size_t size() const {
+            return data.size();
+        }
 
-            [[nodiscard]] const Stackable& top() const {
-                if (data.empty()) {
-                    throw std::out_of_range("Stack::top(): stack is empty");
-                }
-                return data.back();
-            }
+        [[nodiscard]] bool empty() const {
+            return data.empty();
+        }
 
-            [[nodiscard]] size_t size() const {
-                return data.size();
-            }
+        void clear() {
+            data.clear();
+        }
 
-            [[nodiscard]] bool empty() const {
-                return data.empty();
-            }
+        auto begin() { return data.begin(); }
+        auto end() { return data.end(); }
+        [[nodiscard]] auto begin() const { return data.begin(); }
+        [[nodiscard]] auto end() const { return data.end(); }
 
-            void clear() {
-                data.clear();
-            }
-
-            auto begin() { return data.begin(); }
-            auto end() { return data.end(); }
-            [[nodiscard]] auto begin() const { return data.begin(); }
-            [[nodiscard]] auto end() const { return data.end(); }
-
-            [[nodiscard]] std::string toString() const {
-                return "Stack:\n" + std::accumulate(
-                    data.rbegin(), data.rend(),
-                    std::string{},
-                    [i = data.size() - 1](std::string acc, const auto& elem) mutable {
-                        return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
-                    }
-                );
-            }
-        };
+        [[nodiscard]] std::string toString() const {
+            return "Stack:\n" + std::accumulate(
+                       data.rbegin(), data.rend(),
+                       std::string{},
+                       [i = data.size() - 1](std::string acc, const auto &elem) mutable {
+                           return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
+                       }
+                   );
+        }
+    };
 
     class Register {
     public:
         std::vector<Value> data;
+
         explicit Register(std::vector<Value> const &data = std::vector<Value>())
-            : data(data) {}
+            : data(data) {
+        }
 
         Value operator[](const size_t index) {
             if (index >= data.size()) {
@@ -262,421 +352,566 @@ namespace irgen {
         }
     };
 
-    class Opcode {
+    // 定义所有指令类（emit 只声明）
+    class PUSH {
     public:
-        virtual ~Opcode() = default;
-        [[nodiscard]] virtual std::string name() const = 0;
+        COMMON(PUSH)
         std::vector<Value> operands;
 
-        Value& operator[](const size_t index) {
-            return operands[index];
+        explicit PUSH(const Value &v) {
+            operands.push_back(v);
         }
 
-        const Value& operator[](const size_t index) const {
-            return operands[index];
-        }
-
-        [[nodiscard]] std::string stringArgs() const {
-            return operands
-                | std::views::transform([](auto& k) { return k.toString(); })
-                | std::views::join_with(' ')
-                | std::ranges::to<std::string>();
-        }
-
-        [[nodiscard]] std::string toString() const {
-            return std::format("{} {}", name(), stringArgs());
-        }
-
-        virtual void emit(VM& vm) = 0;
+        void emit(VM &vm);
     };
 
+    class ADD {
+    public:
+        COMMON(ADD)
+        std::vector<Value> operands;
+
+        ADD() = default;
+
+        void emit(VM &vm);
+    };
+
+    class MUL {
+    public:
+        COMMON(MUL)
+        std::vector<Value> operands;
+
+        MUL() = default;
+
+        void emit(VM &vm);
+    };
+
+    class SUB {
+    public:
+        COMMON(SUB)
+        std::vector<Value> operands;
+
+        SUB() = default;
+
+        void emit(VM &vm);
+    };
+
+    class DIV {
+    public:
+        COMMON(DIV)
+        std::vector<Value> operands;
+
+        DIV() = default;
+
+        void emit(VM &vm);
+    };
+
+    class NEG {
+    public:
+        COMMON(NEG)
+        std::vector<Value> operands;
+
+        NEG() = default;
+
+        void emit(VM &vm);
+    };
+
+    class NOT {
+    public:
+        COMMON(NOT)
+        std::vector<Value> operands;
+
+        NOT() = default;
+
+        void emit(VM &vm);
+    };
+
+    class AND {
+    public:
+        COMMON(AND)
+        std::vector<Value> operands;
+
+        AND() = default;
+
+        void emit(VM &vm);
+    };
+
+    class OR {
+    public:
+        COMMON(OR)
+        std::vector<Value> operands;
+
+        OR() = default;
+
+        void emit(VM &vm);
+    };
+
+    class EQ {
+    public:
+        COMMON(EQ)
+        std::vector<Value> operands;
+
+        EQ() = default;
+
+        void emit(VM &vm);
+    };
+
+    class NEQ {
+    public:
+        COMMON(NEQ)
+        std::vector<Value> operands;
+
+        NEQ() = default;
+
+        void emit(VM &vm);
+    };
+
+    class LT {
+    public:
+        COMMON(LT)
+        std::vector<Value> operands;
+
+        LT() = default;
+
+        void emit(VM &vm);
+    };
+
+    class LTE {
+    public:
+        COMMON(LTE)
+        std::vector<Value> operands;
+
+        LTE() = default;
+
+        void emit(VM &vm);
+    };
+
+    class GT {
+    public:
+        COMMON(GT)
+        std::vector<Value> operands;
+
+        GT() = default;
+
+        void emit(VM &vm);
+    };
+
+    class GTE {
+    public:
+        COMMON(GTE)
+        std::vector<Value> operands;
+
+        GTE() = default;
+
+        void emit(VM &vm);
+    };
+
+    class STORE {
+    public:
+        COMMON(STORE)
+        std::vector<Value> operands;
+
+        explicit STORE(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm);
+    };
+
+    class LOAD {
+    public:
+        COMMON(LOAD)
+        std::vector<Value> operands;
+
+        explicit LOAD(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm);
+    };
+
+    class LABEL {
+    public:
+        COMMON(LABEL)
+        std::vector<Value> operands;
+
+        explicit LABEL(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        explicit LABEL(const Value &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm);
+
+        void set_label(VM &vm, std::optional<size_t> on = std::nullopt) const;
+    };
+
+    class GOTO {
+    public:
+        COMMON(GOTO)
+        std::vector<Value> operands;
+
+        explicit GOTO(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        explicit GOTO(const Value &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm);
+    };
+
+    class IFTRUEGOTO {
+    public:
+        COMMON(IFTRUEGOTO)
+        std::vector<Value> operands;
+
+        explicit IFTRUEGOTO(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        explicit IFTRUEGOTO(const Value &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm);
+    };
+
+    class ENTER_SCOPE {
+    public:
+        COMMON(ENTER_SCOPE)
+        std::vector<Value> operands;
+
+        ENTER_SCOPE() = default;
+
+        void emit(VM &vm);
+    };
+
+    class LEAVE_SCOPE {
+    public:
+        COMMON(LEAVE_SCOPE)
+        std::vector<Value> operands;
+
+        LEAVE_SCOPE() = default;
+
+        void emit(VM &vm);
+    };
+
+    class CALL {
+    public:
+        COMMON(CALL)
+        std::vector<Value> operands;
+
+        explicit CALL(const std::string &name, size_t arg_count) {
+            operands.emplace_back(name);
+            operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
+        }
+
+        void emit(VM &vm);
+    };
+
+    class RET {
+    public:
+        COMMON(RET)
+        std::vector<Value> operands;
+
+        RET() = default;
+
+        void emit(VM &vm);
+    };
+
+    // 定义 VM 类
     class VM {
     public:
         Stack<Value> op_stack, call_stack;
-        std::vector<Opcode*> code;
+        std::vector<Opcode> code;
         Register reg;
         std::vector<SymbolTable> symbol_stack;
         SymbolTable symbols;
-        
+
         // 初始化内置函数
         void init_builtins();
-        void scan_labels();
+
         std::unordered_map<std::string, size_t> label_table;
         size_t pc = 0;
 
         VM() {
             init_builtins();
         }
-        explicit VM(std::vector<Opcode*> c) : code(std::move(c)) {
+
+        explicit VM(std::vector<Opcode> c) : code(std::move(c)) {
             init_builtins();
+        }
+
+        void scan_labels() {
+            for (size_t i = pc; i < code.size(); ++i) {
+                std::visit([&]<typename VT>(VT &op) -> void {
+                    if constexpr (std::is_same_v<std::decay_t<VT>, LABEL>) {
+                        label_table[op.operands[0].asString()] = i;
+                    }
+                }, code[i]);
+            }
         }
 
         void run() {
             try {
                 scan_labels();
                 symbol_stack.push_back(symbols); // 压入全局符号表
-                for (;pc < code.size(); pc++) {
+                for (; pc < code.size(); pc++) {
                     LOG("VM " << op_stack.toString() << " , pc: " << pc);
-                    LOG("Exec " << pc << " | " << code[pc]->name() << " " << code[pc]->stringArgs() << std::endl);
-                    code[pc]->emit(*this);
-                    LOG("After Exec, pc: " << pc);
+                    std::visit([&](auto &op) -> void {
+                        LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs() << std::endl);
+                        op.emit(*this);
+                        LOG("After Exec, pc: " << pc);
+                    }, code[pc]);
                 }
                 LOG("Now done a term. VM " << op_stack.toString());
                 LOG("Clear the op_stack, save the top");
-                if (not op_stack.empty()){
+                if (!op_stack.empty()) {
                     const Value top = op_stack.popValue();
                     op_stack.clear();
                     op_stack.push(top);
                 }
-            } catch ([[maybe_unused]] const std::exception& e) {
+            } catch ([[maybe_unused]] const std::exception &e) {
                 op_stack.clear();
                 throw;
             }
         }
     };
 
-    class PUSH final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "PUSH";
-        }
-        explicit PUSH(const Value& v) {
-            operands.push_back(v);
+    // 定义所有 emit 函数的实现（inline）
+    inline void PUSH::emit(VM &vm) {
+        LOG("PUSH " << operands[0].toString());
+        vm.op_stack.push(operands[0]);
+    }
+
+    inline void ADD::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a + b));
+    }
+
+    inline void MUL::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a * b));
+    }
+
+    inline void SUB::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a - b));
+    }
+
+    inline void DIV::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a / b));
+    }
+
+    inline void NEG::emit(VM &vm) {
+        auto value = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(-value));
+    }
+
+    inline void NOT::emit(VM &vm) {
+        auto value = vm.op_stack.popValue().asBool();
+        vm.op_stack.push(Value(!value));
+    }
+
+    inline void AND::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asBool();
+        auto a = vm.op_stack.popValue().asBool();
+        vm.op_stack.push(Value(a and b));
+    }
+
+    inline void OR::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asBool();
+        auto a = vm.op_stack.popValue().asBool();
+        vm.op_stack.push(Value(a || b));
+    }
+
+    inline void EQ::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a == b));
+    }
+
+    inline void NEQ::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a != b));
+    }
+
+    inline void LT::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a < b));
+    }
+
+    inline void LTE::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a <= b));
+    }
+
+    inline void GT::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a > b));
+    }
+
+    inline void GTE::emit(VM &vm) {
+        auto b = vm.op_stack.popValue().asInt();
+        auto a = vm.op_stack.popValue().asInt();
+        vm.op_stack.push(Value(a >= b));
+    }
+
+    inline void STORE::emit(VM &vm) {
+        LOG("Exec STORE::emit");
+        auto value = vm.op_stack.popValue();
+        LOG("Pop value: " << value);
+        auto name = operands[0].asString();
+        vm.symbols.set(name, value);
+    }
+
+    inline void LOAD::emit(VM &vm) {
+        const auto name = operands[0].asString();
+
+        // 从当前作用域开始，自里向外查找变量
+        if (vm.symbols.exists(name)) {
+            vm.op_stack.push(vm.symbols.get(name));
+            return;
         }
 
-        void emit(VM& vm) override {
-            LOG("PUSH " << operands[0].toString());
-            vm.op_stack.push(operands[0]);
-        }
-    };
-
-    class ADD final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "ADD";
-        }
-        ADD() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a + b));
-        }
-    };
-
-    class MUL final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "MUL";
-        }
-        MUL() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a * b));
-        }
-    };
-
-    class SUB final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "SUB";
-        }
-        SUB() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a - b));
-        }
-    };
-
-    class DIV final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "DIV";
-        }
-        DIV() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a / b));
-        }
-    };
-
-    class NEG final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "NEG";
-        }
-        NEG() = default;
-
-        void emit(VM& vm) override {
-            auto value = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(-value));
-        }
-    };
-
-    class NOT final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "NOT";
-        }
-        NOT() = default;
-
-        void emit(VM& vm) override {
-            auto value = vm.op_stack.popValue().asBool();
-            vm.op_stack.push(Value(!value));
-        }
-    };
-
-    class AND final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "AND";
-        }
-        AND() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asBool();
-            auto a = vm.op_stack.popValue().asBool();
-            vm.op_stack.push(Value(a and b));
-        }
-    };
-
-    class OR final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "OR";
-        }
-        OR() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asBool();
-            auto a = vm.op_stack.popValue().asBool();
-            vm.op_stack.push(Value(a || b));
-        }
-    };
-
-    class EQ final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "EQ";
-        }
-        EQ() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a == b));
-        }
-    };
-
-    class NEQ final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "NEQ";
-        }
-        NEQ() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a != b));
-        }
-    };
-
-    class LT final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "LT";
-        }
-        LT() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a < b));
-        }
-    };
-
-    class LTE final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "LTE";
-        }
-        LTE() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a <= b));
-        }
-    };
-
-    class GT final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "GT";
-        }
-        GT() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a > b));
-        }
-    };
-
-    class GTE final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "GTE";
-        }
-        GTE() = default;
-
-        void emit(VM& vm) override {
-            auto b = vm.op_stack.popValue().asInt();
-            auto a = vm.op_stack.popValue().asInt();
-            vm.op_stack.push(Value(a >= b));
-        }
-    };
-
-    class STORE final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "STORE";
-        }
-        explicit STORE(const std::string& name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM& vm) override {
-            auto value = vm.op_stack.popValue();
-            auto name = operands[0].asString();
-            vm.symbols.set(name, value);
-        }
-    };
-
-    class LOAD final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override {
-            return "LOAD";
-        }
-        explicit LOAD(const std::string& name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM& vm) override {
-            const auto name = operands[0].asString();
-            
-            // 从当前作用域开始，自里向外查找变量
-            if (vm.symbols.exists(name)) {
-                vm.op_stack.push(vm.symbols.get(name));
+        // 遍历符号表栈，从后向前查找（从内层到外层）
+        for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
+            const auto &symbol_table = *it;
+            if (symbol_table.exists(name)) {
+                vm.op_stack.push(symbol_table.get(name));
                 return;
             }
-            
-            // 遍历符号表栈，从后向前查找（从内层到外层）
-            for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
-                const auto& symbol_table = *it;
-                if (symbol_table.exists(name)) {
-                    vm.op_stack.push(symbol_table.get(name));
-                    return;
+        }
+
+        // 找不到变量
+        throw RuntimeError("Variable not found: " + name);
+    }
+
+    inline void LABEL::emit(VM &vm) {
+        // Do nothing, because the setting will be acted in
+        // void set_label(VM& vm, const std::optional<size_t> on = std::nullopt) const.
+    }
+
+    inline void GOTO::emit(VM &vm) {
+        LOG("Before goto, pc = " << vm.pc);
+        if (not vm.label_table.contains(operands[0].asString())) {
+            throw RuntimeError("Unknown label: " + operands[0].asString());
+        }
+        vm.pc = vm.label_table[operands[0].asString()];
+        LOG("After goto, pc = " << vm.pc);
+    }
+
+    inline void IFTRUEGOTO::emit(VM &vm) {
+        if (vm.op_stack.popValue().asBool()) {
+            GOTO(operands[0]).emit(vm);
+        }
+    }
+
+    inline void ENTER_SCOPE::emit(VM &vm) {
+        // 保存当前符号表到符号表栈
+        vm.symbol_stack.push_back(vm.symbols);
+        // 创建新的符号表
+        vm.symbols = SymbolTable();
+    }
+
+    inline void LEAVE_SCOPE::emit(VM &vm) {
+        // 恢复上一个符号表
+        if (!vm.symbol_stack.empty()) {
+            vm.symbols = vm.symbol_stack.back();
+            vm.symbol_stack.pop_back();
+        }
+    }
+
+    inline void CALL::emit(VM &vm) {
+        auto arg_count = operands[1].asInt();
+        std::vector<Value> args;
+
+        // 从栈中弹出参数
+        args.reserve(arg_count);
+        for (ptrdiff_t i = 0; i < arg_count; ++i) {
+            args.push_back(vm.op_stack.popValue());
+        }
+
+        // 反转参数顺序（因为是从栈中弹出的，所以顺序是反的）
+        std::reverse(args.begin(), args.end());
+
+        auto func_name = operands[0].asString();
+
+        // 查找函数
+        Value func;
+        if (vm.symbols.exists(func_name)) {
+            func = vm.symbols.get(func_name);
+        } else {
+            // 遍历符号表栈查找函数
+            for (auto & symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
+                if (symbol_table.exists(func_name)) {
+                    func = symbol_table.get(func_name);
+                    break;
                 }
             }
-            
-            // 找不到变量
-            throw RuntimeError("Variable not found: " + name);
         }
-    };
 
-    class LABEL final : public Opcode {
-        public:
-        [[nodiscard]] std::string name() const override { return "LABEL"; }
-        explicit LABEL(const std::string& name) {
-            operands.emplace_back(name);
+        if (!func.isFunction()) {
+            throw RuntimeError("Not a function: " + func_name);
         }
-        explicit LABEL(const Value& name) {
-            operands.emplace_back(name);
-        }
-        void emit(VM &vm) override {
-            // Do nothing, because the setting will be acted in
-            // void set_label(VM& vm, const std::optional<size_t> on = std::nullopt) const.
-        }
-        void set_label(VM& vm, const std::optional<size_t> on = std::nullopt) const {
-            vm.label_table[operands[0].asString()] = on.value_or(vm.pc);
-        }
-    };
 
-    class GOTO final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override { return "GOTO"; }
-        explicit GOTO(const std::string& name) {
-            operands.emplace_back(name);
-        }
-        explicit GOTO(const Value& name) {
-            operands.emplace_back(name);
-        }
-        void emit(VM &vm) override {
-            LOG("Before goto, pc = " << vm.pc);
-            if (not vm.label_table.contains(operands[0].asString())) {
-                throw RuntimeError("Unknown label: " + operands[0].asString());
+        if (func.isUserFunction()) {
+            // 调用用户定义函数
+            auto func_obj = func.asFunctionObject();
+
+            // 检查参数数量
+            if (args.size() != func_obj->params.size()) {
+                throw RuntimeError(
+                    "Function " + func_name + " expects " + std::to_string(func_obj->params.size()) + " arguments, got "
+                    + std::to_string(args.size()));
             }
-            vm.pc = vm.label_table[operands[0].asString()];
-            LOG("After goto, pc = " << vm.pc);
-        }
-    };
 
-    class IFTRUEGOTO final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override { return "IFTRUEGOTO"; }
-        explicit IFTRUEGOTO(const std::string& name) {
-            operands.emplace_back(name);
-        }
-        explicit IFTRUEGOTO(const Value& name) {
-            operands.emplace_back(name);
-        }
-        void emit(VM &vm) override {
-            if (vm.op_stack.popValue().asBool()) {
-                (new GOTO(operands[0]))->emit(vm);
+            for (const auto& arg : args) {
+                vm.op_stack.push(arg);
             }
+
+            // 保存当前 PC
+            vm.call_stack.push(Value(static_cast<ptrdiff_t>(vm.pc)));
+
+            // 跳转到函数标签
+            if (vm.label_table.contains(func_obj->location)) {
+                vm.pc = vm.label_table[func_obj->location];
+            } else {
+                throw RuntimeError("Function label not found: " + func_obj->location);
+            }
+        } else {
+            // 调用内置函数
+            auto builtin_func = func.asFunction();
+            auto result = builtin_func(vm, args);
+            vm.op_stack.push(result);
         }
-    };
+    }
 
-    class ENTER_SCOPE final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override { return "ENTER_SCOPE"; }
-        ENTER_SCOPE() = default;
-
-        void emit(VM& vm) override;
-    };
-
-    class LEAVE_SCOPE final : public Opcode {
-    public:
-        [[nodiscard]] std::string name() const override { return "LEAVE_SCOPE"; }
-        LEAVE_SCOPE() = default;
-
-        void emit(VM& vm) override;
-    };
-
-    class CALL final : public Opcode {
-        public:
-        [[nodiscard]] std::string name() const override { return "CALL"; }
-        explicit CALL(const std::string& name, size_t arg_count) {
-            operands.emplace_back(name);
-            operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
+    inline void RET::emit(VM &vm) {
+        // 从调用栈中弹出返回地址
+        if (!vm.call_stack.empty()) {
+            auto return_addr = vm.call_stack.popValue().asInt();
+            vm.pc = static_cast<size_t>(return_addr);
+        } else {
+            // 如果没有调用栈，结束执行
+            vm.pc = vm.code.size();
         }
-        void emit(VM &vm) override;
-    };
+    }
 
-    class RET final : public Opcode {
-        public:
-        [[nodiscard]] std::string name() const override { return "RET"; }
-        RET() = default;
-        void emit(VM &vm) override;
-    };
-
-}  
+    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
+        vm.label_table[operands[0].asString()] = on.value_or(vm.pc);
+    }
+}
 #undef NAME
