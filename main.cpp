@@ -69,7 +69,7 @@ Contact OpenLamina-Developing for more information)",
     );
 }
 void test_code1() {
-    LOG("Test LABEL & DOTO");
+    LOG("Test LABEL & GOTO");
 
     irgen::VM vm;
     const std::vector<irgen::Opcode*> test_code = {
@@ -132,19 +132,57 @@ void test_code2() {
     delete manual_ast;
 }
 
+std::string test_fib_format(int n) {
+    return std::format("fib({})", n);
+}
+
+void test_fib_speed() {
+    irgen::VM vm;
+
+    const std::string input =
+R"(
+func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
+)";
+    lmx::ProgramASTNode* got_ast = parse(input);
+
+    auto code = lm::irgen::Generator(got_ast).gen();
+    vm.code.insert(vm.code.end(), code.begin(), code.end());
+    vm.run();
+
+    const std::vector tests = {10, 15, 20, 25};
+
+    for (const auto& test : tests) {
+        const auto tstart = clock();
+        for (int i = 0; i < 5; i++) {
+            auto tcode = lm::irgen::Generator(parse(test_fib_format(test))).gen();
+            std::cerr << "Testing " << test_fib_format(test) << std::endl;
+            vm.code.insert(vm.code.end(), tcode.begin(), tcode.end());
+            vm.run();
+        }
+        std::cerr << "Result: " << vm.op_stack.top() << std::endl;
+        std::cerr << "Average Time: " << static_cast<double>(clock() - tstart) / CLOCKS_PER_SEC / 5 << " s\n" << std::endl;
+    }
+
+    delete got_ast;
+}
+
 [[noreturn]] int main() {
+    test_fib_speed();
+
+
     std::cout << welcome << std::endl;
     auto repl = repl::REPL();
     while (true) {
         try {
             if (repl.exec_input([&]() -> std::string {
-               std::cout << "\n>>> ";
+               std::cout << ">>> ";
                std::string line;
                std::getline(std::cin, line);
                return line;
            })) {
-                if (!repl.vm.op_stack.empty()) {
-                    std::cout << repl.vm.op_stack.top() << std::endl;
+                if (not repl.vm.op_stack.empty()) {
+                    auto top = repl.vm.op_stack.top();
+                    if (not top.isNone()) std::cout << top << std::endl;
                 }
             }
         } catch (const RuntimeError &e) {

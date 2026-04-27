@@ -11,22 +11,31 @@
 #include <vector>
 #include <variant>
 #include <unordered_map>
+#include <memory>
 
 #include "../tools/debug.hpp"
 #include "../tools/error.hpp"
 #include "../tools/lang/builtins.hpp"
 
 namespace irgen {
+    class Opcode;
     class Value;
     class VM;
     class LABEL;
 
     template<typename T>
-    concept IntegerType = std::is_integral_v<T> && !std::same_as<T, bool>;
+    concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
 
     template<typename T>
-    concept StringType = std::convertible_to<T, std::string> && !IntegerType<T>;
+    concept StringType = std::convertible_to<T, std::string> and !IntegerType<T>;
 
+    // 函数对象，包含函数的参数列表、函数体和位置标签
+    struct FunctionObject {
+        std::vector<std::string> params;
+        std::vector<Opcode*> body;
+        std::string location; // 函数所在的标签名
+    };
+    
     using FunctionType = std::function<Value(VM&, const std::vector<Value>&)>;
 
     // Value 类型，支持多种类型的值
@@ -42,7 +51,7 @@ namespace irgen {
 
     private:
         Type type;
-        std::variant<ptrdiff_t, bool, std::string, FunctionType> data;
+        std::variant<ptrdiff_t, bool, std::string, FunctionType, std::shared_ptr<FunctionObject>> data;
 
     public:
         Value() : type(Type::None) {}
@@ -56,14 +65,10 @@ namespace irgen {
             : type(Type::String), data(static_cast<std::string>(std::move(value))) {}
 
         explicit Value(FunctionType value) : type(Type::Function), data(value) {}
+        explicit Value(std::shared_ptr<FunctionObject> value) : type(Type::Function), data(value) {}
         explicit Value(bool value) : type(Type::Bool), data(value) {}
 
-        Value operator()(VM& vm, const std::vector<Value>& args) const {
-            if (type != Type::Function) {
-                throw RuntimeError("Value is not a function");
-            }
-            return std::get<FunctionType>(data)(vm, args);
-        }
+        Value operator()(VM& vm, const std::vector<Value>& args) const;
 
         [[nodiscard]] Type getType() const { return type; }
 
@@ -78,7 +83,7 @@ namespace irgen {
                 case Type::String:
                     return "\"" + asString() + "\"";
                 case Type::Function:
-                    return "<function>";
+                    return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
                 default:
                     return "<__UNKNOWN_ValueType>";
             }
@@ -96,6 +101,27 @@ namespace irgen {
         DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
+        
+        // 获取函数对象
+        [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
+            if (type != Type::Function) {
+                throw RuntimeError("Value is not a function");
+            }
+            if (std::holds_alternative<std::shared_ptr<FunctionObject>>(data)) {
+                return std::get<std::shared_ptr<FunctionObject>>(data);
+            }
+            throw RuntimeError("Value is not a user-defined function");
+        }
+        
+        // 检查是否为用户定义函数
+        [[nodiscard]] bool isUserFunction() const {
+            return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject>>(data);
+        }
+        
+        // 检查是否为内置函数
+        [[nodiscard]] bool isBuiltinFunction() const {
+            return type == Type::Function and std::holds_alternative<FunctionType>(data);
+        }
 
 #undef DEFINE_AS_METHOD
 
@@ -137,76 +163,88 @@ namespace irgen {
         }
     };
 
+    template <typename T>
+    concept Stackable =
+        std::copyable<T> and std::movable<T>
+        and requires(T t) {
+            { t.toString() } -> StringType;
+        };
+
+    template <typename Stackable>
     class Stack {
-        std::vector<Value> data;
+            std::vector<Stackable> data;
 
-    public:
-        void push(const Value& value) {
-            data.push_back(value);
-        }
+        public:
+            Stack() = default;
 
-        void push(Value&& value) {
-            LOG("Pushing back: " << value.toString());
-            data.push_back(std::move(value));
-        }
+            explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {}
 
-        void pop() {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::pop(): stack is empty");
+            void push(const Stackable& value) {
+                data.push_back(value);
             }
-            data.pop_back();
-        }
 
-        Value popValue() {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::popValue(): stack is empty");
+            void push(Stackable&& value) {
+                LOG("Pushing back: " << value.toString());
+                data.push_back(std::move(value));
             }
-            Value value = data.back();
-            data.pop_back();
-            return value;
-        }
 
-        Value &top() {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::top(): stack is empty");
-            }
-            return data.back();
-        }
-
-        [[nodiscard]] const Value &top() const {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::top(): stack is empty");
-            }
-            return data.back();
-        }
-
-        [[nodiscard]] size_t size() const {
-            return data.size();
-        }
-
-        [[nodiscard]] bool empty() const {
-            return data.empty();
-        }
-
-        void clear() {
-            data.clear();
-        }
-
-        auto begin() { return data.begin(); }
-        auto end() { return data.end(); }
-        [[nodiscard]] auto begin() const { return data.begin(); }
-        [[nodiscard]] auto end() const { return data.end(); }
-
-        [[nodiscard]] std::string toString() const {
-            return "Stack:\n" + std::accumulate(
-                data.rbegin(), data.rend(),
-                std::string{},
-                [i = data.size() - 1](std::string acc, const auto& elem) mutable {
-                    return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
+            void pop() {
+                if (data.empty()) {
+                    throw std::out_of_range("Stack::pop(): stack is empty");
                 }
-            );
-        }
-    };
+                data.pop_back();
+            }
+
+            Stackable popValue() {
+                if (data.empty()) {
+                    throw std::out_of_range("Stack::popValue(): stack is empty");
+                }
+                Stackable value = data.back();
+                data.pop_back();
+                return value;
+            }
+
+            Stackable& top() {
+                if (data.empty()) {
+                    throw std::out_of_range("Stack::top(): stack is empty");
+                }
+                return data.back();
+            }
+
+            [[nodiscard]] const Stackable& top() const {
+                if (data.empty()) {
+                    throw std::out_of_range("Stack::top(): stack is empty");
+                }
+                return data.back();
+            }
+
+            [[nodiscard]] size_t size() const {
+                return data.size();
+            }
+
+            [[nodiscard]] bool empty() const {
+                return data.empty();
+            }
+
+            void clear() {
+                data.clear();
+            }
+
+            auto begin() { return data.begin(); }
+            auto end() { return data.end(); }
+            [[nodiscard]] auto begin() const { return data.begin(); }
+            [[nodiscard]] auto end() const { return data.end(); }
+
+            [[nodiscard]] std::string toString() const {
+                return "Stack:\n" + std::accumulate(
+                    data.rbegin(), data.rend(),
+                    std::string{},
+                    [i = data.size() - 1](std::string acc, const auto& elem) mutable {
+                        return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
+                    }
+                );
+            }
+        };
 
     class Register {
     public:
@@ -254,7 +292,7 @@ namespace irgen {
 
     class VM {
     public:
-        Stack op_stack, call_stack;
+        Stack<Value> op_stack, call_stack;
         std::vector<Opcode*> code;
         Register reg;
         std::vector<SymbolTable> symbol_stack;
@@ -262,6 +300,7 @@ namespace irgen {
         
         // 初始化内置函数
         void init_builtins();
+        void scan_labels();
         std::unordered_map<std::string, size_t> label_table;
         size_t pc = 0;
 
@@ -277,9 +316,10 @@ namespace irgen {
                 scan_labels();
                 symbol_stack.push_back(symbols); // 压入全局符号表
                 for (;pc < code.size(); pc++) {
-                    LOG("VM " << op_stack.toString());
+                    LOG("VM " << op_stack.toString() << " , pc: " << pc);
                     LOG("Exec " << pc << " | " << code[pc]->name() << " " << code[pc]->stringArgs() << std::endl);
                     code[pc]->emit(*this);
+                    LOG("After Exec, pc: " << pc);
                 }
                 LOG("Now done a term. VM " << op_stack.toString());
                 LOG("Clear the op_stack, save the top");
@@ -293,8 +333,6 @@ namespace irgen {
                 throw;
             }
         }
-
-        void scan_labels();
     };
 
     class PUSH final : public Opcode {
@@ -404,7 +442,7 @@ namespace irgen {
         void emit(VM& vm) override {
             auto b = vm.op_stack.popValue().asBool();
             auto a = vm.op_stack.popValue().asBool();
-            vm.op_stack.push(Value(a && b));
+            vm.op_stack.push(Value(a and b));
         }
     };
 
@@ -533,8 +571,24 @@ namespace irgen {
 
         void emit(VM& vm) override {
             const auto name = operands[0].asString();
-            const auto value = vm.symbols.get(name);
-            vm.op_stack.push(value);
+            
+            // 从当前作用域开始，自里向外查找变量
+            if (vm.symbols.exists(name)) {
+                vm.op_stack.push(vm.symbols.get(name));
+                return;
+            }
+            
+            // 遍历符号表栈，从后向前查找（从内层到外层）
+            for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
+                const auto& symbol_table = *it;
+                if (symbol_table.exists(name)) {
+                    vm.op_stack.push(symbol_table.get(name));
+                    return;
+                }
+            }
+            
+            // 找不到变量
+            throw RuntimeError("Variable not found: " + name);
         }
     };
 
@@ -596,11 +650,7 @@ namespace irgen {
         [[nodiscard]] std::string name() const override { return "ENTER_SCOPE"; }
         ENTER_SCOPE() = default;
 
-        void emit(VM& vm) override {
-            // 保存当前符号表并创建新的作用域
-            vm.symbol_stack.push_back(vm.symbols);
-            vm.symbols = SymbolTable();
-        }
+        void emit(VM& vm) override;
     };
 
     class LEAVE_SCOPE final : public Opcode {
@@ -608,14 +658,7 @@ namespace irgen {
         [[nodiscard]] std::string name() const override { return "LEAVE_SCOPE"; }
         LEAVE_SCOPE() = default;
 
-        void emit(VM& vm) override {
-            // 恢复上一个作用域的符号表
-            if (vm.symbol_stack.empty()) {
-                throw RuntimeError("LEAVE_SCOPE: no active scope");
-            }
-            vm.symbols = vm.symbol_stack.back();
-            vm.symbol_stack.pop_back();
-        }
+        void emit(VM& vm) override;
     };
 
     class CALL final : public Opcode {
@@ -625,53 +668,15 @@ namespace irgen {
             operands.emplace_back(name);
             operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
         }
-        void emit(VM &vm) override {
-            auto func_name = operands[0].asString();
-            auto arg_count = operands[1].asInt();
-            auto func = vm.symbols.get(func_name);
-            if (func.isFunction()) {
-                // 从栈中取出参数
-                std::vector<Value> args;
-                for (size_t i = 0; i < static_cast<size_t>(arg_count); i++) {
-                    if (vm.op_stack.empty()) {
-                        throw RuntimeError("CALL: not enough arguments on stack");
-                    }
-                    args.insert(args.begin(), vm.op_stack.popValue());
-                }
-                // 进入函数作用域
-                vm.symbol_stack.push_back(vm.symbols);
-                vm.symbols = SymbolTable();
-                // 调用函数
-                const auto result = func(vm, args);
-                // 离开函数作用域
-                if (!vm.symbol_stack.empty()) {
-                    vm.symbols = vm.symbol_stack.back();
-                    vm.symbol_stack.pop_back();
-                }
-                // 将结果压入栈
-                vm.op_stack.push(result);
-            }
-        }
+        void emit(VM &vm) override;
     };
 
-    inline void VM::scan_labels()  {
-        for (size_t i = pc; i < code.size(); i++) {
-            LOG("Now i(init by pc): " << i << ", Now code: " << code[i]->toString());
-            if (const auto* label = dynamic_cast<LABEL*>(code[i])) {
-                LOG("Emit!");
-                label->set_label(*this, i);
-            }
-        }
-        LOG("Initializing Done. labels: " <<
-            [&]() -> std::string {
-                std::string s;
-                for (auto it = label_table.begin(); it != label_table.end(); ++it) {
-                    s += "| " + it->first + ": " + std::to_string(it->second) + "\n";
-                }
-                return s;
-            }()
-        );
-    }
+    class RET final : public Opcode {
+        public:
+        [[nodiscard]] std::string name() const override { return "RET"; }
+        RET() = default;
+        void emit(VM &vm) override;
+    };
 
-}
+}  
 #undef NAME
