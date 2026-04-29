@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.15)
 project(OpenLamina
         VERSION 0.1.2
         DESCRIPTION "OpenLamina"
-        HOMEPAGE_URL ""
 )
 
 set(CMAKE_CXX_STANDARD 26)
@@ -63,6 +62,19 @@ add_executable(
         src/lexer/lexer_vars.hpp
 )
 
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
+    message(STATUS "OpenLamina: DEBUG mode (O0)")
+elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
+    elseif (MSVC)
+        set(CMAKE_CXX_FLAGS_RELEASE "/O2 /arch:AVX2 /GL /DNDEBUG")
+    endif ()
+    message(STATUS "OpenLamina: RELEASE mode (aggressive optimization)")
+endif ()
+
+
 # ==============================================
 # 4. 链接库与包含目录
 # ==============================================
@@ -72,7 +84,7 @@ target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # 链接 SymEngine 库
-target_link_libraries(OpenLamina PRIVATE ${SYMENGINE_LIBRARIES})
+# target_link_libraries(OpenLamina PRIVATE ${SYMENGINE_LIBRARIES})
 
 target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}

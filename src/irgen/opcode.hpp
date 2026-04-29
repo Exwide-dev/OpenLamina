@@ -11,6 +11,7 @@
 #include <vector>
 #include <variant>
 #include <unordered_map>
+#include <flat_map>
 #include <memory>
 
 #include "../tools/debug.hpp"
@@ -264,6 +265,7 @@ return std::get<CppType>(data); \
         Stack() = default;
 
         explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
+            LOG("Creating stack");
         }
 
         void push(const Stackable &value) {
@@ -276,33 +278,15 @@ return std::get<CppType>(data); \
         }
 
         void pop() {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::pop(): stack is empty");
-            }
             data.pop_back();
         }
 
-        Stackable popValue() {
-            if (data.empty()) {
-                LOG("Empty Stack...");
-                throw std::out_of_range("Stack::popValue(): stack is empty");
-            }
+        [[nodiscard]] Stackable popValue() {
             Stackable value = data.back();
             data.pop_back();
             return value;
         }
-
-        Stackable &top() {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::top(): stack is empty");
-            }
-            return data.back();
-        }
-
         [[nodiscard]] const Stackable &top() const {
-            if (data.empty()) {
-                throw std::out_of_range("Stack::top(): stack is empty");
-            }
             return data.back();
         }
 
@@ -349,6 +333,59 @@ return std::get<CppType>(data); \
                 throw std::out_of_range(ss.str());
             }
             return data[index];
+        }
+    };
+
+    class Cache {
+        static constexpr int n = 16;
+
+        struct Var {
+            std::string name;
+            Value val;
+        };
+
+        std::vector<std::array<Var, n>> cache;
+        int pos = 0;
+    public:
+        Cache() : cache({std::array<Var, n>{}}) {}
+
+        Value operator[](const std::string& name) const {
+            for (const auto &[var_name, val] : cache.back()) {
+                if (var_name == name) {
+                    return val;
+                }
+            }
+            throw std::out_of_range("No such variable");
+        }
+
+        void add(const std::string &name, const Value &val) {
+            LOG("cache add: " << name);
+            cache.back()[pos] = Var{name, val};
+            pos ++;
+            pos %= n;
+        }
+
+        std::optional<Value> get(const std::string& name) const noexcept {
+            LOG("cache get!");
+            for (const auto& [var_name, val] : cache.back()) {
+                if (var_name == name) {
+                    return val;
+                }
+            }
+            return std::nullopt;
+        }
+
+        void enter_scope() {
+            cache.emplace_back(std::array<Var, n>{});
+        }
+
+        void leave_scope() {
+            cache.pop_back();
+        }
+
+        void clear() {
+            LOG("cache clear!");
+            cache = std::vector({std::array<Var, n>{}});
         }
     };
 
@@ -514,7 +551,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(name);
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class LOAD {
@@ -526,7 +563,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(name);
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class LABEL {
@@ -609,7 +646,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class RET {
@@ -630,11 +667,12 @@ return std::get<CppType>(data); \
         Register reg;
         std::vector<SymbolTable> symbol_stack;
         SymbolTable symbols;
+        Cache cache;
 
         // 初始化内置函数
         void init_builtins();
 
-        std::unordered_map<std::string, size_t> label_table;
+        std::flat_map<std::string, size_t> label_table;
         size_t pc = 0;
 
         VM() {
@@ -769,16 +807,23 @@ return std::get<CppType>(data); \
         vm.op_stack.push(Value(a >= b));
     }
 
-    inline void STORE::emit(VM &vm) {
+    inline void STORE::emit(VM &vm) const {
         LOG("Exec STORE::emit");
         auto value = vm.op_stack.popValue();
         LOG("Pop value: " << value);
         auto name = operands[0].asString();
+
+        vm.cache.add(name, value);
         vm.symbols.set(name, value);
     }
 
-    inline void LOAD::emit(VM &vm) {
+    inline void LOAD::emit(VM &vm) const {
         const auto name = operands[0].asString();
+
+        if (const auto found = vm.cache.get(name)) {
+            vm.op_stack.push(*found);
+            return;
+        }
 
         // 从当前作用域开始，自里向外查找变量
         if (vm.symbols.exists(name)) {
@@ -824,6 +869,7 @@ return std::get<CppType>(data); \
         vm.symbol_stack.push_back(vm.symbols);
         // 创建新的符号表
         vm.symbols = SymbolTable();
+        vm.cache.enter_scope();
     }
 
     inline void LEAVE_SCOPE::emit(VM &vm) {
@@ -832,21 +878,10 @@ return std::get<CppType>(data); \
             vm.symbols = vm.symbol_stack.back();
             vm.symbol_stack.pop_back();
         }
+        vm.cache.leave_scope();
     }
 
-    inline void CALL::emit(VM &vm) {
-        auto arg_count = operands[1].asInt();
-        std::vector<Value> args;
-
-        // 从栈中弹出参数
-        args.reserve(arg_count);
-        for (ptrdiff_t i = 0; i < arg_count; ++i) {
-            args.push_back(vm.op_stack.popValue());
-        }
-
-        // 反转参数顺序（因为是从栈中弹出的，所以顺序是反的）
-        std::reverse(args.begin(), args.end());
-
+    inline void CALL::emit(VM &vm) const {
         auto func_name = operands[0].asString();
 
         // 查找函数
@@ -854,7 +889,6 @@ return std::get<CppType>(data); \
         if (vm.symbols.exists(func_name)) {
             func = vm.symbols.get(func_name);
         } else {
-            // 遍历符号表栈查找函数
             for (auto & symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
                 if (symbol_table.exists(func_name)) {
                     func = symbol_table.get(func_name);
@@ -868,19 +902,10 @@ return std::get<CppType>(data); \
         }
 
         if (func.isUserFunction()) {
-            // 调用用户定义函数
             auto func_obj = func.asFunctionObject();
 
-            // 检查参数数量
-            if (args.size() != func_obj->params.size()) {
-                throw RuntimeError(
-                    "Function " + func_name + " expects " + std::to_string(func_obj->params.size()) + " arguments, got "
-                    + std::to_string(args.size()));
-            }
-
-            for (const auto& arg : args) {
-                vm.op_stack.push(arg);
-            }
+            // 参数已经在栈上，不需要弹出再推回
+            // 函数体中的 STORE 会直接从栈中取出参数
 
             // 保存当前 PC
             vm.call_stack.push(Value(static_cast<ptrdiff_t>(vm.pc)));
@@ -892,7 +917,14 @@ return std::get<CppType>(data); \
                 throw RuntimeError("Function label not found: " + func_obj->location);
             }
         } else {
-            // 调用内置函数
+            // 内置函数：需要从栈中取出参数
+            auto arg_count = operands[1].asInt();
+            std::vector<Value> args;
+            args.reserve(arg_count);
+            for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                args.push_back(vm.op_stack.popValue());
+            }
+
             auto builtin_func = func.asFunction();
             auto result = builtin_func(vm, args);
             vm.op_stack.push(result);

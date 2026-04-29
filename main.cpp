@@ -149,18 +149,19 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();
 
-    const std::vector tests = {10, 15, 20, 25, 30};
+    const std::vector tests = {20, 25, 30};
 
     for (const auto& test : tests) {
+        constexpr int n = 20;
         const auto tstart = clock();
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < n; i++) {
             auto tcode = lm::irgen::Generator(parse(test_fib_format(test))).gen();
             std::cerr << "Testing " << test_fib_format(test) << std::endl;
             vm.code.insert(vm.code.end(), tcode.begin(), tcode.end());
             vm.run();
         }
         std::cerr << "Result: " << vm.op_stack.top() << std::endl;
-        std::cerr << "Average Time: " << static_cast<double>(clock() - tstart) / CLOCKS_PER_SEC / 5 << " s\n" << std::endl;
+        std::cerr << "Average Time: " << static_cast<long double>(clock() - tstart) / CLOCKS_PER_SEC / n << " s\n" << std::endl;
     }
 
     delete got_ast;
