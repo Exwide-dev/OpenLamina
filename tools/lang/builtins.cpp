@@ -32,8 +32,8 @@ namespace lang {
 #undef arg_must
 
 void lang::init_builtins(irgen::SymbolTable& symbols) {
-    symbols.set("true", Value(true));
-    symbols.set("false", Value(false));
-    symbols.set("input", Value(irgen::FunctionType(input)));
-    symbols.set("print", Value(irgen::FunctionType(print)));
+    symbols.set(irgen::g_string_pool.add("true"), Value(true));
+    symbols.set(irgen::g_string_pool.add("false"), Value(false));
+    symbols.set(irgen::g_string_pool.add("input"), Value(irgen::FunctionType(input)));
+    symbols.set(irgen::g_string_pool.add("print"), Value(irgen::FunctionType(print)));
 }

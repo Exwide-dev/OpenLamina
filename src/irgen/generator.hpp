@@ -10,6 +10,22 @@ namespace lm::irgen {
         ~Generator() = default;
 
         [[nodiscard]] std::vector<::irgen::Opcode> gen() const;
+
+        void replace_string(std::vector<::irgen::Opcode>& codes) const {
+            for (auto& code : codes) {
+                std::visit([&](auto& op) {
+                    const std::string op_name = op.name();
+                    if (op_name == "PUSH") return;
+                    for (auto& operand : op.operands) {
+                        if (operand.isString()) {
+                            const std::string name = operand.asString();
+                            size_t id = ::irgen::g_string_pool.add(name);
+                            operand = ::irgen::Value(id);
+                        }
+                    }
+                }, code);
+            }
+        }
     };
 
     // 包装函数：接收 ProgramASTNode，生成字节码并执行

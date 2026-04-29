@@ -74,9 +74,9 @@ void test_code1() {
     irgen::VM vm;
     const std::vector<irgen::Opcode> test_code = {
         irgen::PUSH(irgen::Value(static_cast<size_t>(1))),
-        irgen::GOTO(irgen::Value(std::string("skip"))),
+        irgen::GOTO(static_cast<size_t>(0)),
         irgen::PUSH(irgen::Value(static_cast<size_t>(2))),
-        irgen::LABEL(irgen::Value("skip")),
+        irgen::LABEL(static_cast<size_t>(0)),
         irgen::PUSH(irgen::Value(static_cast<size_t>(3))),
     };
 

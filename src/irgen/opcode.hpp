@@ -94,11 +94,22 @@ namespace irgen {
         RET
     >;
 
+    enum class EOpcode : uint8_t {
+        PUSH,
+        ADD, MUL, SUB, DIV,
+        NEG, NOT, AND, OR,
+        EQ, NEQ, LT, LTE, GT, GTE,
+        STORE, LOAD,
+        LABEL, GOTO, IFTRUEGOTO,
+        ENTER_SCOPE, LEAVE_SCOPE,
+        CALL, RET
+    };
+
     // 函数对象，包含函数的参数列表、函数体和位置标签
     struct FunctionObject {
         std::vector<std::string> params;
         std::vector<Opcode> body;
-        std::string location; // 函数所在的标签名
+        size_t location; // 函数所在的标签ID
     };
 
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
@@ -185,13 +196,29 @@ return std::get<CppType>(data); \
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
 
+        bool operator==(const Value & other) const {
+            const auto& T = this->type;
+            if (this->type != other.type) return false;
+            if (T == Type::None)
+                return true;
+            if (T == Type::Int)
+                return this->asInt() == other.asInt();
+            if (T == Type::Bool)
+                return this->asBool() == other.asBool();
+            if (T == Type::String)
+                return this->asString() == other.asString();
+            if (T == Type::Function)
+                return this->asFunctionObject() == other.asFunctionObject();
+            return false;
+        };
+
         // 获取函数对象
         [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
             if (type != Type::Function) {
                 throw RuntimeError("Value is not a function");
             }
             if (std::holds_alternative<std::shared_ptr<FunctionObject> >(data)) {
-                return std::get<std::shared_ptr<FunctionObject> >(data);
+                return std::get<std::shared_ptr<FunctionObject>>(data);
             }
             throw RuntimeError("Value is not a user-defined function");
         }
@@ -221,31 +248,36 @@ return std::get<CppType>(data); \
         }
     };
 
-    // 符号表，用于存储变量和函数
+    /*struct Inst {
+        EOpcode opcode;
+        Value operands[3];
+
+        Inst(EOpcode opcode, )
+    };*/
+
     class SymbolTable {
-        std::unordered_map<std::string, Value> symbols;
+        std::unordered_map<size_t, Value> symbols;
 
     public:
         SymbolTable() = default;
 
-        explicit SymbolTable(std::unordered_map<std::string, Value> symbols) : symbols(std::move(symbols)) {
-        };
+        explicit SymbolTable(std::unordered_map<size_t, Value> symbols) : symbols(std::move(symbols)) {}
 
-        void set(const std::string &name, const Value &value) {
+        void set(size_t id, const Value &value) {
             LOG("To set");
-            symbols[name] = value;
+            symbols[id] = value;
         }
 
-        Value get(const std::string &name) const {
-            const auto it = symbols.find(name);
+        Value get(size_t id) const {
+            const auto it = symbols.find(id);
             if (it == symbols.end()) {
-                throw RuntimeError("Variable not found: " + name);
+                throw RuntimeError("Variable not found with id: " + std::to_string(id));
             }
             return it->second;
         }
 
-        bool exists(const std::string &name) const {
-            return symbols.contains(name);
+        bool exists(size_t id) const {
+            return symbols.contains(id);
         }
     };
 
@@ -340,7 +372,7 @@ return std::get<CppType>(data); \
         static constexpr int n = 16;
 
         struct Var {
-            std::string name;
+            size_t id;
             Value val;
         };
 
@@ -349,26 +381,26 @@ return std::get<CppType>(data); \
     public:
         Cache() : cache({std::array<Var, n>{}}) {}
 
-        Value operator[](const std::string& name) const {
-            for (const auto &[var_name, val] : cache.back()) {
-                if (var_name == name) {
+        Value operator[](size_t id) const {
+            for (const auto& [var_id, val] : cache.back()) {
+                if (var_id == id) {
                     return val;
                 }
             }
-            throw std::out_of_range("No such variable");
+            throw std::out_of_range("No such variable with id: " + std::to_string(id));
         }
 
-        void add(const std::string &name, const Value &val) {
-            LOG("cache add: " << name);
-            cache.back()[pos] = Var{name, val};
-            pos ++;
+        void add(size_t id, const Value& val) {
+            LOG("cache add: " << id);
+            cache.back()[pos] = Var{id, val};
+            pos++;
             pos %= n;
         }
 
-        std::optional<Value> get(const std::string& name) const noexcept {
+        std::optional<Value> get(size_t id) const noexcept {
             LOG("cache get!");
-            for (const auto& [var_name, val] : cache.back()) {
-                if (var_name == name) {
+            for (const auto& [var_id, val] : cache.back()) {
+                if (var_id == id) {
                     return val;
                 }
             }
@@ -571,12 +603,12 @@ return std::get<CppType>(data); \
         COMMON(LABEL)
         std::vector<Value> operands;
 
-        explicit LABEL(const std::string &name) {
-            operands.emplace_back(name);
+        explicit LABEL(size_t label_id) {
+            operands.emplace_back(static_cast<ptrdiff_t>(label_id));
         }
 
-        explicit LABEL(const Value &name) {
-            operands.emplace_back(name);
+        explicit LABEL(const Value &label_id) {
+            operands.emplace_back(label_id);
         }
 
         void emit(VM &vm);
@@ -589,12 +621,12 @@ return std::get<CppType>(data); \
         COMMON(GOTO)
         std::vector<Value> operands;
 
-        explicit GOTO(const std::string &name) {
-            operands.emplace_back(name);
+        explicit GOTO(size_t label_id) {
+            operands.emplace_back(static_cast<ptrdiff_t>(label_id));
         }
 
-        explicit GOTO(const Value &name) {
-            operands.emplace_back(name);
+        explicit GOTO(const Value &label_id) {
+            operands.emplace_back(label_id);
         }
 
         void emit(VM &vm);
@@ -605,12 +637,12 @@ return std::get<CppType>(data); \
         COMMON(IFTRUEGOTO)
         std::vector<Value> operands;
 
-        explicit IFTRUEGOTO(const std::string &name) {
-            operands.emplace_back(name);
+        explicit IFTRUEGOTO(size_t label_id) {
+            operands.emplace_back(static_cast<ptrdiff_t>(label_id));
         }
 
-        explicit IFTRUEGOTO(const Value &name) {
-            operands.emplace_back(name);
+        explicit IFTRUEGOTO(const Value &label_id) {
+            operands.emplace_back(label_id);
         }
 
         void emit(VM &vm);
@@ -659,6 +691,59 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    class StringPool {
+        std::unordered_map<std::string, size_t> string_to_id;
+        std::vector<std::string> id_to_string;
+        size_t counter = 0;
+    public:
+        StringPool() = default;
+
+        size_t add(const std::string& name) {
+            auto it = string_to_id.find(name);
+            if (it != string_to_id.end()) {
+                return it->second;
+            }
+            string_to_id[name] = counter;
+            id_to_string.push_back(name);
+            return counter++;
+        }
+
+        bool exists(const std::string& name) const {
+            return string_to_id.contains(name);
+        }
+
+        size_t get_id(const std::string& name) const {
+            auto it = string_to_id.find(name);
+            if (it == string_to_id.end()) {
+                throw RuntimeError("String not found in pool: " + name);
+            }
+            return it->second;
+        }
+
+        const std::string& get_string(size_t id) const {
+            if (id >= id_to_string.size()) {
+                throw RuntimeError("String ID out of range: " + std::to_string(id));
+            }
+            return id_to_string[id];
+        }
+
+        size_t size() const {
+            return id_to_string.size();
+        }
+
+        bool empty() const {
+            return id_to_string.empty();
+        }
+
+        void clear() {
+            string_to_id.clear();
+            id_to_string.clear();
+            counter = 0;
+        }
+    };
+
+    inline StringPool g_string_pool{};
+
     // 定义 VM 类
     class VM {
     public:
@@ -668,12 +753,12 @@ return std::get<CppType>(data); \
         std::vector<SymbolTable> symbol_stack;
         SymbolTable symbols;
         Cache cache;
+        std::unordered_map<size_t, size_t> label_table;
+        size_t pc = 0;
+        size_t label_counter = 0;
 
         // 初始化内置函数
         void init_builtins();
-
-        std::flat_map<std::string, size_t> label_table;
-        size_t pc = 0;
 
         VM() {
             init_builtins();
@@ -684,10 +769,10 @@ return std::get<CppType>(data); \
         }
 
         void scan_labels() {
-            for (size_t i = pc; i < code.size(); ++i) {
+            for (size_t i = pc; i < code.size(); i++) {
                 std::visit([&]<typename VT>(VT &op) -> void {
                     if constexpr (std::is_same_v<std::decay_t<VT>, LABEL>) {
-                        label_table[op.operands[0].asString()] = i;
+                        label_table[static_cast<size_t>(op.operands[0].asInt())] = i;
                     }
                 }, code[i]);
             }
@@ -809,39 +894,36 @@ return std::get<CppType>(data); \
 
     inline void STORE::emit(VM &vm) const {
         LOG("Exec STORE::emit");
-        auto value = vm.op_stack.popValue();
+        const auto& value = vm.op_stack.popValue();
         LOG("Pop value: " << value);
-        auto name = operands[0].asString();
+        size_t var_id = static_cast<size_t>(operands[0].asInt());
 
-        vm.cache.add(name, value);
-        vm.symbols.set(name, value);
+        vm.cache.add(var_id, value);
+        vm.symbols.set(var_id, value);
     }
 
     inline void LOAD::emit(VM &vm) const {
-        const auto name = operands[0].asString();
+        size_t var_id = static_cast<size_t>(operands[0].asInt());
 
-        if (const auto found = vm.cache.get(name)) {
+        if (const auto found = vm.cache.get(var_id)) {
             vm.op_stack.push(*found);
             return;
         }
 
-        // 从当前作用域开始，自里向外查找变量
-        if (vm.symbols.exists(name)) {
-            vm.op_stack.push(vm.symbols.get(name));
+        if (vm.symbols.exists(var_id)) {
+            vm.op_stack.push(vm.symbols.get(var_id));
             return;
         }
 
-        // 遍历符号表栈，从后向前查找（从内层到外层）
         for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
-            const auto &symbol_table = *it;
-            if (symbol_table.exists(name)) {
-                vm.op_stack.push(symbol_table.get(name));
+            const auto& symbol_table = *it;
+            if (symbol_table.exists(var_id)) {
+                vm.op_stack.push(symbol_table.get(var_id));
                 return;
             }
         }
 
-        // 找不到变量
-        throw RuntimeError("Variable not found: " + name);
+        throw RuntimeError("Variable not found with id: " + std::to_string(var_id));
     }
 
     inline void LABEL::emit(VM &vm) {
@@ -851,10 +933,11 @@ return std::get<CppType>(data); \
 
     inline void GOTO::emit(VM &vm) {
         LOG("Before goto, pc = " << vm.pc);
-        if (not vm.label_table.contains(operands[0].asString())) {
-            throw RuntimeError("Unknown label: " + operands[0].asString());
+        size_t label_id = static_cast<size_t>(operands[0].asInt());
+        if (not vm.label_table.contains(label_id)) {
+            throw RuntimeError("Unknown label: " + std::to_string(label_id));
         }
-        vm.pc = vm.label_table[operands[0].asString()];
+        vm.pc = vm.label_table[label_id];
         LOG("After goto, pc = " << vm.pc);
     }
 
@@ -882,23 +965,23 @@ return std::get<CppType>(data); \
     }
 
     inline void CALL::emit(VM &vm) const {
-        auto func_name = operands[0].asString();
+        size_t func_id = static_cast<size_t>(operands[0].asInt());
 
         // 查找函数
         Value func;
-        if (vm.symbols.exists(func_name)) {
-            func = vm.symbols.get(func_name);
+        if (vm.symbols.exists(func_id)) {
+            func = vm.symbols.get(func_id);
         } else {
-            for (auto & symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
-                if (symbol_table.exists(func_name)) {
-                    func = symbol_table.get(func_name);
+            for (auto& symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
+                if (symbol_table.exists(func_id)) {
+                    func = symbol_table.get(func_id);
                     break;
                 }
             }
         }
 
         if (!func.isFunction()) {
-            throw RuntimeError("Not a function: " + func_name);
+            throw RuntimeError("Not a function with id: " + std::to_string(func_id));
         }
 
         if (func.isUserFunction()) {
@@ -914,7 +997,7 @@ return std::get<CppType>(data); \
             if (vm.label_table.contains(func_obj->location)) {
                 vm.pc = vm.label_table[func_obj->location];
             } else {
-                throw RuntimeError("Function label not found: " + func_obj->location);
+                throw RuntimeError("Function label not found: " + std::to_string(func_obj->location));
             }
         } else {
             // 内置函数：需要从栈中取出参数
@@ -922,7 +1005,7 @@ return std::get<CppType>(data); \
             std::vector<Value> args;
             args.reserve(arg_count);
             for (ptrdiff_t i = 0; i < arg_count; ++i) {
-                args.push_back(vm.op_stack.popValue());
+                args.emplace_back(vm.op_stack.popValue());
             }
 
             auto builtin_func = func.asFunction();
@@ -943,7 +1026,7 @@ return std::get<CppType>(data); \
     }
 
     inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
-        vm.label_table[operands[0].asString()] = on.value_or(vm.pc);
+        vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
     }
 }
 #undef NAME

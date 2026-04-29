@@ -8,7 +8,7 @@
 #include "opcode.hpp"
 
 namespace lm::irgen {
-    static int label_counter = 0;
+    static size_t label_counter = 0;
     std::vector<::irgen::Opcode> gen_code(lmx::ASTNode* node) {
         std::vector<::irgen::Opcode> code;
 
@@ -101,14 +101,14 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::FuncDecl) {
             const auto* func_decl_node = dynamic_cast<lmx::FuncDeclNode*>(node);
             
-            // 生成函数标签名
-            std::string func_end_label = std::format("func_{}_end", func_decl_node->name);
-            std::string func_label = std::format("func_{}_start", func_decl_node->name);
+            // 生成函数标签ID
+            size_t func_label = label_counter++;
+            size_t func_end_label = label_counter++;
             
             // 创建函数对象
             auto func_obj = std::make_shared<::irgen::FunctionObject>();
             func_obj->params = func_decl_node->params;
-            func_obj->location = func_label; // 设置函数位置标签
+            func_obj->location = func_label;
             
             // 生成函数体的指令序列
             std::vector<::irgen::Opcode> func_body;
@@ -175,9 +175,8 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::IfStmt) {
             const auto* if_node = dynamic_cast<lmx::IfStmtNode*>(node);
 
-            std::string else_label = std::format("else_{}", label_counter);
-            std::string end_label = std::format("endif_{}", label_counter);
-            label_counter++;
+            size_t else_label = label_counter++;
+            size_t end_label = label_counter++;
 
             // 条件表达式：压入结果到栈
             auto cond_code = gen_code(if_node->condition);
@@ -240,6 +239,7 @@ namespace lm::irgen {
         }
         std::cerr << codes << std::endl;
 #endif
+        replace_string(code);
         return code;
     }
 
