@@ -16,10 +16,10 @@ namespace irgen {
         }
     }
 
-    Value SymbolTable::get(const size_t id) const {
+    std::optional<Value> SymbolTable::get(const size_t id) const noexcept {
         const auto it = symbols.find(id);
         if (it == symbols.end()) {
-            throw RuntimeError("Variable not found with id: " + std::to_string(id));
+            return std::nullopt;
         }
         return it->second;
     }

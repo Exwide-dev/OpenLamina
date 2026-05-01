@@ -156,11 +156,11 @@ namespace irgen {
             if (other.numerator == 0) {
                 throw RuntimeError("Division by zero");
             }
-            return Number(numerator * other.denominator, denominator * other.numerator);
+            return {numerator * other.denominator, denominator * other.numerator};
         }
 
         [[nodiscard]] Number neg() const {
-            return Number(-numerator, denominator);
+            return {-numerator, denominator};
         }
 
         [[nodiscard]] bool eq(const Number& other) const {
@@ -245,10 +245,10 @@ namespace irgen {
             : type(Type::Bool), data(value) {}
 
         explicit Value(const Number& value)
-            : type(Type::Int), data(value) {}
+            : type(Type::Int), data(std::move(value)) {}
 
         explicit Value(Number&& value)
-            : type(Type::Int), data(std::move(value)) {}
+            : type(Type::Int), data(value) {}
 
         Value operator()(VM &vm, const std::vector<Value> &args) const {
             if (type != Type::Function) {
@@ -256,9 +256,8 @@ namespace irgen {
             }
             if (std::holds_alternative<FunctionType>(data)) {
                 return std::get<FunctionType>(data)(vm, args);
-            } else {
-                throw RuntimeError("User-defined functions should be called via CALL instruction");
             }
+            throw RuntimeError("User-defined functions should be called via CALL instruction");
         }
 
         [[nodiscard]] Type getType() const { return type; }
@@ -449,7 +448,7 @@ return std::get<CppType>(data); \
 
         void set(size_t id, const Value &value);
 
-        Value get(size_t id) const;
+        std::optional<Value> get(size_t id) const noexcept;
 
         bool exists(const size_t id) const {
             return symbols.contains(id);
@@ -564,7 +563,7 @@ return std::get<CppType>(data); \
 
         void add(const size_t id, const Value& val) {
             LOG("cache add: " << id);
-            if (get(id) != std::nullopt) {
+            if (get(id).has_value()) {
                 cache.back()[pos] = Var{id, val};
                 pos++;
                 pos %= n;
@@ -613,7 +612,7 @@ return std::get<CppType>(data); \
             operands.push_back(v);
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class ADD {
@@ -765,7 +764,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(name);
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class LOAD {
@@ -795,7 +794,7 @@ return std::get<CppType>(data); \
 
         void emit(VM &vm);
 
-        void set_label(VM &vm, std::optional<size_t> on = std::nullopt);
+        void set_label(VM &vm, std::optional<size_t> on = std::nullopt) const;
     };
 
     class GOTO {
@@ -811,7 +810,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(label_id);
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class IFTRUEGOTO {
@@ -827,7 +826,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(label_id);
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class ENTER_SCOPE {
@@ -863,7 +862,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
         }
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
     class RET {
@@ -985,7 +984,7 @@ return std::get<CppType>(data); \
     };
 
     // 定义所有 emit 函数的实现（inline）
-    inline void PUSH::emit(VM &vm) {
+    inline void PUSH::emit(VM &vm) const {
         vm.op_stack.push(operands[0]);
     }
 
@@ -1071,7 +1070,7 @@ return std::get<CppType>(data); \
         vm.op_stack.push(a >= b);
     }
 
-    inline void STORE::emit(VM &vm) {
+    inline void STORE::emit(VM &vm) const {
         const auto& value = vm.op_stack.popValue();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
 
@@ -1088,14 +1087,16 @@ return std::get<CppType>(data); \
         }
 
         if (vm.symbols.exists(var_id)) {
-            vm.op_stack.push(vm.symbols.get(var_id));
+            vm.op_stack.push(vm.symbols.get(var_id).value());
             return;
         }
 
         for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
             const auto& symbol_table = *it;
             if (symbol_table.exists(var_id)) {
-                vm.op_stack.push(symbol_table.get(var_id));
+                auto k = symbol_table.get(var_id);
+                if (k.has_value()) vm.op_stack.push(k.value());
+                else throw RuntimeError("Var not found: " + std::to_string(var_id));
                 return;
             }
         }
@@ -1105,7 +1106,7 @@ return std::get<CppType>(data); \
 
     inline void LABEL::emit(VM &) {}
 
-    inline void GOTO::emit(VM &vm) {
+    inline void GOTO::emit(VM &vm) const {
         const auto label_id = static_cast<size_t>(operands[0].asInt());
         if (not vm.label_table.contains(label_id)) {
             throw RuntimeError("Unknown label: " + std::to_string(label_id));
@@ -1113,7 +1114,7 @@ return std::get<CppType>(data); \
         vm.pc = vm.label_table[label_id];
     }
 
-    inline void IFTRUEGOTO::emit(VM &vm) {
+    inline void IFTRUEGOTO::emit(VM &vm) const {
         if (vm.op_stack.popValue().asBool()) {
             GOTO(operands[0]).emit(vm);
         }
@@ -1133,7 +1134,7 @@ return std::get<CppType>(data); \
         vm.cache.leave_scope();
     }
 
-    inline void CALL::emit(VM &vm) {
+    inline void CALL::emit(VM &vm) const {
         Value func = vm.op_stack.popValue();
 
         if (!func.isFunction()) {
@@ -1172,7 +1173,7 @@ return std::get<CppType>(data); \
         }
     }
 
-    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) {
+    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
         vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
     }
 }
