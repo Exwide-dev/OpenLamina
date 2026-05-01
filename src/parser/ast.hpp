@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <utility>
 #include <vector>
@@ -6,17 +6,25 @@
 
 namespace lmx {
 
-// AST节点类型枚举
+struct UseItem {
+    std::string name;
+    std::string alias;
+    UseItem(std::string n, std::string a) : name(std::move(n)), alias(std::move(a)) {}
+};
+
+// AST鑺傜偣绫诲瀷鏋氫妇
 enum class ASTNodeType {
     Unknown,
     BlockStmt,
     Expr,
     VarDecl,
-    Assign,     // 新增：赋值语句
+    Assign,
     FuncDecl,
+    DoFuncDecl,
     ExternFunc,
     ReturnStmt,
     Loop,
+    WhileStmt,
     Break,
     Continue,
     IfStmt,
@@ -28,18 +36,21 @@ enum class ASTNodeType {
     String,
     VarRef,
     FuncCallExpr,
+    MemberAccess,
     Type,
     CompositeType,
     Program,
-    VMCall
+    VMCall,
+    Import,
+    Use
 };
 
-// 前向声明
+// 鍓嶅悜澹版槑
 struct ASTNode;
 struct ExprNode;
 struct TypeNode;
 
-// AST节点基类
+// AST鑺傜偣鍩虹被
 struct ASTNode {
     ASTNodeType kind;
     std::vector<ASTNode*> children;
@@ -53,7 +64,7 @@ struct ASTNode {
 };
 
 struct ExprNode : ASTNode {
-    explicit ExprNode(ASTNodeType t = ASTNodeType::Expr) : ASTNode(t) {}
+    explicit ExprNode(const ASTNodeType t = ASTNodeType::Expr) : ASTNode(t) {}
     ~ExprNode() override = default;
 };
 
@@ -131,15 +142,27 @@ struct BinaryNode : ExprNode {
 };
 
 struct FuncCallExprNode final : ExprNode {
-    std::string func_name;
+    ExprNode* func_expr;
     std::vector<ASTNode*> args;
 
-    FuncCallExprNode(std::string  n, std::vector<ASTNode*> a)
-        : ExprNode(ASTNodeType::FuncCallExpr), func_name(std::move(n)), args(std::move(a)) {}
+    FuncCallExprNode(ExprNode* e, std::vector<ASTNode*> a)
+        : ExprNode(ASTNodeType::FuncCallExpr), func_expr(e), args(std::move(a)) {}
     ~FuncCallExprNode() override {
+        delete func_expr;
         for (const auto arg : args) {
             delete arg;
         }
+    }
+};
+
+struct MemberAccessNode final : ExprNode {
+    ExprNode* object;
+    std::string member;
+
+    MemberAccessNode(ExprNode* obj, std::string mem)
+        : ExprNode(ASTNodeType::MemberAccess), object(obj), member(std::move(mem)) {}
+    ~MemberAccessNode() override {
+        delete object;
     }
 };
 
@@ -186,8 +209,8 @@ struct AssignNode final : ASTNode {
     ExprNode* value;
 
     AssignNode(std::string n, ExprNode* v)
-        : ASTNode(ASTNodeType::Assign), name(n), value(v) {}
-    ~AssignNode() {
+        : ASTNode(ASTNodeType::Assign), name(std::move(n)), value(v) {}
+    ~AssignNode() override {
         delete value;
     }
 };
@@ -202,6 +225,23 @@ struct FuncDeclNode final : ASTNode {
     FuncDeclNode(std::string  n, std::vector<std::string> p, BlockStmtNode* b)
         : ASTNode(ASTNodeType::FuncDecl), name(std::move(n)), params(std::move(p)), body(b) {}
     ~FuncDeclNode() override {
+        delete body;
+        for (const auto type : args_type) {
+            delete type;
+        }
+        delete ret_type;
+    }
+};
+
+struct DoFuncDeclNode : ExprNode {
+    std::vector<std::string> params;
+    BlockStmtNode* body;
+    std::vector<TypeNode*> args_type;
+    TypeNode* ret_type{};
+
+    DoFuncDeclNode(std::vector<std::string> p, BlockStmtNode* b)
+        : ExprNode(ASTNodeType::DoFuncDecl), params(std::move(p)), body(b) {}
+    ~DoFuncDeclNode() override {
         delete body;
         for (const auto type : args_type) {
             delete type;
@@ -248,6 +288,18 @@ struct LoopNode final : ASTNode {
     LoopNode(ExprNode* cond, BlockStmtNode* b)
         : ASTNode(ASTNodeType::Loop), condition(cond), body(b) {}
     ~LoopNode() override {
+        delete condition;
+        delete body;
+    }
+};
+
+struct WhileStmtNode final : ASTNode {
+    ExprNode* condition;
+    BlockStmtNode* body;
+
+    WhileStmtNode(ExprNode* cond, BlockStmtNode* b)
+        : ASTNode(ASTNodeType::WhileStmt), condition(cond), body(b) {}
+    ~WhileStmtNode() override {
         delete condition;
         delete body;
     }
@@ -325,6 +377,24 @@ struct ProgramASTNode final : ASTNode {
             delete stmt;
         }
     }
+};
+
+struct ImportNode final : ASTNode {
+    std::vector<std::string> module_name;
+    std::string alias;
+
+    ImportNode(std::vector<std::string> n, std::string a)
+        : ASTNode(ASTNodeType::Import), module_name(std::move(n)), alias(std::move(a)) {}
+    ~ImportNode() override = default;
+};
+
+struct UseNode final : ASTNode {
+    std::vector<std::string> module_name;
+    std::vector<UseItem> items;
+
+    UseNode(std::vector<std::string> n, std::vector<UseItem> i)
+        : ASTNode(ASTNodeType::Use), module_name(std::move(n)), items(std::move(i)) {}
+    ~UseNode() override = default;
 };
 
 } // namespace lmx

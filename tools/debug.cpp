@@ -6,7 +6,7 @@
 #include "parser/ast.hpp"
 
 
-void printAST(const lmx::ASTNode* node, int indent) {
+void printAST(const lmx::ASTNode* node, const int indent) {
     if (not node) return;
 
     // 打印缩进
@@ -119,9 +119,24 @@ void printAST(const lmx::ASTNode* node, int indent) {
             printAST(func->body, indent + 2);
             break;
         }
+        case lmx::ASTNodeType::DoFuncDecl: {
+            const auto func = dynamic_cast<lmx::DoFuncDeclNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "DoFuncDecl\n";
+            std::cout << indent_str << "  Params: ";
+            for (size_t i = 0; i < func->params.size(); ++i) {
+                if (i > 0) std::cout << ", ";
+                std::cout << func->params[i];
+            }
+            std::cout << "\n";
+            std::cout << indent_str << "  Body:\n";
+            printAST(func->body, indent + 2);
+            break;
+        }
         case lmx::ASTNodeType::FuncCallExpr: {
             const auto call = dynamic_cast<lmx::FuncCallExprNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "FuncCallExpr: " << call->func_name << "\n";
+            std::cout << indent_str << "FuncCallExpr\n";
+            std::cout << indent_str << "  Function:\n";
+            printAST(call->func_expr, indent + 2);
             std::cout << indent_str << "  Args:\n";
             for (const auto& arg : call->args) {
                 printAST(arg, indent + 2);
@@ -134,6 +149,37 @@ void printAST(const lmx::ASTNode* node, int indent) {
             if (ret->expr) {
                 std::cout << indent_str << "  Value:\n";
                 printAST(ret->expr, indent + 2);
+            }
+            break;
+        }
+        case lmx::ASTNodeType::Import: {
+            const auto imp = dynamic_cast<lmx::ImportNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "Import: ";
+            for (size_t i = 0; i < imp->module_name.size(); ++i) {
+                if (i > 0) std::cout << ".";
+                std::cout << imp->module_name[i];
+            }
+            if (!imp->alias.empty()) {
+                std::cout << " as " << imp->alias;
+            }
+            std::cout << "\n";
+            break;
+        }
+        case lmx::ASTNodeType::Use: {
+            const auto use = dynamic_cast<lmx::UseNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "Use: ";
+            for (size_t i = 0; i < use->module_name.size(); ++i) {
+                if (i > 0) std::cout << ".";
+                std::cout << use->module_name[i];
+            }
+            std::cout << "\n";
+            std::cout << indent_str << "  Items:\n";
+            for (const auto& item : use->items) {
+                std::cout << indent_str << "    " << item.name;
+                if (!item.alias.empty()) {
+                    std::cout << " as " << item.alias;
+                }
+                std::cout << "\n";
             }
             break;
         }

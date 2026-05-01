@@ -66,8 +66,13 @@ using namespace lexer;
 "if"           { addToken(KW_IF, yytext); yylval.string_val = new std::string(yytext); return KW_IF; }
 "else"         { addToken(KW_ELSE, yytext); yylval.string_val = new std::string(yytext); return KW_ELSE; }
 "loop"         { addToken(KW_LOOP, yytext); yylval.string_val = new std::string(yytext); return KW_LOOP; }
+"while"         { addToken(KW_WHILE, yytext); yylval.string_val = new std::string(yytext); return KW_WHILE; }
 "break"        { addToken(KW_BREAK, yytext); yylval.string_val = new std::string(yytext); return KW_BREAK; }
 "continue"     { addToken(KW_CONTINUE, yytext); yylval.string_val = new std::string(yytext); return KW_CONTINUE; }
+"import"       { addToken(KW_IMPORT, yytext); yylval.string_val = new std::string(yytext); return KW_IMPORT; }
+"use"          { addToken(KW_USE, yytext); yylval.string_val = new std::string(yytext); return KW_USE; }
+"as"           { addToken(KW_AS, yytext); yylval.string_val = new std::string(yytext); return KW_AS; }
+"."            { addToken(OPER_DOT, yytext); yylval.string_val = new std::string(yytext); return OPER_DOT; }
 
 [0-9][0-9_]*  {
     std::string num = yytext;

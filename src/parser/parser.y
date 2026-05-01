@@ -43,6 +43,9 @@
     lmx::ASTNode* ast_node;
     lmx::ExprNode* expr_node;
     std::vector<lmx::ASTNode*>* ast_list;
+    std::vector<lmx::UseItem>* use_item_list;
+    lmx::UseItem* use_item;
+    std::vector<std::string>* name_parts;
 }
 
 %code {
@@ -62,6 +65,7 @@
 %token <string_val> OPER_LE   // <=
 %token <string_val> OPER_GE   // >=
 %token <string_val> OPER_COMMA  // ,
+%token <string_val> OPER_DOT // .
 %token <string_val> ASSIGN
 %token <string_val> LPAREN
 %token <string_val> RPAREN
@@ -77,8 +81,12 @@
 %token <string_val> KW_IF
 %token <string_val> KW_ELSE
 %token <string_val> KW_LOOP
+%token <string_val> KW_WHILE
 %token <string_val> KW_BREAK
 %token <string_val> KW_CONTINUE
+%token <string_val> KW_IMPORT
+%token <string_val> KW_USE
+%token <string_val> KW_AS
 
 %type <ast_node> program
 %type <ast_node> stmt
@@ -88,6 +96,7 @@
 %type <ast_node> return_stmt  // 新增：return 语句
 %type <ast_node> if_stmt
 %type <ast_node> loop_stmt
+%type <ast_node> while_stmt
 %type <ast_node> break_stmt
 %type <ast_node> continue_stmt
 %type <ast_node> block_stmt
@@ -104,6 +113,11 @@
 %type <ast_list> block_stmt_list
 %type <ast_list> param_list  // 新增：参数列表
 %type <ast_list> arg_list  // 新增：实参列表
+%type <ast_node> import_stmt
+%type <ast_node> use_stmt
+%type <name_parts> qualified_name
+%type <use_item_list> use_list
+%type <use_item> use_item
 
 %left OPER_EQ OPER_NE  // 相等性比较优先级最低
 %left OPER_LT OPER_GT OPER_LE OPER_GE  // 比较运算符优先级
@@ -148,6 +162,14 @@ stmt:
         LOG("Parsing stmt: expr");
         $$ = $1; 
     }
+    | import_stmt {
+        LOG("Parsing stmt: import_stmt");
+        $$ = $1;
+    }
+    | use_stmt {
+        LOG("Parsing stmt: use_stmt");
+        $$ = $1;
+    }
     | assign_stmt {  // 新增：赋值语句
         LOG("Parsing stmt: assign_stmt");
         $$ = $1;
@@ -166,6 +188,10 @@ stmt:
     }
     | loop_stmt {
         LOG("Parsing stmt: loop_stmt");
+        $$ = $1;
+    }
+    | while_stmt {
+        LOG("Parsing stmt: while_stmt");
         $$ = $1;
     }
     | break_stmt {
@@ -318,6 +344,15 @@ loop_stmt:
     }
     ;
 
+// while 语句规则
+while_stmt:
+    KW_WHILE LPAREN expr RPAREN block_stmt {
+        LOG("Parsing while_stmt");
+        $$ = new WhileStmtNode($3, dynamic_cast<BlockStmtNode*>($5));
+        LOG("while_stmt parsed successfully");
+    }
+    ;
+
 // break 语句规则
 break_stmt:
     KW_BREAK {
@@ -415,7 +450,7 @@ multiplicative_expr:
     }
     ;
 
-// 新增：后缀表达式（用于函数调用）
+// 新增：后缀表达式（用于函数调用和成员访问）
 postfix_expr:
     unary_expr {
         LOG("Parsing postfix_expr: base case");
@@ -423,21 +458,32 @@ postfix_expr:
     }
     | postfix_expr LPAREN arg_list RPAREN %prec CALL {
         LOG("Parsing postfix_expr: function call");
-        // 注意：我们需要处理函数名为表达式的情况，这里暂时用 VarRefNode 来表示函数名
-        // 实际上，FuncCallExprNode 接受的是 std::string 作为函数名，
-        // 我们需要创建一个特殊的节点或者修改 AST 结构
-        // 这里先简化处理，假设函数名就是标识符
-        std::string func_name = "anonymous";
-        auto var_ref = dynamic_cast<VarRefNode*>($1);
-        if (var_ref) {
-            func_name = var_ref->name;
-        }
-        $$ = new FuncCallExprNode(func_name, *$3);
+        $$ = new FuncCallExprNode($1, *$3);
         LOG("postfix_expr (function call) parsed successfully");
         delete $3;
     }
+    | postfix_expr OPER_DOT IDENTIFIER {
+        LOG("Parsing postfix_expr: member access");
+        $$ = new MemberAccessNode($1, *$3);
+        LOG("postfix_expr (member access) parsed successfully");
+        delete $3;
+    }
     | KW_DO LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing postfix_expr: anonymous function");
+        /*KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+                  LOG("Parsing func_decl: " + *$2);
+                  std::vector<std::string> params;
+                  for (auto& node : *$4) {
+                      auto var_ref = dynamic_cast<VarRefNode*>(node);
+                      if (var_ref) {
+                          params.push_back(var_ref->name);
+                      }
+                  }
+                  $$ = new FuncDeclNode(*$2, params, dynamic_cast<BlockStmtNode*>($6));
+                  LOG("func_decl parsed successfully");
+                  delete $2;
+                  delete $4;
+              }*/
+        LOG("Parsing postfix_expr: (do) function");
         std::vector<std::string> params;
         for (auto& node : *$3) {
             auto var_ref = dynamic_cast<VarRefNode*>(node);
@@ -445,11 +491,7 @@ postfix_expr:
                 params.push_back(var_ref->name);
             }
         }
-        // 注意：匿名函数需要特殊处理，这里我们暂时用 FuncCallExprNode 或其他方式表示
-        // 为了简化，我们先创建一个特殊的标识符表示匿名函数
-        // 实际上，我们可能需要新的 AST 节点
-        // 这里我们先用一个简单的占位符
-        $$ = new VarRefNode("(anonymous function)");
+        $$ = new DoFuncDeclNode(params, dynamic_cast<BlockStmtNode*>($5));
         LOG("postfix_expr (anonymous function) parsed successfully");
         delete $3;
     }
@@ -509,6 +551,76 @@ identifier:
         $$ = new VarRefNode(*$1);
         LOG("identifier parsed successfully");
         delete $1;
+    }
+    ;
+
+import_stmt:
+    KW_IMPORT qualified_name {
+        LOG("Parsing import_stmt");
+        $$ = new lmx::ImportNode(std::move(*$2), "");
+        LOG("import_stmt parsed successfully");
+        delete $2;
+    }
+    | KW_IMPORT qualified_name KW_AS IDENTIFIER {
+        LOG("Parsing import_stmt with alias");
+        $$ = new lmx::ImportNode(std::move(*$2), *$4);
+        LOG("import_stmt with alias parsed successfully");
+        delete $2;
+        delete $4;
+    }
+    ;
+
+use_stmt:
+    KW_USE qualified_name OPER_DOT LBRACE use_list RBRACE {
+        LOG("Parsing use_stmt");
+        $$ = new lmx::UseNode(std::move(*$2), std::move(*$5));
+        LOG("use_stmt parsed successfully");
+        delete $2;
+        delete $5;
+    }
+    ;
+
+qualified_name:
+    IDENTIFIER {
+        LOG("Parsing qualified_name: " + *$1);
+        $$ = new std::vector<std::string>();
+        $$->push_back(*$1);
+        delete $1;
+    }
+    | qualified_name OPER_DOT IDENTIFIER {
+        LOG("Parsing qualified_name: adding part");
+        $1->push_back(*$3);
+        delete $3;
+        $$ = $1;
+    }
+    ;
+
+use_list:
+    use_item {
+        LOG("Creating use_list with one item");
+        $$ = new std::vector<lmx::UseItem>();
+        $$->push_back(std::move(*$1));
+        delete $1;
+    }
+    | use_list OPER_COMMA use_item {
+        LOG("Adding use_item to use_list");
+        $1->push_back(std::move(*$3));
+        delete $3;
+        $$ = $1;
+    }
+    ;
+
+use_item:
+    IDENTIFIER {
+        LOG("Parsing use_item: " + *$1);
+        $$ = new lmx::UseItem(*$1, "");
+        delete $1;
+    }
+    | IDENTIFIER KW_AS IDENTIFIER {
+        LOG("Parsing use_item with alias: " + *$1 + " as " + *$3);
+        $$ = new lmx::UseItem(*$1, *$3);
+        delete $1;
+        delete $3;
     }
     ;
 

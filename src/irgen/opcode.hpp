@@ -32,7 +32,7 @@ return std::format("{} {}", name(), stringArgs()); \
 }
 
 namespace irgen {
-    // 前置声明
+    class Number;
     class Value;
     class VM;
     class PUSH;
@@ -66,7 +66,6 @@ namespace irgen {
     template<typename T>
     concept StringType = std::convertible_to<T, std::string> and !IntegerType<T>;
 
-    // 定义 Opcode 为 std::variant
     using Opcode = std::variant<
         PUSH,
         ADD,
@@ -94,25 +93,115 @@ namespace irgen {
         RET
     >;
 
-    enum class EOpcode : uint8_t {
-        PUSH,
-        ADD, MUL, SUB, DIV,
-        NEG, NOT, AND, OR,
-        EQ, NEQ, LT, LTE, GT, GTE,
-        STORE, LOAD,
-        LABEL, GOTO, IFTRUEGOTO,
-        ENTER_SCOPE, LEAVE_SCOPE,
-        CALL, RET
-    };
-
-    // 函数对象，包含函数的参数列表、函数体和位置标签
     struct FunctionObject {
         std::vector<std::string> params;
         std::vector<Opcode> body;
-        size_t location; // 函数所在的标签ID
+        size_t location;
     };
 
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
+
+    class Number {
+        ptrdiff_t numerator;
+        ptrdiff_t denominator;
+
+        void reduce() {
+            if (denominator == 0) {
+                throw RuntimeError("Division by zero");
+            }
+            if (denominator < 0) {
+                numerator = -numerator;
+                denominator = -denominator;
+            }
+            ptrdiff_t g = gcd(std::abs(numerator), std::abs(denominator));
+            numerator /= g;
+            denominator /= g;
+        }
+
+        [[nodiscard]] ptrdiff_t gcd(ptrdiff_t a, ptrdiff_t b) const {
+            while (b != 0) {
+                const ptrdiff_t t = b;
+                b = a % b;
+                a = t;
+            }
+            return a;
+        }
+
+    public:
+        Number() : numerator(0), denominator(1) {}
+        explicit(false) Number(const ptrdiff_t num) : numerator(num), denominator(1) {}
+        Number(const ptrdiff_t num, const ptrdiff_t den)
+            : numerator(num), denominator(den) { reduce(); }
+
+        [[nodiscard]] Number add(const Number& other) const {
+            if (denominator == 1 and other.denominator == 1) {
+                return {numerator + other.numerator};
+            }
+            const ptrdiff_t new_num = numerator * other.denominator + other.numerator * denominator;
+            const ptrdiff_t new_den = denominator * other.denominator;
+            return {new_num, new_den};
+        }
+
+        [[nodiscard]] Number sub(const Number& other) const {
+            const ptrdiff_t new_num = numerator * other.denominator - other.numerator * denominator;
+            const ptrdiff_t new_den = denominator * other.denominator;
+            return {new_num, new_den};
+        }
+
+        [[nodiscard]] Number mul(const Number& other) const {
+            return Number(numerator * other.numerator, denominator * other.denominator);
+        }
+
+        [[nodiscard]] Number div(const Number& other) const {
+            if (other.numerator == 0) {
+                throw RuntimeError("Division by zero");
+            }
+            return Number(numerator * other.denominator, denominator * other.numerator);
+        }
+
+        [[nodiscard]] Number neg() const {
+            return Number(-numerator, denominator);
+        }
+
+        [[nodiscard]] bool eq(const Number& other) const {
+            return numerator == other.numerator && denominator == other.denominator;
+        }
+
+        [[nodiscard]] bool neq(const Number& other) const {
+            return !eq(other);
+        }
+
+        [[nodiscard]] bool lt(const Number& other) const {
+            return numerator * other.denominator < other.numerator * denominator;
+        }
+
+        [[nodiscard]] bool lte(const Number& other) const {
+            return numerator * other.denominator <= other.numerator * denominator;
+        }
+
+        [[nodiscard]] bool gt(const Number& other) const {
+            return numerator * other.denominator > other.numerator * denominator;
+        }
+
+        [[nodiscard]] bool gte(const Number& other) const {
+            return numerator * other.denominator >= other.numerator * denominator;
+        }
+
+        [[nodiscard]] std::string toString() const {
+            if (denominator == 1) {
+                return std::to_string(numerator);
+            }
+            return std::format("{} / {}", numerator, denominator);
+        }
+
+        [[nodiscard]] ptrdiff_t asInt() const {
+            return numerator / denominator;
+        }
+
+        [[nodiscard]] ptrdiff_t getNumerator() const { return numerator; }
+        [[nodiscard]] ptrdiff_t getDenominator() const { return denominator; }
+        [[nodiscard]] bool isInteger() const { return denominator == 1; }
+    };
 
     // Value 类型，支持多种类型的值
     class Value {
@@ -127,32 +216,40 @@ namespace irgen {
 
     private:
         Type type;
-        std::variant<ptrdiff_t, bool, std::string, FunctionType, std::shared_ptr<FunctionObject> > data;
+        std::variant<
+            Number,
+            bool,
+            std::string,
+            FunctionType,
+            std::shared_ptr<FunctionObject>
+        > data;
 
     public:
-        Value() : type(Type::None) {
-        }
+        Value() : type(Type::None) {}
 
         template<IntegerType T>
         explicit Value(T value)
-            : type(Type::Int), data(static_cast<ptrdiff_t>(value)) {
-        }
+            : type(Type::Int), data(Number(static_cast<ptrdiff_t>(value))) {}
 
         template<StringType T>
         explicit Value(T value)
-            : type(Type::String), data(static_cast<std::string>(std::move(value))) {
-        }
+            : type(Type::String), data(static_cast<std::string>(std::move(value))) {}
 
-        explicit Value(FunctionType value) : type(Type::Function), data(value) {
-        }
+        explicit Value(FunctionType value)
+            : type(Type::Function), data(value) {}
 
-        explicit Value(std::shared_ptr<FunctionObject> value) : type(Type::Function), data(value) {
-        }
+        explicit Value(std::shared_ptr<FunctionObject> value)
+            : type(Type::Function), data(value) {}
 
-        explicit Value(bool value) : type(Type::Bool), data(value) {
-        }
+        explicit Value(bool value)
+            : type(Type::Bool), data(value) {}
 
-        // 实现 Value::operator()
+        explicit Value(const Number& value)
+            : type(Type::Int), data(value) {}
+
+        explicit Value(Number&& value)
+            : type(Type::Int), data(std::move(value)) {}
+
         Value operator()(VM &vm, const std::vector<Value> &args) const {
             if (type != Type::Function) {
                 throw RuntimeError("Value is not a function");
@@ -166,22 +263,7 @@ namespace irgen {
 
         [[nodiscard]] Type getType() const { return type; }
 
-        [[nodiscard]] std::string toString() const {
-            switch (type) {
-                case Type::None:
-                    return "None";
-                case Type::Int:
-                    return std::to_string(asInt());
-                case Type::Bool:
-                    return (asBool() ? "true" : "false");
-                case Type::String:
-                    return "\"" + asString() + "\"";
-                case Type::Function:
-                    return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
-                default:
-                    return "<__UNKNOWN_ValueType>";
-            }
-        };
+        [[nodiscard]] std::string toString() const;
 
 #define DEFINE_AS_METHOD(FieldName, EnumValue, CppType, ErrorMsg) \
 [[nodiscard]] CppType as##FieldName() const { \
@@ -191,28 +273,140 @@ throw RuntimeError("Value is not " ErrorMsg); \
 return std::get<CppType>(data); \
 }
 
-        DEFINE_AS_METHOD(Int, Int, ptrdiff_t, "an integer")
+        [[nodiscard]] const Number& asNumber() const {
+            if (type != Type::Int) {
+                throw RuntimeError("Value is not a number");
+            }
+            return std::get<Number>(data);
+        }
+
+        [[nodiscard]] Number& asNumber() {
+            if (type != Type::Int) {
+                throw RuntimeError("Value is not a number");
+            }
+            return std::get<Number>(data);
+        }
+
+        [[nodiscard]] ptrdiff_t asInt() const {
+            return asNumber().asInt();
+        }
         DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
 
-        bool operator==(const Value & other) const {
-            const auto& T = this->type;
-            if (this->type != other.type) return false;
-            if (T == Type::None)
-                return true;
-            if (T == Type::Int)
-                return this->asInt() == other.asInt();
-            if (T == Type::Bool)
-                return this->asBool() == other.asBool();
-            if (T == Type::String)
-                return this->asString() == other.asString();
-            if (T == Type::Function)
-                return this->asFunctionObject() == other.asFunctionObject();
-            return false;
-        };
+        Value operator+(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().add(other.asNumber()));
+            }
+            if (type == Type::String && other.type == Type::String) {
+                return Value(asString() + other.asString());
+            }
+            throw RuntimeError("Unsupported + operation");
+        }
 
-        // 获取函数对象
+        Value operator-(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().sub(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported - operation");
+        }
+
+        Value operator*(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().mul(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported * operation");
+        }
+
+        Value operator/(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().div(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported / operation");
+        }
+
+        Value operator-() const {
+            if (type == Type::Int) {
+                return Value(asNumber().neg());
+            }
+            throw RuntimeError("Unsupported unary - operation");
+        }
+
+        Value operator!() const {
+            if (type == Type::Bool) {
+                return Value(!asBool());
+            }
+            throw RuntimeError("Unsupported ! operation");
+        }
+
+        Value operator&&(const Value& other) const {
+            if (type == Type::Bool && other.type == Type::Bool) {
+                return Value(asBool() && other.asBool());
+            }
+            throw RuntimeError("Unsupported && operation");
+        }
+
+        Value operator||(const Value& other) const {
+            if (type == Type::Bool && other.type == Type::Bool) {
+                return Value(asBool() || other.asBool());
+            }
+            throw RuntimeError("Unsupported || operation");
+        }
+
+        Value operator<(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().lt(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported < operation");
+        }
+
+        Value operator<=(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().lte(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported <= operation");
+        }
+
+        Value operator>(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().gt(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported > operation");
+        }
+
+        Value operator>=(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().gte(other.asNumber()));
+            }
+            throw RuntimeError("Unsupported >= operation");
+        }
+
+        bool operator==(const Value& other) {
+            if (type == Type::Int && other.type == Type::Int) {
+                return asNumber().eq(other.asNumber());
+            }
+            if (type == Type::Bool && other.type == Type::Bool) {
+                return asBool() == other.asBool();
+            }
+            if (type == Type::String && other.type == Type::String) {
+                return asString() == other.asString();
+            }
+            throw RuntimeError("Unsupported == operation");
+        }
+
+        Value operator!=(const Value& other) const {
+            if (type == Type::Int && other.type == Type::Int) {
+                return Value(asNumber().neq(other.asNumber()));
+            }
+            if (type == Type::Bool && other.type == Type::Bool) {
+                return Value(asBool() != other.asBool());
+            }
+            if (type == Type::String && other.type == Type::String) {
+                return Value(asString() != other.asString());
+            }
+            throw RuntimeError("Unsupported != operation");
+        }
+
         [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
             if (type != Type::Function) {
                 throw RuntimeError("Value is not a function");
@@ -223,12 +417,10 @@ return std::get<CppType>(data); \
             throw RuntimeError("Value is not a user-defined function");
         }
 
-        // 检查是否为用户定义函数
         [[nodiscard]] bool isUserFunction() const {
             return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject> >(data);
         }
 
-        // 检查是否为内置函数
         [[nodiscard]] bool isBuiltinFunction() const {
             return type == Type::Function and std::holds_alternative<FunctionType>(data);
         }
@@ -242,41 +434,24 @@ return std::get<CppType>(data); \
         [[nodiscard]] bool isFunction() const { return type == Type::Function; }
 
         friend std::ostream &operator<<(std::ostream &os, const Value &value) {
-            LOG("access <<");
             os << value.toString();
             return os;
         }
     };
 
-    /*struct Inst {
-        EOpcode opcode;
-        Value operands[3];
-
-        Inst(EOpcode opcode, )
-    };*/
-
     class SymbolTable {
-        std::unordered_map<size_t, Value> symbols;
+        std::flat_map<size_t, Value> symbols;
 
     public:
         SymbolTable() = default;
 
-        explicit SymbolTable(std::unordered_map<size_t, Value> symbols) : symbols(std::move(symbols)) {}
+        // explicit SymbolTable(std::unordered_map<size_t, Value> symbols) : symbols(std::move(symbols)) {}
 
-        void set(size_t id, const Value &value) {
-            LOG("To set");
-            symbols[id] = value;
-        }
+        void set(size_t id, const Value &value);
 
-        Value get(size_t id) const {
-            const auto it = symbols.find(id);
-            if (it == symbols.end()) {
-                throw RuntimeError("Variable not found with id: " + std::to_string(id));
-            }
-            return it->second;
-        }
+        Value get(size_t id) const;
 
-        bool exists(size_t id) const {
+        bool exists(const size_t id) const {
             return symbols.contains(id);
         }
     };
@@ -296,16 +471,13 @@ return std::get<CppType>(data); \
     public:
         Stack() = default;
 
-        explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
-            LOG("Creating stack");
-        }
+        explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {}
 
         void push(const Stackable &value) {
             data.push_back(value);
         }
 
         void push(Stackable &&value) {
-            LOG("Pushing back: " << value.toString());
             data.push_back(std::move(value));
         }
 
@@ -381,7 +553,7 @@ return std::get<CppType>(data); \
     public:
         Cache() : cache({std::array<Var, n>{}}) {}
 
-        Value operator[](size_t id) const {
+        Value operator[](const size_t id) const {
             for (const auto& [var_id, val] : cache.back()) {
                 if (var_id == id) {
                     return val;
@@ -390,14 +562,24 @@ return std::get<CppType>(data); \
             throw std::out_of_range("No such variable with id: " + std::to_string(id));
         }
 
-        void add(size_t id, const Value& val) {
+        void add(const size_t id, const Value& val) {
             LOG("cache add: " << id);
-            cache.back()[pos] = Var{id, val};
-            pos++;
-            pos %= n;
+            if (get(id) != std::nullopt) {
+                cache.back()[pos] = Var{id, val};
+                pos++;
+                pos %= n;
+            } else {
+                int j = 0;
+                for (const auto&[var_id, var_val] : cache.back()) {
+                    if (var_id == id) {
+                        cache.back()[j] = Var{id, val};
+                    }
+                    j++;
+                }
+            }
         }
 
-        std::optional<Value> get(size_t id) const noexcept {
+        [[nodiscard]] std::optional<Value> get(const size_t id) const noexcept {
             LOG("cache get!");
             for (const auto& [var_id, val] : cache.back()) {
                 if (var_id == id) {
@@ -583,7 +765,7 @@ return std::get<CppType>(data); \
             operands.emplace_back(name);
         }
 
-        void emit(VM &vm) const;
+        void emit(VM &vm);
     };
 
     class LOAD {
@@ -613,7 +795,7 @@ return std::get<CppType>(data); \
 
         void emit(VM &vm);
 
-        void set_label(VM &vm, std::optional<size_t> on = std::nullopt) const;
+        void set_label(VM &vm, std::optional<size_t> on = std::nullopt);
     };
 
     class GOTO {
@@ -673,12 +855,15 @@ return std::get<CppType>(data); \
         COMMON(CALL)
         std::vector<Value> operands;
 
-        explicit CALL(const std::string &name, size_t arg_count) {
+        explicit CALL(const std::string &name, const size_t arg_count) {
             operands.emplace_back(name);
             operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
         }
+        explicit CALL(const size_t arg_count) {
+            operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
+        }
 
-        void emit(VM &vm) const;
+        void emit(VM &vm);
     };
 
     class RET {
@@ -699,7 +884,7 @@ return std::get<CppType>(data); \
         StringPool() = default;
 
         size_t add(const std::string& name) {
-            auto it = string_to_id.find(name);
+            const auto it = string_to_id.find(name);
             if (it != string_to_id.end()) {
                 return it->second;
             }
@@ -713,7 +898,7 @@ return std::get<CppType>(data); \
         }
 
         size_t get_id(const std::string& name) const {
-            auto it = string_to_id.find(name);
+            const auto it = string_to_id.find(name);
             if (it == string_to_id.end()) {
                 throw RuntimeError("String not found in pool: " + name);
             }
@@ -744,7 +929,6 @@ return std::get<CppType>(data); \
 
     inline StringPool g_string_pool{};
 
-    // 定义 VM 类
     class VM {
     public:
         Stack<Value> op_stack, call_stack;
@@ -757,7 +941,6 @@ return std::get<CppType>(data); \
         size_t pc = 0;
         size_t label_counter = 0;
 
-        // 初始化内置函数
         void init_builtins();
 
         VM() {
@@ -781,17 +964,14 @@ return std::get<CppType>(data); \
         void run() {
             try {
                 scan_labels();
-                symbol_stack.push_back(symbols); // 压入全局符号表
+                symbol_stack.push_back(symbols);
                 for (; pc < code.size(); pc++) {
-                    LOG("VM " << op_stack.toString() << " , pc: " << pc);
                     std::visit([&](auto &op) -> void {
-                        LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs() << std::endl);
+                        LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
                         op.emit(*this);
-                        LOG("After Exec, pc: " << pc);
+                        LOG("VM " << op_stack.toString());
                     }, code[pc]);
                 }
-                LOG("Now done a term. VM " << op_stack.toString());
-                LOG("Clear the op_stack, save the top");
                 if (!op_stack.empty()) {
                     const Value top = op_stack.popValue();
                     op_stack.clear();
@@ -806,104 +986,101 @@ return std::get<CppType>(data); \
 
     // 定义所有 emit 函数的实现（inline）
     inline void PUSH::emit(VM &vm) {
-        LOG("PUSH " << operands[0].toString());
         vm.op_stack.push(operands[0]);
     }
 
     inline void ADD::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a + b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a + b);
     }
 
     inline void MUL::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a * b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a * b);
     }
 
     inline void SUB::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a - b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a - b);
     }
 
     inline void DIV::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a / b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a / b);
     }
 
     inline void NEG::emit(VM &vm) {
-        auto value = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(-value));
+        auto value = vm.op_stack.popValue();
+        vm.op_stack.push(-value);
     }
 
     inline void NOT::emit(VM &vm) {
-        auto value = vm.op_stack.popValue().asBool();
-        vm.op_stack.push(Value(!value));
+        auto value = vm.op_stack.popValue();
+        vm.op_stack.push(!value);
     }
 
     inline void AND::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asBool();
-        auto a = vm.op_stack.popValue().asBool();
-        vm.op_stack.push(Value(a and b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a && b);
     }
 
     inline void OR::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asBool();
-        auto a = vm.op_stack.popValue().asBool();
-        vm.op_stack.push(Value(a || b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a || b);
     }
 
     inline void EQ::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
         vm.op_stack.push(Value(a == b));
     }
 
     inline void NEQ::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
         vm.op_stack.push(Value(a != b));
     }
 
     inline void LT::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a < b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a < b);
     }
 
     inline void LTE::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a <= b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a <= b);
     }
 
     inline void GT::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a > b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a > b);
     }
 
     inline void GTE::emit(VM &vm) {
-        auto b = vm.op_stack.popValue().asInt();
-        auto a = vm.op_stack.popValue().asInt();
-        vm.op_stack.push(Value(a >= b));
+        auto b = vm.op_stack.popValue();
+        auto a = vm.op_stack.popValue();
+        vm.op_stack.push(a >= b);
     }
 
-    inline void STORE::emit(VM &vm) const {
-        LOG("Exec STORE::emit");
+    inline void STORE::emit(VM &vm) {
         const auto& value = vm.op_stack.popValue();
-        LOG("Pop value: " << value);
-        size_t var_id = static_cast<size_t>(operands[0].asInt());
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
 
         vm.cache.add(var_id, value);
         vm.symbols.set(var_id, value);
     }
 
     inline void LOAD::emit(VM &vm) const {
-        size_t var_id = static_cast<size_t>(operands[0].asInt());
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
 
         if (const auto found = vm.cache.get(var_id)) {
             vm.op_stack.push(*found);
@@ -923,22 +1100,17 @@ return std::get<CppType>(data); \
             }
         }
 
-        throw RuntimeError("Variable not found with id: " + std::to_string(var_id));
+        throw RuntimeError("Variable not found: " + g_string_pool.get_string(var_id));
     }
 
-    inline void LABEL::emit(VM &vm) {
-        // Do nothing, because the setting will be acted in
-        // void set_label(VM& vm, const std::optional<size_t> on = std::nullopt) const.
-    }
+    inline void LABEL::emit(VM &) {}
 
     inline void GOTO::emit(VM &vm) {
-        LOG("Before goto, pc = " << vm.pc);
-        size_t label_id = static_cast<size_t>(operands[0].asInt());
+        const auto label_id = static_cast<size_t>(operands[0].asInt());
         if (not vm.label_table.contains(label_id)) {
             throw RuntimeError("Unknown label: " + std::to_string(label_id));
         }
         vm.pc = vm.label_table[label_id];
-        LOG("After goto, pc = " << vm.pc);
     }
 
     inline void IFTRUEGOTO::emit(VM &vm) {
@@ -948,15 +1120,12 @@ return std::get<CppType>(data); \
     }
 
     inline void ENTER_SCOPE::emit(VM &vm) {
-        // 保存当前符号表到符号表栈
         vm.symbol_stack.push_back(vm.symbols);
-        // 创建新的符号表
         vm.symbols = SymbolTable();
         vm.cache.enter_scope();
     }
 
     inline void LEAVE_SCOPE::emit(VM &vm) {
-        // 恢复上一个符号表
         if (!vm.symbol_stack.empty()) {
             vm.symbols = vm.symbol_stack.back();
             vm.symbol_stack.pop_back();
@@ -964,44 +1133,24 @@ return std::get<CppType>(data); \
         vm.cache.leave_scope();
     }
 
-    inline void CALL::emit(VM &vm) const {
-        size_t func_id = static_cast<size_t>(operands[0].asInt());
-
-        // 查找函数
-        Value func;
-        if (vm.symbols.exists(func_id)) {
-            func = vm.symbols.get(func_id);
-        } else {
-            for (auto& symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
-                if (symbol_table.exists(func_id)) {
-                    func = symbol_table.get(func_id);
-                    break;
-                }
-            }
-        }
+    inline void CALL::emit(VM &vm) {
+        Value func = vm.op_stack.popValue();
 
         if (!func.isFunction()) {
-            throw RuntimeError("Not a function with id: " + std::to_string(func_id));
+            throw RuntimeError("Not a function");
         }
 
         if (func.isUserFunction()) {
             auto func_obj = func.asFunctionObject();
+            vm.call_stack.push(Value(vm.pc));
 
-            // 参数已经在栈上，不需要弹出再推回
-            // 函数体中的 STORE 会直接从栈中取出参数
-
-            // 保存当前 PC
-            vm.call_stack.push(Value(static_cast<ptrdiff_t>(vm.pc)));
-
-            // 跳转到函数标签
             if (vm.label_table.contains(func_obj->location)) {
                 vm.pc = vm.label_table[func_obj->location];
             } else {
                 throw RuntimeError("Function label not found: " + std::to_string(func_obj->location));
             }
         } else {
-            // 内置函数：需要从栈中取出参数
-            auto arg_count = operands[1].asInt();
+            auto arg_count = operands[0].asInt();
             std::vector<Value> args;
             args.reserve(arg_count);
             for (ptrdiff_t i = 0; i < arg_count; ++i) {
@@ -1015,17 +1164,15 @@ return std::get<CppType>(data); \
     }
 
     inline void RET::emit(VM &vm) {
-        // 从调用栈中弹出返回地址
         if (!vm.call_stack.empty()) {
             auto return_addr = vm.call_stack.popValue().asInt();
             vm.pc = static_cast<size_t>(return_addr);
         } else {
-            // 如果没有调用栈，结束执行
             vm.pc = vm.code.size();
         }
     }
 
-    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
+    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) {
         vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
     }
 }

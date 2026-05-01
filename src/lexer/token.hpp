@@ -34,6 +34,7 @@ namespace lexer {
             case OPER_LE: return "OPER_LE";
             case OPER_GE: return "OPER_GE";
             case OPER_COMMA: return "OPER_COMMA";
+            case OPER_DOT: return "OPER_DOT";
             case ASSIGN: return "ASSIGN";
             case LPAREN: return "LPAREN";
             case RPAREN: return "RPAREN";
@@ -48,6 +49,9 @@ namespace lexer {
             case KW_LOOP: return "KW_LOOP";
             case KW_BREAK: return "KW_BREAK";
             case KW_CONTINUE: return "KW_CONTINUE";
+            case KW_IMPORT: return "KW_IMPORT";
+            case KW_USE: return "KW_USE";
+            case KW_AS: return "KW_AS";
             case NUM_LITERAL: return "NUM_LITERAL";
             case IDENTIFIER: return "IDENTIFIER";
             case 0: return "EOF";

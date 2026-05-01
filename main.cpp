@@ -11,6 +11,7 @@
 #include "irgen/opcode.hpp"
 #include "repl/repl.hpp"
 #include "tools/error.hpp"
+#include "parser/ast.hpp"
 
 
 // 存储解析结果
@@ -69,14 +70,12 @@ Contact OpenLamina-Developing for more information)",
     );
 }
 void test_code1() {
-    LOG("Test LABEL & GOTO");
-
     irgen::VM vm;
     const std::vector<irgen::Opcode> test_code = {
         irgen::PUSH(irgen::Value(static_cast<size_t>(1))),
-        irgen::GOTO(static_cast<size_t>(0)),
+        irgen::GOTO(0),
         irgen::PUSH(irgen::Value(static_cast<size_t>(2))),
-        irgen::LABEL(static_cast<size_t>(0)),
+        irgen::LABEL(0),
         irgen::PUSH(irgen::Value(static_cast<size_t>(3))),
     };
 
@@ -149,7 +148,7 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();
 
-    const std::vector tests = {20, 25, 30};
+    const std::vector tests = {30};
 
     for (const auto& test : tests) {
         constexpr int n = 20;
