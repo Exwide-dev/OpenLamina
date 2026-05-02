@@ -167,7 +167,7 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
 }
 
 [[noreturn]] int main() {
-    test_fib_speed();
+    //test_fib_speed();
 
 
     std::cout << welcome << std::endl;

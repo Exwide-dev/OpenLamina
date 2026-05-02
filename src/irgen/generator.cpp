@@ -272,6 +272,18 @@ namespace lm::irgen {
             code.emplace_back(::irgen::LABEL(end_label));
         } else if (node->kind == lmx::ASTNodeType::Module) {
             // TODO: 模块暂时不处理
+        } else if (node->kind == lmx::ASTNodeType::Import) {
+            const auto* import_node = dynamic_cast<lmx::ImportNode*>(node);
+            const auto& module_name = import_node->module_name[0];
+            code.emplace_back(::irgen::FINDMOD(::irgen::Value(module_name)));
+            code.emplace_back(::irgen::STORE(
+                import_node->alias.empty() ? module_name : import_node->alias
+            ));
+        } else if (node->kind == lmx::ASTNodeType::MemberAccess) {
+            const auto* member_node = dynamic_cast<lmx::MemberAccessNode*>(node);
+            auto obj_code = gen_code(member_node->object, loop_stack);
+            code.insert(code.end(), obj_code.begin(), obj_code.end());
+            code.emplace_back(::irgen::GETATTR(::irgen::Value(member_node->member)));
         } else if (node->kind == lmx::ASTNodeType::Program) {
             const auto* program_node = dynamic_cast<lmx::ProgramASTNode*>(node);
             for (const auto& stmt : program_node->stmts) {

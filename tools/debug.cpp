@@ -7,7 +7,7 @@
 
 
 void printAST(const lmx::ASTNode* node, const int indent) {
-    if (not node) return;
+    if (!node) return;
 
     // 打印缩进
     const std::string indent_str(indent * 2, ' ');

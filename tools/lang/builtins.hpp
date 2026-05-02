@@ -5,10 +5,12 @@ namespace irgen {
     class Value;
     class VM;
     class SymbolTable;
+    class ModuleObject;
 }
 
 namespace lang {
-    using irgen::Value, irgen::VM;
+    using irgen::Value;
+    using irgen::VM;
     using ArgT = const std::vector<Value>&;
 
     Value input(VM&, ArgT);
@@ -18,4 +20,6 @@ namespace lang {
     Value exit(VM&, ArgT);
 
     void init_builtins(irgen::SymbolTable& symbols);
+
+    extern irgen::ModuleObject standard_mod;
 }

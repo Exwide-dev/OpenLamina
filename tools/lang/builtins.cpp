@@ -1,6 +1,7 @@
 #include "builtins.hpp"
 
 #include <iostream>
+#include <cmath>
 
 #include "irgen/opcode.hpp"
 
@@ -33,13 +34,67 @@ namespace lang {
         return Value(clock()) / Value(CLOCKS_PER_SEC);
     }
 
-    Value to_float(VM& vm, const std::vector<Value>& args) {
+    Value to_float(VM&, const std::vector<Value>& args) {
         arg_must("floatstring", 1);
         return Value(std::to_string(
             static_cast<long double>(args[0].asNumber().getNumerator())
           / static_cast<long double>(args[0].asNumber().getDenominator())
         ));
     }
+
+    Value math_sin(VM&, const std::vector<Value>& args) {
+        arg_must("sin", 1);
+        auto num = args[0].asNumber();
+        long double val = static_cast<long double>(num.getNumerator()) / 
+                          static_cast<long double>(num.getDenominator());
+        return Value(std::sin(val));
+    }
+
+    Value math_cos(VM&, const std::vector<Value>& args) {
+        arg_must("cos", 1);
+        auto num = args[0].asNumber();
+        long double val = static_cast<long double>(num.getNumerator()) / 
+                          static_cast<long double>(num.getDenominator());
+        return Value(irgen::Number(std::cos(val)));
+    }
+
+    Value math_tan(VM&, const std::vector<Value>& args) {
+        arg_must("tan", 1);
+        const auto num = args[0].asNumber();
+        const long double val = static_cast<long double>(num.getNumerator()) /
+                          static_cast<long double>(num.getDenominator());
+        return Value(std::tan(val));
+    }
+
+    irgen::ModuleObject math_mod = [] {
+        std::flat_map<size_t, Value> math_symbols;
+        
+        math_symbols[irgen::g_string_pool.add("sin")] = Value(irgen::FunctionType(math_sin));
+        math_symbols[irgen::g_string_pool.add("cos")] = irgen::Value(irgen::FunctionType(math_cos));
+        math_symbols[irgen::g_string_pool.add("tan")] = irgen::Value(irgen::FunctionType(math_tan));
+        math_symbols[irgen::g_string_pool.add("pi")] = irgen::Value(3141592653);
+        
+        return irgen::ModuleObject(irgen::SymbolTable(math_symbols));
+    }();
+
+    irgen::ModuleObject standard_mod = [] {
+        std::flat_map<size_t, Value> std_symbols;
+        
+        std_symbols[irgen::g_string_pool.add("concat")] = irgen::Value(irgen::FunctionType(
+            [](VM &, const std::vector<Value> &args) -> Value {
+                arg_must("concat", 2);
+                if (args[0].getType() != Value::Type::String
+                 or args[1].getType() != Value::Type::String) {
+                    throw RuntimeError("Not both string");
+                }
+                return Value(args[0].asString() + args[1].asString());
+            }
+        ));
+        
+        std_symbols[irgen::g_string_pool.add("math")] = Value(std::make_shared<irgen::ModuleObject>(math_mod));
+        
+        return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
+    }();
 }
 
 #undef arg_must

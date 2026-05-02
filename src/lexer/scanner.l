@@ -8,6 +8,13 @@
 #include "lexer/token.hpp"
 #include "lexer/lexer_vars.hpp"
 
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#else
+#include <unistd.h>
+#endif
+
 namespace lexer {
     std::vector<Token> tokens;
     int line = 1;

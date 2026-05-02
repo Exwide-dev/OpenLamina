@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include <format>
 #include <functional>
 #include <iostream>
@@ -11,11 +12,21 @@
 #include <vector>
 #include <variant>
 #include <unordered_map>
+#include <map>
+#ifdef _WIN32
+namespace std {
+    template<typename K, typename V>
+    using flat_map = map<K, V>;
+}
+#else
 #include <flat_map>
+#endif
 #include <memory>
 
 #include "../tools/debug.hpp"
 #include "../tools/error.hpp"
+#include "../tools/lang/builtins.hpp"
+#include "front-end/front_end.hpp"
 
 #define COMMON(ClassName) \
 [[nodiscard]] std::string name() const { return #ClassName; } \
@@ -32,6 +43,7 @@ return std::format("{} {}", name(), stringArgs()); \
 }
 
 namespace irgen {
+    class ModuleObject;
     class Number;
     class Value;
     class VM;
@@ -59,12 +71,18 @@ namespace irgen {
     class LEAVE_SCOPE;
     class CALL;
     class RET;
+    class FINDMOD;
+    class ATTR;
+    class GETATTR;
 
     template<typename T>
     concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
 
     template<typename T>
     concept StringType = std::convertible_to<T, std::string> and !IntegerType<T>;
+
+    template<typename T>
+    concept FloatType = std::floating_point<T> and !std::same_as<T, bool> and !IntegerType<T>;
 
     using Opcode = std::variant<
         PUSH,
@@ -90,7 +108,10 @@ namespace irgen {
         ENTER_SCOPE,
         LEAVE_SCOPE,
         CALL,
-        RET
+        RET,
+        FINDMOD,
+        ATTR,
+        GETATTR
     >;
 
     struct FunctionObject {
@@ -105,33 +126,65 @@ namespace irgen {
         ptrdiff_t numerator;
         ptrdiff_t denominator;
 
-        void reduce() {
-            if (denominator == 0) {
-                throw RuntimeError("Division by zero");
-            }
-            if (denominator < 0) {
-                numerator = -numerator;
-                denominator = -denominator;
-            }
-            ptrdiff_t g = gcd(std::abs(numerator), std::abs(denominator));
-            numerator /= g;
-            denominator /= g;
-        }
+        void reduce();
 
-        [[nodiscard]] ptrdiff_t gcd(ptrdiff_t a, ptrdiff_t b) const {
-            while (b != 0) {
-                const ptrdiff_t t = b;
-                b = a % b;
-                a = t;
+        [[nodiscard]] ptrdiff_t gcd(ptrdiff_t a, ptrdiff_t b) const;
+
+        template <FloatType T>
+        static int get_decimal_places(T num) {
+            LOG("get_decimal_places: " << num);
+            std::string str = std::to_string(num);
+            LOG("to_string: " << str);
+            const size_t dot_pos = str.find('.');
+            if (dot_pos == std::string::npos) return 0;
+
+            // 去除尾随的零
+            LOG("remove following 0s");
+            size_t end = str.length() - 1;
+            while (end > dot_pos && str[end] == '0') {
+                ++end;
+                LOG("++end");
             }
-            return a;
+            LOG("Return!");
+            return static_cast<int>(end - dot_pos);
         }
 
     public:
         Number() : numerator(0), denominator(1) {}
-        explicit(false) Number(const ptrdiff_t num) : numerator(num), denominator(1) {}
-        Number(const ptrdiff_t num, const ptrdiff_t den)
+
+        template <IntegerType T>
+        explicit(false) Number(const T num) : numerator(num), denominator(1) {}
+
+        template <IntegerType A, IntegerType B>
+        Number(const A num, const B den)
             : numerator(num), denominator(den) { reduce(); }
+
+        template <StringType T>
+        Number(const T& string) {
+
+        }
+
+        template <FloatType T>
+        explicit Number(const T num) {
+            // 处理特殊情况
+            if (num == 0.0) {
+                numerator = 0;
+                denominator = 1;
+                return;
+            }
+
+            // 确定浮点数的精度
+            const int decimal_places = get_decimal_places(num);
+            LOG(ITIS(decimal_places));
+            uint64_t precision = std::pow(10, decimal_places);
+            LOG(ITIS(precision));
+
+            // 转换为整数分子分母
+            numerator = static_cast<int64_t>(std::llround(num * precision));
+            denominator = precision;
+
+            reduce();  // 约分
+        }
 
         [[nodiscard]] Number add(const Number& other) const {
             if (denominator == 1 and other.denominator == 1) {
@@ -208,10 +261,11 @@ namespace irgen {
     public:
         enum class Type {
             None,
-            Int,
+            Number,
             Bool,
             String,
-            Function
+            Function,
+            Module
         };
 
     private:
@@ -221,15 +275,25 @@ namespace irgen {
             bool,
             std::string,
             FunctionType,
-            std::shared_ptr<FunctionObject>
+            std::shared_ptr<FunctionObject>,
+            std::shared_ptr<ModuleObject>
         > data;
 
     public:
         Value() : type(Type::None) {}
 
+        explicit Value(const Number& value)
+            : type(Type::Number), data(std::move(value)) {}
+
+        explicit Value(Number&& value)
+            : type(Type::Number), data(value) {}
+
         template<IntegerType T>
         explicit Value(T value)
-            : type(Type::Int), data(Number(static_cast<ptrdiff_t>(value))) {}
+            : type(Type::Number), data(Number(static_cast<ptrdiff_t>(value))) {}
+
+
+
 
         template<StringType T>
         explicit Value(T value)
@@ -244,11 +308,8 @@ namespace irgen {
         explicit Value(bool value)
             : type(Type::Bool), data(value) {}
 
-        explicit Value(const Number& value)
-            : type(Type::Int), data(std::move(value)) {}
-
-        explicit Value(Number&& value)
-            : type(Type::Int), data(value) {}
+        explicit Value(std::shared_ptr<ModuleObject> value)
+            : type(Type::Module), data(value) {}
 
         Value operator()(VM &vm, const std::vector<Value> &args) const {
             if (type != Type::Function) {
@@ -273,14 +334,14 @@ return std::get<CppType>(data); \
 }
 
         [[nodiscard]] const Number& asNumber() const {
-            if (type != Type::Int) {
+            if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
             return std::get<Number>(data);
         }
 
         [[nodiscard]] Number& asNumber() {
-            if (type != Type::Int) {
+            if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
             return std::get<Number>(data);
@@ -292,9 +353,10 @@ return std::get<CppType>(data); \
         DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
+        DEFINE_AS_METHOD(Module, Module, std::shared_ptr<ModuleObject>, "a module")
 
         Value operator+(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().add(other.asNumber()));
             }
             if (type == Type::String && other.type == Type::String) {
@@ -304,28 +366,28 @@ return std::get<CppType>(data); \
         }
 
         Value operator-(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().sub(other.asNumber()));
             }
             throw RuntimeError("Unsupported - operation");
         }
 
         Value operator*(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().mul(other.asNumber()));
             }
             throw RuntimeError("Unsupported * operation");
         }
 
         Value operator/(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().div(other.asNumber()));
             }
             throw RuntimeError("Unsupported / operation");
         }
 
         Value operator-() const {
-            if (type == Type::Int) {
+            if (type == Type::Number) {
                 return Value(asNumber().neg());
             }
             throw RuntimeError("Unsupported unary - operation");
@@ -353,35 +415,35 @@ return std::get<CppType>(data); \
         }
 
         Value operator<(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().lt(other.asNumber()));
             }
             throw RuntimeError("Unsupported < operation");
         }
 
         Value operator<=(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().lte(other.asNumber()));
             }
             throw RuntimeError("Unsupported <= operation");
         }
 
         Value operator>(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().gt(other.asNumber()));
             }
             throw RuntimeError("Unsupported > operation");
         }
 
         Value operator>=(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().gte(other.asNumber()));
             }
             throw RuntimeError("Unsupported >= operation");
         }
 
         bool operator==(const Value& other) {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return asNumber().eq(other.asNumber());
             }
             if (type == Type::Bool && other.type == Type::Bool) {
@@ -394,7 +456,7 @@ return std::get<CppType>(data); \
         }
 
         Value operator!=(const Value& other) const {
-            if (type == Type::Int && other.type == Type::Int) {
+            if (type == Type::Number && other.type == Type::Number) {
                 return Value(asNumber().neq(other.asNumber()));
             }
             if (type == Type::Bool && other.type == Type::Bool) {
@@ -427,7 +489,7 @@ return std::get<CppType>(data); \
 #undef DEFINE_AS_METHOD
 
         [[nodiscard]] bool isNone() const { return type == Type::None; }
-        [[nodiscard]] bool isInt() const { return type == Type::Int; }
+        [[nodiscard]] bool isInt() const { return type == Type::Number; }
         [[nodiscard]] bool isBool() const { return type == Type::Bool; }
         [[nodiscard]] bool isString() const { return type == Type::String; }
         [[nodiscard]] bool isFunction() const { return type == Type::Function; }
@@ -444,7 +506,8 @@ return std::get<CppType>(data); \
     public:
         SymbolTable() = default;
 
-        // explicit SymbolTable(std::unordered_map<size_t, Value> symbols) : symbols(std::move(symbols)) {}
+        explicit SymbolTable(std::flat_map<size_t, Value> symbols)
+            : symbols(std::move(symbols)) {}
 
         void set(size_t id, const Value &value);
 
@@ -454,14 +517,6 @@ return std::get<CppType>(data); \
             return symbols.contains(id);
         }
     };
-
-    template<typename T>
-    concept Stackable =
-            std::copyable<T> and std::movable<T>
-            and requires(T t)
-            {
-                { t.toString() } -> StringType;
-            };
 
     template<typename Stackable>
     class Stack {
@@ -875,6 +930,40 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    class FINDMOD {
+    public:
+        COMMON(FINDMOD)
+        std::vector<Value> operands;
+
+        explicit FINDMOD(const Value& val) {
+            operands.emplace_back(val);
+        };
+
+        void emit(VM &vm);
+    };
+
+    class ATTR {
+    public:
+        COMMON(ATTR)
+        std::vector<Value> operands;
+
+        ATTR() = default;
+
+        void emit(VM &vm);
+    };
+
+    class GETATTR {
+    public:
+        COMMON(GETATTR)
+        std::vector<Value> operands;
+
+        explicit GETATTR(const Value& attr_name) {
+            operands.emplace_back(attr_name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
     class StringPool {
         std::unordered_map<std::string, size_t> string_to_id;
         std::vector<std::string> id_to_string;
@@ -930,13 +1019,12 @@ return std::get<CppType>(data); \
 
     class VM {
     public:
-        Stack<Value> op_stack, call_stack;
-        std::vector<Opcode> code;
-        Register reg;
-        std::vector<SymbolTable> symbol_stack;
-        SymbolTable symbols;
-        Cache cache;
-        std::unordered_map<size_t, size_t> label_table;
+        Stack<Value> op_stack{}, call_stack{};
+        std::vector<Opcode> code{};
+        std::vector<SymbolTable> symbol_stack{};
+        SymbolTable symbols{};
+        Cache cache{};
+        std::unordered_map<size_t, size_t> label_table{};
         size_t pc = 0;
         size_t label_counter = 0;
 
@@ -960,221 +1048,28 @@ return std::get<CppType>(data); \
             }
         }
 
-        void run() {
-            try {
-                scan_labels();
-                symbol_stack.push_back(symbols);
-                for (; pc < code.size(); pc++) {
-                    std::visit([&](auto &op) -> void {
-                        LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
-                        op.emit(*this);
-                        LOG("VM " << op_stack.toString());
-                    }, code[pc]);
-                }
-                if (!op_stack.empty()) {
-                    const Value top = op_stack.popValue();
-                    op_stack.clear();
-                    op_stack.push(top);
-                }
-            } catch ([[maybe_unused]] const std::exception &e) {
-                op_stack.clear();
-                throw;
-            }
-        }
+        void run();
     };
 
-    // 定义所有 emit 函数的实现（inline）
-    inline void PUSH::emit(VM &vm) const {
-        vm.op_stack.push(operands[0]);
-    }
+    class ModuleObject {
+        bool is_user;
+    public:
+        VM vm;
 
-    inline void ADD::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a + b);
-    }
+        template <StringType string>
+        explicit ModuleObject(string code);
 
-    inline void MUL::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a * b);
-    }
-
-    inline void SUB::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a - b);
-    }
-
-    inline void DIV::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a / b);
-    }
-
-    inline void NEG::emit(VM &vm) {
-        auto value = vm.op_stack.popValue();
-        vm.op_stack.push(-value);
-    }
-
-    inline void NOT::emit(VM &vm) {
-        auto value = vm.op_stack.popValue();
-        vm.op_stack.push(!value);
-    }
-
-    inline void AND::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a && b);
-    }
-
-    inline void OR::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a || b);
-    }
-
-    inline void EQ::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(Value(a == b));
-    }
-
-    inline void NEQ::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(Value(a != b));
-    }
-
-    inline void LT::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a < b);
-    }
-
-    inline void LTE::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a <= b);
-    }
-
-    inline void GT::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a > b);
-    }
-
-    inline void GTE::emit(VM &vm) {
-        auto b = vm.op_stack.popValue();
-        auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a >= b);
-    }
-
-    inline void STORE::emit(VM &vm) const {
-        const auto& value = vm.op_stack.popValue();
-        const auto var_id = static_cast<size_t>(operands[0].asInt());
-
-        vm.cache.add(var_id, value);
-        vm.symbols.set(var_id, value);
-    }
-
-    inline void LOAD::emit(VM &vm) const {
-        const auto var_id = static_cast<size_t>(operands[0].asInt());
-
-        if (const auto found = vm.cache.get(var_id)) {
-            vm.op_stack.push(*found);
-            return;
+        explicit(false) ModuleObject(const SymbolTable& symbols) : is_user(false) {
+            vm.symbols = symbols;
         }
 
-        if (vm.symbols.exists(var_id)) {
-            vm.op_stack.push(vm.symbols.get(var_id).value());
-            return;
+        explicit ModuleObject(const std::vector<SymbolTable> &symbol_stack) : is_user(true) {
+            vm.symbol_stack = std::move(symbol_stack);
         }
 
-        for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
-            const auto& symbol_table = *it;
-            if (symbol_table.exists(var_id)) {
-                auto k = symbol_table.get(var_id);
-                if (k.has_value()) vm.op_stack.push(k.value());
-                else throw RuntimeError("Var not found: " + std::to_string(var_id));
-                return;
-            }
+        void init() {
+            vm.run();
         }
-
-        throw RuntimeError("Variable not found: " + g_string_pool.get_string(var_id));
-    }
-
-    inline void LABEL::emit(VM &) {}
-
-    inline void GOTO::emit(VM &vm) const {
-        const auto label_id = static_cast<size_t>(operands[0].asInt());
-        if (not vm.label_table.contains(label_id)) {
-            throw RuntimeError("Unknown label: " + std::to_string(label_id));
-        }
-        vm.pc = vm.label_table[label_id];
-    }
-
-    inline void IFTRUEGOTO::emit(VM &vm) const {
-        if (vm.op_stack.popValue().asBool()) {
-            GOTO(operands[0]).emit(vm);
-        }
-    }
-
-    inline void ENTER_SCOPE::emit(VM &vm) {
-        vm.symbol_stack.push_back(vm.symbols);
-        vm.symbols = SymbolTable();
-        vm.cache.enter_scope();
-    }
-
-    inline void LEAVE_SCOPE::emit(VM &vm) {
-        if (!vm.symbol_stack.empty()) {
-            vm.symbols = vm.symbol_stack.back();
-            vm.symbol_stack.pop_back();
-        }
-        vm.cache.leave_scope();
-    }
-
-    inline void CALL::emit(VM &vm) const {
-        Value func = vm.op_stack.popValue();
-
-        if (!func.isFunction()) {
-            throw RuntimeError("Not a function");
-        }
-
-        if (func.isUserFunction()) {
-            auto func_obj = func.asFunctionObject();
-            vm.call_stack.push(Value(vm.pc));
-
-            if (vm.label_table.contains(func_obj->location)) {
-                vm.pc = vm.label_table[func_obj->location];
-            } else {
-                throw RuntimeError("Function label not found: " + std::to_string(func_obj->location));
-            }
-        } else {
-            auto arg_count = operands[0].asInt();
-            std::vector<Value> args;
-            args.reserve(arg_count);
-            for (ptrdiff_t i = 0; i < arg_count; ++i) {
-                args.emplace_back(vm.op_stack.popValue());
-            }
-
-            auto builtin_func = func.asFunction();
-            auto result = builtin_func(vm, args);
-            vm.op_stack.push(result);
-        }
-    }
-
-    inline void RET::emit(VM &vm) {
-        if (!vm.call_stack.empty()) {
-            auto return_addr = vm.call_stack.popValue().asInt();
-            vm.pc = static_cast<size_t>(return_addr);
-        } else {
-            vm.pc = vm.code.size();
-        }
-    }
-
-    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
-        vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
-    }
+    };
 }
 #undef NAME

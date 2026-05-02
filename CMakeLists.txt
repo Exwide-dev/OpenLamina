@@ -5,7 +5,7 @@ project(OpenLamina
         DESCRIPTION "OpenLamina"
 )
 
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ==============================================
@@ -20,7 +20,8 @@ set(PARSER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/parser/parser.y")
 
 # 定义 Flex 和 Bison 的生成目标
 # 这里会生成 lexer.cpp 和 parser.cpp 等文件
-FLEX_TARGET(OpenLaminaScanner ${LEXER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/lexer_generated.cpp)
+FLEX_TARGET(OpenLaminaScanner ${LEXER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/lexer_generated.cpp
+        COMPILE_FLAGS --nounistd)
 BISON_TARGET(OpenLaminaParser ${PARSER_SRC} ${CMAKE_CURRENT_BINARY_DIR}/parser.tab.cpp)
 
 # 声明 Flex 和 Bison 的依赖关系
@@ -63,13 +64,17 @@ add_executable(
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
-    message(STATUS "OpenLamina: DEBUG mode (O0)")
+    if (MSVC)
+        set(CMAKE_CXX_FLAGS_DEBUG "/Od /Zi")
+    else ()
+        set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
+    endif ()
+    message(STATUS "OpenLamina: DEBUG mode")
 elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
-    elseif (MSVC)
+    if (MSVC)
         set(CMAKE_CXX_FLAGS_RELEASE "/O2 /arch:AVX2 /GL /DNDEBUG")
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -DNDEBUG")
     endif ()
     message(STATUS "OpenLamina: RELEASE mode (aggressive optimization)")
 endif ()
@@ -91,3 +96,25 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_MINOR=${PROJECT_VERSION_MINOR}
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
+#[[
+message(STATUS "OpenLamina: Fetching LAMMP")
+
+include(FetchContent)
+
+FetchContent_Declare(
+        LAMMP
+        GIT_REPOSITORY https://github.com/Lamina-dev/LAMMP.git
+        GIT_TAG main
+)
+
+set(USE_ASM OFF CACHE BOOL "Disable assembly" FORCE)
+
+FetchContent_MakeAvailable(LAMMP)
+
+# 链接 LammpCore 动态库
+target_link_libraries(OpenLamina PRIVATE LammpCore)
+
+# 如果需要使用 LAMMP 的头文件
+target_include_directories(OpenLamina PRIVATE
+        ${LAMMP_SOURCE_DIR}/include
+)]]
