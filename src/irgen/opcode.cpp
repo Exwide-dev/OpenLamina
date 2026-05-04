@@ -19,15 +19,11 @@ namespace irgen {
     }
 
     std::optional<Value> SymbolTable::get(const size_t id) const noexcept {
-        const auto it = symbols.find(id);
-        if (it == symbols.end()) {
-            return std::nullopt;
-        }
-        return it->second;
+        return symbols.try_get(id);
     }
 
     void SymbolTable::set(const size_t id, const Value &value) {
-        symbols[id] = value;
+        symbols.set(id, value);
     }
 
     // 初始化内置函数

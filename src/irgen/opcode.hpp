@@ -68,6 +68,222 @@ namespace irgen {
     class ATTR;
     class GETATTR;
 
+    #include <vector>
+#include <stdexcept>
+#include <initializer_list>
+
+    template<typename T>
+    class ArrMap {
+        std::vector<T> data;
+        std::vector<bool> has;
+        T default_value;
+        size_t element_count = 0;
+
+    public:
+        class Iterator {
+            const std::vector<T>* data_ptr;
+            const std::vector<bool>* has_ptr;
+            size_t pos;
+
+            void next_valid() {
+                while (pos < data_ptr->size() && !(*has_ptr)[pos]) {
+                    ++pos;
+                }
+            }
+
+        public:
+            using iterator_category = std::forward_iterator_tag;
+            using value_type = std::pair<size_t, T>;
+            using difference_type = std::ptrdiff_t;
+            using pointer = const value_type*;
+            using reference = const value_type;
+
+            Iterator(const std::vector<T>* d, const std::vector<bool>* h, size_t p)
+                : data_ptr(d), has_ptr(h), pos(p) {
+                next_valid();
+            }
+
+            Iterator& operator++() {
+                ++pos;
+                next_valid();
+                return *this;
+            }
+
+            Iterator operator++(int) {
+                Iterator tmp = *this;
+                ++(*this);
+                return tmp;
+            }
+
+            value_type operator*() const {
+                return {pos, (*data_ptr)[pos]};
+            }
+
+            bool operator==(const Iterator& other) const {
+                return pos == other.pos;
+            }
+
+            bool operator!=(const Iterator& other) const {
+                return !(*this == other);
+            }
+        };
+
+        ArrMap() : default_value(T{}) {}
+
+        explicit ArrMap(const T& def) : default_value(def) {}
+
+        ArrMap(const ArrMap& other)
+            : data(other.data), has(other.has),
+              default_value(other.default_value),
+              element_count(other.element_count) {}
+
+        ArrMap(ArrMap&& other) noexcept
+            : data(std::move(other.data)), has(std::move(other.has)),
+              default_value(std::move(other.default_value)),
+              element_count(other.element_count) {
+            other.element_count = 0;
+        }
+
+        template<typename MapType>
+        explicit ArrMap(const MapType& map, const T& def = T{}) : default_value(def) {
+            for (const auto& [key, value] : map) {
+                set(key, value);
+            }
+        }
+
+        ArrMap(std::initializer_list<std::pair<size_t, T>> init, const T& def = T{})
+            : default_value(def) {
+            for (const auto& kv : init) {
+                set(kv.first, kv.second);
+            }
+        }
+
+        ArrMap& operator=(const ArrMap& other) {
+            if (this != &other) {
+                data = other.data;
+                has = other.has;
+                default_value = other.default_value;
+                element_count = other.element_count;
+            }
+            return *this;
+        }
+
+        ArrMap& operator=(ArrMap&& other) noexcept {
+            if (this != &other) {
+                data = std::move(other.data);
+                has = std::move(other.has);
+                default_value = std::move(other.default_value);
+                element_count = other.element_count;
+                other.element_count = 0;
+            }
+            return *this;
+        }
+
+        Iterator begin() const {
+            return Iterator(&data, &has, 0);
+        }
+
+        Iterator end() const {
+            return Iterator(&data, &has, data.size());
+        }
+
+        bool empty() const {
+            return element_count == 0;
+        }
+
+        void set(size_t key, const T& value) {
+            if (key >= data.size()) {
+                data.resize(key + 1, default_value);
+                has.resize(key + 1, false);
+            }
+            if (!has[key]) {
+                ++element_count;
+            }
+            data[key] = value;
+            has[key] = true;
+        }
+
+        template<typename... Args>
+        void emplace(size_t key, Args&&... args) {
+            if (key >= data.size()) {
+                data.resize(key + 1, default_value);
+                has.resize(key + 1, false);
+            }
+            if (!has[key]) {
+                ++element_count;
+            }
+            data[key] = T(std::forward<Args>(args)...);
+            has[key] = true;
+        }
+
+        bool erase(size_t key) {
+            if (key >= data.size() || !has[key]) {
+                return false;
+            }
+            has[key] = false;
+            --element_count;
+            data[key] = default_value;
+            return true;
+        }
+
+        T get(size_t key) const {
+            if (key >= data.size() || !has[key]) {
+                throw std::out_of_range("ArrMap::get: key " + std::to_string(key) + " not found");
+            }
+            return data[key];
+        }
+
+        T find(size_t key) const {
+            if (key >= data.size() || !has[key]) {
+                throw std::out_of_range("ArrMap::find: key " + std::to_string(key) + " not found");
+            }
+            return data[key];
+        }
+
+        std::optional<T> try_get(size_t key) const {
+            if (key >= data.size() || !has[key]) {
+                return std::nullopt;
+            }
+            return data[key];
+        }
+
+        T& operator[](size_t key) {
+            if (key >= data.size() || !has[key]) {
+                throw std::out_of_range("ArrMap::operator[]: key " + std::to_string(key) + " not found");
+            }
+            return data[key];
+        }
+
+        const T& operator[](size_t key) const {
+            if (key >= data.size() || !has[key]) {
+                throw std::out_of_range("ArrMap::operator[]: key " + std::to_string(key) + " not found");
+            }
+            return data[key];
+        }
+
+        bool contains(size_t key) const {
+            return key < data.size() && has[key];
+        }
+
+        void clear() {
+            data.clear();
+            has.clear();
+            element_count = 0;
+        }
+
+        size_t size() const {
+            return element_count;
+        }
+
+        size_t capacity() const {
+            return data.size();
+        }
+
+        size_t count() const {
+            return element_count;
+        }
+    };
+
     template<typename T>
     concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
 
@@ -361,10 +577,10 @@ return std::get<CppType>(data); \
 
     class SymbolTable {
     public:
-        std::flat_map<size_t, Value> symbols;
+        ArrMap<Value> symbols;
         SymbolTable() = default;
 
-        explicit SymbolTable(std::flat_map<size_t, Value> symbols)
+        explicit SymbolTable(const std::flat_map<size_t, Value>& symbols)
             : symbols(std::move(symbols)) {}
 
         void set(size_t id, const Value &value);
@@ -898,6 +1114,7 @@ return std::get<CppType>(data); \
     inline StringPool g_string_pool{};
 
     class VM {
+    public:
         Stack<Value> op_stack{}, call_stack{};
         std::vector<Opcode> code{};
         std::vector<SymbolTable> symbol_stack{};
@@ -906,7 +1123,6 @@ return std::get<CppType>(data); \
         size_t pc = 0;
         size_t label_counter = 0;
         std::shared_ptr<ModuleObject> main_module;
-    public:
 
         void init_builtins();
 
