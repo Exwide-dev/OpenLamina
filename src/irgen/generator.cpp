@@ -22,7 +22,7 @@ namespace lm::irgen {
 
         if (node->kind == lmx::ASTNodeType::Number) {
             const auto* num_node = dynamic_cast<lmx::NumberNode*>(node);
-            ptrdiff_t value = std::stoll(num_node->value);
+            auto value = lang::lammp::Number(num_node->value);
             code.emplace_back(::irgen::PUSH(::irgen::Value(value)));
         } else if (node->kind == lmx::ASTNodeType::Bool) {
             const auto* bool_node = dynamic_cast<lmx::BoolNode*>(node);
@@ -274,11 +274,32 @@ namespace lm::irgen {
             // TODO: 模块暂时不处理
         } else if (node->kind == lmx::ASTNodeType::Import) {
             const auto* import_node = dynamic_cast<lmx::ImportNode*>(node);
-            const auto& module_name = import_node->module_name[0];
-            code.emplace_back(::irgen::FINDMOD(::irgen::Value(module_name)));
-            code.emplace_back(::irgen::STORE(
-                import_node->alias.empty() ? module_name : import_node->alias
-            ));
+            if (import_node->module_name.empty()) {
+                throw std::runtime_error("Empty module name in import statement");
+            }
+            std::string full_module_name;
+            for (size_t i = 0; i < import_node->module_name.size(); ++i) {
+                if (i > 0) full_module_name += ".";
+                full_module_name += import_node->module_name[i];
+            }
+            code.emplace_back(::irgen::FINDMOD(::irgen::Value(full_module_name)));
+            std::string store_name = import_node->alias.empty() 
+                ? import_node->module_name.back() 
+                : import_node->alias;
+            code.emplace_back(::irgen::STORE(store_name));
+        } else if (node->kind == lmx::ASTNodeType::Use) {
+            const auto* use_node = dynamic_cast<lmx::UseNode*>(node);
+            std::string full_module_name;
+            for (size_t i = 0; i < use_node->module_name.size(); ++i) {
+                if (i > 0) full_module_name += ".";
+                full_module_name += use_node->module_name[i];
+            }
+            code.emplace_back(::irgen::FINDMOD(::irgen::Value(full_module_name)));
+            for (const auto& item : use_node->items) {
+                code.emplace_back(::irgen::GETATTR(::irgen::Value(item.name)));
+                std::string alias = item.alias.empty() ? item.name : item.alias;
+                code.emplace_back(::irgen::STORE(alias));
+            }
         } else if (node->kind == lmx::ASTNodeType::MemberAccess) {
             const auto* member_node = dynamic_cast<lmx::MemberAccessNode*>(node);
             auto obj_code = gen_code(member_node->object, loop_stack);
@@ -325,10 +346,16 @@ namespace lm::irgen {
 
     // 包装函数：接收 ProgramASTNode，生成字节码并执行
     ::irgen::Value execute(const lmx::ProgramASTNode* program) {
+        if (!program) {
+            std::cerr << "Error: Null program AST\n";
+            return {};
+        }
+        
         std::vector<::irgen::Opcode> code;
 
         std::stack<LoopLabels> loop_stack;
         for (const auto& stmt : program->stmts) {
+            if (!stmt) continue;
             auto stmt_code = gen_code(stmt, loop_stack);
             code.insert(code.end(), stmt_code.begin(), stmt_code.end());
         }
@@ -346,6 +373,8 @@ namespace lm::irgen {
             }, c);
             i++;
         }
+
+        Generator::replace_string(code);
 
         ::irgen::VM vm(code);
         vm.run();

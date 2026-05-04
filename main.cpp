@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <filesystem>
 #include "lexer_generated.h"
 #include "parser.tab.hpp"
 #include "lexer/lex.hpp"
@@ -135,6 +136,70 @@ std::string test_fib_format(int n) {
     return std::format("fib({})", n);
 }
 
+void test_module_system() {
+    std::cout << "\n=== Testing Module System ===\n";
+    std::cout << "Current directory: " << std::filesystem::current_path() << "\n";
+    
+    try {
+        const std::string simple_test = R"(
+            let x = 42
+            print("Hello World")
+            x
+        )";
+        
+        std::cout << "\nTesting basic execution...\n";
+        lmx::ProgramASTNode* simple_ast = parse(simple_test);
+        if (!simple_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value simple_result = lm::irgen::execute(simple_ast);
+        std::cout << "Simple test result: " << simple_result << "\n";
+        delete simple_ast;
+        std::cout << "Basic execution test passed!\n";
+        
+        std::cout << "\nChecking for test_module.lm...\n";
+        if (std::filesystem::exists("test_module.lm")) {
+            std::cout << "test_module.lm found!\n";
+        } else {
+            std::cout << "test_module.lm NOT found!\n";
+            std::cout << "Module system test skipped (test file not found)\n";
+            return;
+        }
+        
+        const std::string import_test = R"(import test_module)";
+        
+        std::cout << "\nTesting basic import...\n";
+        lmx::ProgramASTNode* import_ast = parse(import_test);
+        if (!import_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value import_result = lm::irgen::execute(import_ast);
+        delete import_ast;
+        std::cout << "Basic import test passed!\n";
+        
+        const std::string alias_test = R"(
+            import test_module as tm
+            print(tm.greeting)
+        )";
+        
+        std::cout << "\nTesting import with alias and usage...\n";
+        lmx::ProgramASTNode* alias_ast = parse(alias_test);
+        if (!alias_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value alias_result = lm::irgen::execute(alias_ast);
+        delete alias_ast;
+        std::cout << "Alias import test passed!\n";
+        
+        std::cout << "\n=== Module System Tests Completed ===\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Error in module system test: " << e.what() << std::endl;
+    }
+}
+
 void test_fib_speed() {
     irgen::VM vm;
 
@@ -148,10 +213,10 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();
 
-    const std::vector tests = {30};
+    const std::vector tests = {20, 25, 30};
+    constexpr int n = 20;
 
     for (const auto& test : tests) {
-        constexpr int n = 20;
         const auto tstart = clock();
         for (int i = 0; i < n; i++) {
             auto tcode = lm::irgen::Generator(parse(test_fib_format(test))).gen();
@@ -167,7 +232,13 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
 }
 
 [[noreturn]] int main() {
-    //test_fib_speed();
+    std::cout << "Testing module system..." << std::endl;
+    test_module_system();
+    std::cout << "Testing fib speed..." << std::endl;
+    test_fib_speed();
+    
+    std::cout << "\nPress Enter to continue to REPL...";
+    std::cin.get();
 
 
     std::cout << welcome << std::endl;

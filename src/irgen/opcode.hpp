@@ -13,19 +13,13 @@
 #include <variant>
 #include <unordered_map>
 #include <map>
-#ifdef _WIN32
-namespace std {
-    template<typename K, typename V>
-    using flat_map = map<K, V>;
-}
-#else
 #include <flat_map>
-#endif
 #include <memory>
 
 #include "../tools/debug.hpp"
 #include "../tools/error.hpp"
 #include "../tools/lang/builtins.hpp"
+#include "../tools/lang/number.hpp"
 #include "front-end/front_end.hpp"
 
 #define COMMON(ClassName) \
@@ -44,7 +38,6 @@ return std::format("{} {}", name(), stringArgs()); \
 
 namespace irgen {
     class ModuleObject;
-    class Number;
     class Value;
     class VM;
     class PUSH;
@@ -122,140 +115,6 @@ namespace irgen {
 
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
 
-    class Number {
-        ptrdiff_t numerator;
-        ptrdiff_t denominator;
-
-        void reduce();
-
-        [[nodiscard]] ptrdiff_t gcd(ptrdiff_t a, ptrdiff_t b) const;
-
-        template <FloatType T>
-        static int get_decimal_places(T num) {
-            LOG("get_decimal_places: " << num);
-            std::string str = std::to_string(num);
-            LOG("to_string: " << str);
-            const size_t dot_pos = str.find('.');
-            if (dot_pos == std::string::npos) return 0;
-
-            // 去除尾随的零
-            LOG("remove following 0s");
-            size_t end = str.length() - 1;
-            while (end > dot_pos && str[end] == '0') {
-                ++end;
-                LOG("++end");
-            }
-            LOG("Return!");
-            return static_cast<int>(end - dot_pos);
-        }
-
-    public:
-        Number() : numerator(0), denominator(1) {}
-
-        template <IntegerType T>
-        explicit(false) Number(const T num) : numerator(num), denominator(1) {}
-
-        template <IntegerType A, IntegerType B>
-        Number(const A num, const B den)
-            : numerator(num), denominator(den) { reduce(); }
-
-        template <StringType T>
-        Number(const T& string) {
-
-        }
-
-        template <FloatType T>
-        explicit Number(const T num) {
-            // 处理特殊情况
-            if (num == 0.0) {
-                numerator = 0;
-                denominator = 1;
-                return;
-            }
-
-            // 确定浮点数的精度
-            const int decimal_places = get_decimal_places(num);
-            LOG(ITIS(decimal_places));
-            uint64_t precision = std::pow(10, decimal_places);
-            LOG(ITIS(precision));
-
-            // 转换为整数分子分母
-            numerator = static_cast<int64_t>(std::llround(num * precision));
-            denominator = precision;
-
-            reduce();  // 约分
-        }
-
-        [[nodiscard]] Number add(const Number& other) const {
-            if (denominator == 1 and other.denominator == 1) {
-                return {numerator + other.numerator};
-            }
-            const ptrdiff_t new_num = numerator * other.denominator + other.numerator * denominator;
-            const ptrdiff_t new_den = denominator * other.denominator;
-            return {new_num, new_den};
-        }
-
-        [[nodiscard]] Number sub(const Number& other) const {
-            const ptrdiff_t new_num = numerator * other.denominator - other.numerator * denominator;
-            const ptrdiff_t new_den = denominator * other.denominator;
-            return {new_num, new_den};
-        }
-
-        [[nodiscard]] Number mul(const Number& other) const {
-            return Number(numerator * other.numerator, denominator * other.denominator);
-        }
-
-        [[nodiscard]] Number div(const Number& other) const {
-            if (other.numerator == 0) {
-                throw RuntimeError("Division by zero");
-            }
-            return {numerator * other.denominator, denominator * other.numerator};
-        }
-
-        [[nodiscard]] Number neg() const {
-            return {-numerator, denominator};
-        }
-
-        [[nodiscard]] bool eq(const Number& other) const {
-            return numerator == other.numerator && denominator == other.denominator;
-        }
-
-        [[nodiscard]] bool neq(const Number& other) const {
-            return !eq(other);
-        }
-
-        [[nodiscard]] bool lt(const Number& other) const {
-            return numerator * other.denominator < other.numerator * denominator;
-        }
-
-        [[nodiscard]] bool lte(const Number& other) const {
-            return numerator * other.denominator <= other.numerator * denominator;
-        }
-
-        [[nodiscard]] bool gt(const Number& other) const {
-            return numerator * other.denominator > other.numerator * denominator;
-        }
-
-        [[nodiscard]] bool gte(const Number& other) const {
-            return numerator * other.denominator >= other.numerator * denominator;
-        }
-
-        [[nodiscard]] std::string toString() const {
-            if (denominator == 1) {
-                return std::to_string(numerator);
-            }
-            return std::format("{} / {}", numerator, denominator);
-        }
-
-        [[nodiscard]] ptrdiff_t asInt() const {
-            return numerator / denominator;
-        }
-
-        [[nodiscard]] ptrdiff_t getNumerator() const { return numerator; }
-        [[nodiscard]] ptrdiff_t getDenominator() const { return denominator; }
-        [[nodiscard]] bool isInteger() const { return denominator == 1; }
-    };
-
     // Value 类型，支持多种类型的值
     class Value {
     public:
@@ -271,7 +130,7 @@ namespace irgen {
     private:
         Type type;
         std::variant<
-            Number,
+            lang::lammp::Number,
             bool,
             std::string,
             FunctionType,
@@ -282,15 +141,15 @@ namespace irgen {
     public:
         Value() : type(Type::None) {}
 
-        explicit Value(const Number& value)
-            : type(Type::Number), data(std::move(value)) {}
-
-        explicit Value(Number&& value)
+        explicit Value(const lang::lammp::Number& value)
             : type(Type::Number), data(value) {}
+
+        explicit Value(lang::lammp::Number&& value)
+            : type(Type::Number), data(std::move(value)) {}
 
         template<IntegerType T>
         explicit Value(T value)
-            : type(Type::Number), data(Number(static_cast<ptrdiff_t>(value))) {}
+            : type(Type::Number), data(lang::lammp::Number(static_cast<int64_t>(value))) {}
 
 
 
@@ -333,22 +192,22 @@ throw RuntimeError("Value is not " ErrorMsg); \
 return std::get<CppType>(data); \
 }
 
-        [[nodiscard]] const Number& asNumber() const {
+        [[nodiscard]] const lang::lammp::Number& asNumber() const {
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
-            return std::get<Number>(data);
+            return std::get<lang::lammp::Number>(data);
         }
 
-        [[nodiscard]] Number& asNumber() {
+        [[nodiscard]] lang::lammp::Number& asNumber() {
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
-            return std::get<Number>(data);
+            return std::get<lang::lammp::Number>(data);
         }
 
         [[nodiscard]] ptrdiff_t asInt() const {
-            return asNumber().asInt();
+            return asNumber().toInt64();
         }
         DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
         DEFINE_AS_METHOD(String, String, std::string, "a string")
@@ -357,7 +216,7 @@ return std::get<CppType>(data); \
 
         Value operator+(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().add(other.asNumber()));
+                return Value(asNumber() + other.asNumber());
             }
             if (type == Type::String && other.type == Type::String) {
                 return Value(asString() + other.asString());
@@ -367,28 +226,28 @@ return std::get<CppType>(data); \
 
         Value operator-(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().sub(other.asNumber()));
+                return Value(asNumber() - other.asNumber());
             }
             throw RuntimeError("Unsupported - operation");
         }
 
         Value operator*(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().mul(other.asNumber()));
+                return Value(asNumber() * other.asNumber());
             }
             throw RuntimeError("Unsupported * operation");
         }
 
         Value operator/(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().div(other.asNumber()));
+                return Value(asNumber() / other.asNumber());
             }
             throw RuntimeError("Unsupported / operation");
         }
 
         Value operator-() const {
             if (type == Type::Number) {
-                return Value(asNumber().neg());
+                return Value(-asNumber());
             }
             throw RuntimeError("Unsupported unary - operation");
         }
@@ -416,35 +275,35 @@ return std::get<CppType>(data); \
 
         Value operator<(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().lt(other.asNumber()));
+                return Value(asNumber() < other.asNumber());
             }
             throw RuntimeError("Unsupported < operation");
         }
 
         Value operator<=(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().lte(other.asNumber()));
+                return Value(asNumber() <= other.asNumber());
             }
             throw RuntimeError("Unsupported <= operation");
         }
 
         Value operator>(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().gt(other.asNumber()));
+                return Value(asNumber() > other.asNumber());
             }
             throw RuntimeError("Unsupported > operation");
         }
 
         Value operator>=(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().gte(other.asNumber()));
+                return Value(asNumber() >= other.asNumber());
             }
             throw RuntimeError("Unsupported >= operation");
         }
 
         bool operator==(const Value& other) {
             if (type == Type::Number && other.type == Type::Number) {
-                return asNumber().eq(other.asNumber());
+                return asNumber() == other.asNumber();
             }
             if (type == Type::Bool && other.type == Type::Bool) {
                 return asBool() == other.asBool();
@@ -457,7 +316,7 @@ return std::get<CppType>(data); \
 
         Value operator!=(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber().neq(other.asNumber()));
+                return Value(asNumber() != other.asNumber());
             }
             if (type == Type::Bool && other.type == Type::Bool) {
                 return Value(asBool() != other.asBool());
@@ -501,9 +360,8 @@ return std::get<CppType>(data); \
     };
 
     class SymbolTable {
-        std::flat_map<size_t, Value> symbols;
-
     public:
+        std::flat_map<size_t, Value> symbols;
         SymbolTable() = default;
 
         explicit SymbolTable(std::flat_map<size_t, Value> symbols)
@@ -511,11 +369,15 @@ return std::get<CppType>(data); \
 
         void set(size_t id, const Value &value);
 
-        std::optional<Value> get(size_t id) const noexcept;
+        [[nodiscard]] std::optional<Value> get(size_t id) const noexcept;
 
-        bool exists(const size_t id) const {
+        [[nodiscard]] bool exists(const size_t id) const {
             return symbols.contains(id);
         }
+
+        [[nodiscard]] auto begin() const { return symbols.begin(); }
+        [[nodiscard]] auto end() const { return symbols.end(); }
+        [[nodiscard]] bool empty() const { return symbols.empty(); }
     };
 
     template<typename Stackable>
@@ -594,66 +456,84 @@ return std::get<CppType>(data); \
         }
     };
 
-    class Cache {
-        static constexpr int n = 16;
+        class Cache {
+        static constexpr size_t SLOT_COUNT = 16;
 
-        struct Var {
-            size_t id;
-            Value val;
+        // 单个作用域的数据
+        struct Scope {
+            std::array<std::pair<size_t, Value>, SLOT_COUNT> slots; // (id, value)
+            std::unordered_map<size_t, size_t> id_to_index;         // id -> slot index
+            size_t next_slot = 0;                                   // 下一个要覆盖的槽位
+
+            Scope() {
+                // 初始化所有槽位的 id 为 0（无效 id）
+                for (auto &id: slots | std::views::keys) {
+                    id = 0;
+                }
+            }
         };
 
-        std::vector<std::array<Var, n>> cache;
-        int pos = 0;
+        std::vector<Scope> scopes;  // 作用域栈，栈顶为当前作用域
+
     public:
-        Cache() : cache({std::array<Var, n>{}}) {}
-
-        Value operator[](const size_t id) const {
-            for (const auto& [var_id, val] : cache.back()) {
-                if (var_id == id) {
-                    return val;
-                }
-            }
-            throw std::out_of_range("No such variable with id: " + std::to_string(id));
+        Cache() {
+            scopes.emplace_back();   // 全局作用域
         }
 
-        void add(const size_t id, const Value& val) {
-            LOG("cache add: " << id);
-            if (get(id).has_value()) {
-                cache.back()[pos] = Var{id, val};
-                pos++;
-                pos %= n;
-            } else {
-                int j = 0;
-                for (const auto&[var_id, var_val] : cache.back()) {
-                    if (var_id == id) {
-                        cache.back()[j] = Var{id, val};
-                    }
-                    j++;
-                }
+        // 添加或更新变量（原有 API 中的 add）
+        void add(size_t id, const Value& val) {
+            auto& scope = scopes.back();
+            auto it = scope.id_to_index.find(id);
+            if (it != scope.id_to_index.end()) {
+                // 已存在：直接更新
+                scope.slots[it->second].second = val;
+                return;
             }
+
+            // 新变量：覆盖最旧的槽位（FIFO）
+            size_t idx = scope.next_slot;
+            size_t old_id = scope.slots[idx].first;
+            if (old_id != 0) {
+                scope.id_to_index.erase(old_id);
+            }
+            scope.slots[idx] = {id, val};
+            scope.id_to_index[id] = idx;
+            scope.next_slot = (idx + 1) % SLOT_COUNT;
         }
 
-        [[nodiscard]] std::optional<Value> get(const size_t id) const noexcept {
-            LOG("cache get!");
-            for (const auto& [var_id, val] : cache.back()) {
-                if (var_id == id) {
-                    return val;
-                }
+        // 获取变量（返回 optional）
+        [[nodiscard]] std::optional<Value> get(size_t id) const {
+            const auto& scope = scopes.back();
+            auto it = scope.id_to_index.find(id);
+            if (it != scope.id_to_index.end()) {
+                return scope.slots[it->second].second;
             }
             return std::nullopt;
         }
 
+        // 通过 [] 获取（不存在则抛异常）
+        Value operator[](size_t id) const {
+            auto opt = get(id);
+            if (opt.has_value()) {
+                return *opt;
+            }
+            throw std::out_of_range("No such variable with id: " + std::to_string(id));
+        }
+
+        // 进入新作用域
         void enter_scope() {
-            cache.emplace_back(std::array<Var, n>{});
+            scopes.emplace_back();
         }
 
+        // 退出当前作用域
         void leave_scope() {
-            cache.pop_back();
+            scopes.pop_back();
         }
 
+        // 清空所有作用域（重置 Cache）
         void clear() {
-            LOG("cache clear!");
-            cache = std::vector({std::array<Var, n>{}});
+            scopes.clear();
+            scopes.emplace_back();
         }
     };
 
@@ -827,7 +707,7 @@ return std::get<CppType>(data); \
         COMMON(LOAD)
         std::vector<Value> operands;
 
-        explicit LOAD(const std::string &name) {
+        explicit LOAD(const std::string& name) {
             operands.emplace_back(name);
         }
 
@@ -1018,25 +898,21 @@ return std::get<CppType>(data); \
     inline StringPool g_string_pool{};
 
     class VM {
-    public:
         Stack<Value> op_stack{}, call_stack{};
         std::vector<Opcode> code{};
         std::vector<SymbolTable> symbol_stack{};
-        SymbolTable symbols{};
         Cache cache{};
         std::unordered_map<size_t, size_t> label_table{};
         size_t pc = 0;
         size_t label_counter = 0;
+        std::shared_ptr<ModuleObject> main_module;
+    public:
 
         void init_builtins();
 
-        VM() {
-            init_builtins();
-        }
+        VM();
 
-        explicit VM(std::vector<Opcode> c) : code(std::move(c)) {
-            init_builtins();
-        }
+        explicit VM(std::vector<Opcode> c);
 
         void scan_labels() {
             for (size_t i = pc; i < code.size(); i++) {
@@ -1049,27 +925,68 @@ return std::get<CppType>(data); \
         }
 
         void run();
+
+        std::optional<Value> get_symbol(const std::string& name) const;
+        void set_symbol(const std::string& name, const Value& value);
     };
 
-    class ModuleObject {
+    class ModuleObject : public std::enable_shared_from_this<ModuleObject> {
         bool is_user;
     public:
-        VM vm;
+        std::string name;
+        std::string full_name;
+        std::unordered_map<std::string, Value> exports;
+        std::unordered_map<std::string, std::shared_ptr<ModuleObject>> submodules;
+        VM* owner_vm = nullptr;
 
         template <StringType string>
         explicit ModuleObject(string code);
 
         explicit(false) ModuleObject(const SymbolTable& symbols) : is_user(false) {
-            vm.symbols = symbols;
+            for (const auto& [id, val] : symbols.symbols) {
+                exports[g_string_pool.get_string(id)] = val;
+            }
         }
 
         explicit ModuleObject(const std::vector<SymbolTable> &symbol_stack) : is_user(true) {
-            vm.symbol_stack = std::move(symbol_stack);
+            for (const auto& table : symbol_stack) {
+                for (const auto& [id, val] : table.symbols) {
+                    exports[g_string_pool.get_string(id)] = val;
+                }
+            }
         }
 
-        void init() {
-            vm.run();
+        explicit ModuleObject(std::string n, VM* vm) 
+            : is_user(true), name(std::move(n)), full_name(name), owner_vm(vm) {}
+
+        void init() const {
+            if (owner_vm) {
+                owner_vm->run();
+            }
         }
+
+        std::optional<Value> get_attr(const std::string& attrname) const {
+            const auto it = exports.find(attrname);
+            if (it != exports.end()) {
+                return it->second;
+            }
+            const auto mod_it = submodules.find(attrname);
+            if (mod_it != submodules.end()) {
+                return Value(mod_it->second);
+            }
+            return std::nullopt;
+        }
+
+        void set_attr(const std::string& attrname, const Value& value) {
+            if (value.getType() == Value::Type::Module) {
+                auto mod = value.asModule();
+                mod->full_name = this->full_name.empty() ? attrname : this->full_name + "." + attrname;
+                submodules[attrname] = mod;
+            }
+            exports[attrname] = value;
+        }
+
+        Value import(const std::string& module_name);
     };
 }
 #undef NAME

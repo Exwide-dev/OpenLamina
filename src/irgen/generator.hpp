@@ -11,7 +11,7 @@ namespace lm::irgen {
 
         [[nodiscard]] std::vector<::irgen::Opcode> gen() const;
 
-        void replace_string(std::vector<::irgen::Opcode>& codes) const {
+        static void replace_string(std::vector<::irgen::Opcode>& codes) {
             for (auto& code : codes) {
                 std::visit([&](auto& op) {
                     const std::string op_name = op.name();

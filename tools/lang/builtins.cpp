@@ -36,34 +36,28 @@ namespace lang {
 
     Value to_float(VM&, const std::vector<Value>& args) {
         arg_must("floatstring", 1);
-        return Value(std::to_string(
-            static_cast<long double>(args[0].asNumber().getNumerator())
-          / static_cast<long double>(args[0].asNumber().getDenominator())
-        ));
+        return Value(args[0].asNumber().toString());
     }
 
     Value math_sin(VM&, const std::vector<Value>& args) {
         arg_must("sin", 1);
         auto num = args[0].asNumber();
-        long double val = static_cast<long double>(num.getNumerator()) / 
-                          static_cast<long double>(num.getDenominator());
-        return Value(std::sin(val));
+        long double val = static_cast<long double>(num.toInt64());
+        return Value(static_cast<int64_t>(std::sin(val)));
     }
 
     Value math_cos(VM&, const std::vector<Value>& args) {
         arg_must("cos", 1);
         auto num = args[0].asNumber();
-        long double val = static_cast<long double>(num.getNumerator()) / 
-                          static_cast<long double>(num.getDenominator());
-        return Value(irgen::Number(std::cos(val)));
+        long double val = static_cast<long double>(num.toInt64());
+        return Value(static_cast<int64_t>(std::cos(val)));
     }
 
     Value math_tan(VM&, const std::vector<Value>& args) {
         arg_must("tan", 1);
         const auto num = args[0].asNumber();
-        const long double val = static_cast<long double>(num.getNumerator()) /
-                          static_cast<long double>(num.getDenominator());
-        return Value(std::tan(val));
+        const long double val = static_cast<long double>(num.toInt64());
+        return Value(static_cast<int64_t>(std::tan(val)));
     }
 
     irgen::ModuleObject math_mod = [] {

@@ -61,6 +61,12 @@ add_executable(
         src/repl/repl.cpp
         src/repl/repl.hpp
         src/lexer/lexer_vars.hpp
+        tools/lang/number.cpp
+        tools/lang/number.hpp
+        src/compiler/module_compiler.cpp
+        src/compiler/module_compiler.hpp
+        src/compiler/module_manager.cpp
+        src/compiler/module_manager.hpp
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -96,7 +102,7 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_MINOR=${PROJECT_VERSION_MINOR}
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
-#[[
+
 message(STATUS "OpenLamina: Fetching LAMMP")
 
 include(FetchContent)
@@ -117,4 +123,13 @@ target_link_libraries(OpenLamina PRIVATE LammpCore)
 # 如果需要使用 LAMMP 的头文件
 target_include_directories(OpenLamina PRIVATE
         ${LAMMP_SOURCE_DIR}/include
-)]]
+)
+
+if (WIN32 AND TARGET LammpCore)
+    add_custom_command(TARGET OpenLamina POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:LammpCore>"
+            "$<TARGET_FILE_DIR:OpenLamina>"
+            COMMENT "Copying LammpCore.dll to output directory"
+    )
+endif ()

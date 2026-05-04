@@ -31,39 +31,33 @@ namespace irgen {
     }
 
     // 初始化内置函数
+    VM::VM() {
+        main_module = std::make_shared<ModuleObject>("__main__", this);
+        init_builtins();
+    }
+
+    VM::VM(std::vector<Opcode> c) : code(std::move(c)) {
+        main_module = std::make_shared<ModuleObject>("__main__", this);
+        init_builtins();
+    }
+
     void VM::init_builtins() {
-        lang::init_builtins(symbols);
+        SymbolTable temp_symbols;
+        lang::init_builtins(temp_symbols);
+        
+        for (const auto& [id, val] : temp_symbols.symbols) {
+            main_module->set_attr(g_string_pool.get_string(id), val);
+        }
         
         auto std_module = std::make_shared<ModuleObject>(lang::standard_mod);
-        symbols.set(g_string_pool.add("std"), Value(std_module));
-    }
-
-    void Number::reduce() {
-        if (denominator == 0) {
-            throw RuntimeError("Division by zero");
-        }
-        if (denominator < 0) {
-            numerator = -numerator;
-            denominator = -denominator;
-        }
-        ptrdiff_t g = gcd(std::abs(numerator), std::abs(denominator));
-        numerator /= g;
-        denominator /= g;
-    }
-
-    ptrdiff_t Number::gcd(ptrdiff_t a, ptrdiff_t b) const {
-        while (b != 0) {
-            const ptrdiff_t t = b;
-            b = a % b;
-            a = t;
-        }
-        return a;
+        std_module->name = "std";
+        std_module->full_name = "std";
+        main_module->set_attr("std", Value(std_module));
     }
 
     void VM::run() {
         try {
             scan_labels();
-            symbol_stack.push_back(symbols);
             for (; pc < code.size(); pc++) {
                 std::visit([&](auto &op) -> void {
                     LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
@@ -80,6 +74,14 @@ namespace irgen {
             op_stack.clear();
             throw;
         }
+    }
+
+    std::optional<Value> VM::get_symbol(const std::string& name) const {
+        return main_module->get_attr(name);
+    }
+
+    void VM::set_symbol(const std::string& name, const Value& value) {
+        main_module->set_attr(name, value);
     }
 
     inline void PUSH::emit(VM &vm) const {
@@ -170,13 +172,15 @@ namespace irgen {
 
     inline void STORE::emit(VM &vm) const {
         const auto& value = vm.op_stack.popValue();
+        const std::string var_name = g_string_pool.get_string(operands[0].asInt());
         const auto var_id = static_cast<size_t>(operands[0].asInt());
 
         vm.cache.add(var_id, value);
-        vm.symbols.set(var_id, value);
+        vm.main_module->set_attr(var_name, value);
     }
 
     inline void LOAD::emit(VM &vm) const {
+        const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
         const auto var_id = static_cast<size_t>(operands[0].asInt());
 
         if (const auto found = vm.cache.get(var_id)) {
@@ -184,8 +188,9 @@ namespace irgen {
             return;
         }
 
-        if (vm.symbols.exists(var_id)) {
-            vm.op_stack.push(vm.symbols.get(var_id).value());
+        auto result = vm.main_module->get_attr(var_name);
+        if (result.has_value()) {
+            vm.op_stack.push(*result);
             return;
         }
 
@@ -219,14 +224,12 @@ namespace irgen {
     }
 
     inline void ENTER_SCOPE::emit(VM &vm) {
-        vm.symbol_stack.push_back(vm.symbols);
-        vm.symbols = SymbolTable();
+        vm.symbol_stack.emplace_back();
         vm.cache.enter_scope();
     }
 
     inline void LEAVE_SCOPE::emit(VM &vm) {
         if (!vm.symbol_stack.empty()) {
-            vm.symbols = vm.symbol_stack.back();
             vm.symbol_stack.pop_back();
         }
         vm.cache.leave_scope();
@@ -273,42 +276,13 @@ namespace irgen {
 
     inline void FINDMOD::emit(VM &vm) {
         const std::string module_name = g_string_pool.get_string(operands[0].asInt());
-        const size_t module_name_id = operands[0].asInt();
 
-        if (vm.symbols.exists(module_name_id)) {
-            vm.op_stack.push(vm.symbols.get(module_name_id).value());
-            return;
+        if (module_name.empty()) {
+            throw RuntimeError("Empty module name");
         }
 
-        if (module_name == "std") {
-            auto std_module = std::make_shared<ModuleObject>(lang::standard_mod);
-            vm.symbols.set(module_name_id, Value(std_module));
-            vm.op_stack.push(Value(std_module));
-            return;
-        }
-
-        std::vector<std::filesystem::path> search_paths = {
-            std::filesystem::current_path(),
-            std::filesystem::current_path() / "modules",
-            std::filesystem::current_path() / "lib"
-        };
-
-        for (const auto& path : search_paths) {
-            std::filesystem::path module_path = path / (module_name + ".lm");
-            if (std::filesystem::exists(module_path)) {
-                std::ifstream file(module_path);
-                if (file.is_open()) {
-                    std::string code((std::istreambuf_iterator<char>(file)),
-                                     std::istreambuf_iterator<char>());
-                    auto module_obj = std::make_shared<ModuleObject>(code);
-                    vm.symbols.set(module_name_id, Value(module_obj));
-                    vm.op_stack.push(Value(module_obj));
-                    return;
-                }
-            }
-        }
-
-        throw RuntimeError("Module not found: " + module_name);
+        Value result = vm.main_module->import(module_name);
+        vm.op_stack.push(result);
     }
 
     inline void ATTR::emit(VM &vm) {
@@ -317,7 +291,6 @@ namespace irgen {
 
     inline void GETATTR::emit(VM &vm) const {
         const std::string attr_name = g_string_pool.get_string(operands[0].asInt());
-        const size_t attr_name_id = operands[0].asInt();
 
         Value obj = vm.op_stack.popValue();
         if (obj.getType() != Value::Type::Module) {
@@ -325,11 +298,84 @@ namespace irgen {
         }
 
         auto module = obj.asModule();
-        if (module->vm.symbols.exists(attr_name_id)) {
-            vm.op_stack.push(module->vm.symbols.get(attr_name_id).value());
+        auto result = module->get_attr(attr_name);
+        
+        if (result.has_value()) {
+            vm.op_stack.push(*result);
         } else {
-            throw RuntimeError("Attribute not found: " + attr_name);
+            throw RuntimeError("Attribute not found: " + attr_name + " in module: " + module->name);
         }
+    }
+
+    Value ModuleObject::import(const std::string& module_name) {
+        auto existing = get_attr(module_name);
+        if (existing.has_value()) {
+            return *existing;
+        }
+
+        std::vector<std::string> path_components;
+        std::string current_component;
+        for (char c : module_name) {
+            if (c == '.') {
+                if (!current_component.empty()) {
+                    path_components.push_back(current_component);
+                    current_component.clear();
+                }
+            } else {
+                current_component += c;
+            }
+        }
+        if (!current_component.empty()) {
+            path_components.push_back(current_component);
+        }
+
+        if (path_components.empty()) {
+            throw RuntimeError("Invalid module name: " + module_name);
+        }
+
+        std::vector<std::filesystem::path> search_paths = {
+            std::filesystem::current_path(),
+            std::filesystem::current_path() / "modules",
+            std::filesystem::current_path() / "lib",
+            std::filesystem::current_path() / "src"
+        };
+
+        for (const auto& base_path : search_paths) {
+            std::filesystem::path module_path = base_path;
+            for (size_t i = 0; i < path_components.size() - 1; ++i) {
+                module_path /= path_components[i];
+            }
+            
+            std::string last_component = path_components.back();
+            std::filesystem::path file_path = module_path / (last_component + ".lm");
+            std::filesystem::path dir_path = module_path / last_component / "main.lm";
+
+            if (std::filesystem::exists(file_path)) {
+                std::ifstream file(file_path);
+                if (file.is_open()) {
+                    std::string code_str((std::istreambuf_iterator<char>(file)),
+                                     std::istreambuf_iterator<char>());
+                    auto module_obj = std::make_shared<ModuleObject>(code_str);
+                    module_obj->name = last_component;
+                    module_obj->full_name = this->full_name.empty() ? module_name : this->full_name + "." + module_name;
+                    set_attr(last_component, Value(module_obj));
+                    return Value(module_obj);
+                }
+            } else if (std::filesystem::exists(dir_path)) {
+                std::ifstream file(dir_path);
+                if (file.is_open()) {
+                    std::string code_str((std::istreambuf_iterator<char>(file)),
+                                     std::istreambuf_iterator<char>());
+                    auto module_obj = std::make_shared<ModuleObject>(code_str);
+                    module_obj->name = last_component;
+                    module_obj->full_name = this->full_name.empty() ? module_name : this->full_name + "." + module_name;
+                    set_attr(last_component, Value(module_obj));
+                    return Value(module_obj);
+                }
+            }
+        }
+
+        throw RuntimeError("Module not found: " + module_name);
     }
 
 
@@ -339,8 +385,17 @@ namespace irgen {
 
     template <StringType string>
     ModuleObject::ModuleObject(string code) : is_user(true) {
-        auto codes = lm::irgen::Generator(parse(code)).gen();
-        vm.code.insert(vm.code.begin(), codes.begin(), codes.end());
+        const auto codes = lm::irgen::Generator(parse(code)).gen();
+        owner_vm = new VM(codes);
+        owner_vm->run();
+        
+        for (const auto& [name, value] : owner_vm->main_module->exports) {
+            exports[name] = value;
+        }
+        
+        for (const auto& [name, submod] : owner_vm->main_module->submodules) {
+            submodules[name] = submod;
+        }
     }
 }
 
