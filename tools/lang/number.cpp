@@ -83,8 +83,9 @@ Number::BigNum::BigNum(const std::string& str, int base) {
     }
     
     std::vector<mp_byte_t> digits(num_str.size());
+    // lammp_from_str_ 期望最低有效位在前，所以需要反转字符串
     for (size_t i = 0; i < num_str.size(); ++i) {
-        char c = num_str[i];
+        char c = num_str[num_str.size() - 1 - i];
         if (c >= '0' && c <= '9') {
             digits[i] = c - '0';
         } else if (c >= 'a' && c <= 'f') {

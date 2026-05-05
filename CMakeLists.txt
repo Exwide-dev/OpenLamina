@@ -1,7 +1,7 @@
 # 修正 CMake 最低版本要求
 cmake_minimum_required(VERSION 3.15)
 project(OpenLamina
-        VERSION 0.1.2
+        VERSION 0.1.3
         DESCRIPTION "OpenLamina"
 )
 
@@ -67,6 +67,8 @@ add_executable(
         src/compiler/module_compiler.hpp
         src/compiler/module_manager.cpp
         src/compiler/module_manager.hpp
+        tools/cli.cpp
+        tools/cli.hpp
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")

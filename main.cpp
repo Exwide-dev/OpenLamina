@@ -13,6 +13,7 @@
 #include "repl/repl.hpp"
 #include "tools/error.hpp"
 #include "parser/ast.hpp"
+#include "tools/cli.hpp"
 
 
 // 存储解析结果
@@ -27,49 +28,6 @@ extern "C" {
 
 // 打印 AST 节点
 
-
-std::string get_compiler() {
-#if defined(__clang__)
-    return "Clang " + std::to_string(__clang_major__) + "." + std::to_string(__clang_minor__);
-#elif defined(__GNUC__)
-    return "GCC " + std::to_string(__GNUC__) + "." + std::to_string(__GNUC_MINOR__);
-#elif defined(_MSC_VER)
-    return "MSVC " + std::to_string(_MSC_VER);
-#else
-    return "Unknown compiler";
-#endif
-}
-
-// 编译日期和时间（自动获取）
-#define OPENLAMINA_BUILD_DATE __DATE__
-#define OPENLAMINA_BUILD_TIME __TIME__
-
-// Git 提交哈希（需要在编译时通过 CMake 传入）
-#ifndef OPENLAMINA_BUILD_HASH
-#define OPENLAMINA_BUILD_HASH ""
-#endif
-
-namespace {
-    std::string welcome = std::format(
-        R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {} {}
-Powered by Flex and Bison
-Contact OpenLamina-Developing for more information)",
-        OPENLAMINA_VERSION_MAJOR,
-        OPENLAMINA_VERSION_MINOR,
-        OPENLAMINA_VERSION_PATCH,
-        get_compiler(),
-#if defined(__x86_64__) || defined(_M_X64)
-        "x86_64"
-#elif defined(__aarch64__) || defined(_M_ARM64)
-        "ARM64"
-#else
-        "Unknown"
-#endif
-        ,OPENLAMINA_BUILD_DATE,
-        OPENLAMINA_BUILD_TIME,
-        OPENLAMINA_BUILD_HASH
-    );
-}
 void test_code1() {
     irgen::VM vm;
     const std::vector<irgen::Opcode> test_code = {
@@ -235,36 +193,30 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     delete got_ast;
 }
 
-[[noreturn]] int main() {
+int main(const int argc, char* argv[]) {
+#ifdef DEBUG
     std::cout << "Testing module system..." << std::endl;
     test_module_system();
-    //std::cout << "Testing fib speed..." << std::endl;
-    //test_fib_speed();
-    
+    std::cout << "Testing fib speed..." << std::endl;
+    test_fib_speed();
     std::cout << "\nPress Enter to continue to REPL...";
     std::cin.get();
+#endif
+    auto args = cli::parse_args(argc, argv);
 
-
-    std::cout << welcome << std::endl;
-    auto repl = repl::REPL();
-    while (true) {
-        try {
-            if (repl.exec_input([&]() -> std::string {
-               std::cout << ">>> ";
-               std::string line;
-               std::getline(std::cin, line);
-               return line;
-           })) {
-                if (not repl.vm.op_stack.empty()) {
-                    auto top = repl.vm.op_stack.top();
-                    if (not top.isNone()) std::cout << top << std::endl;
-                }
-            }
-        } catch (const RuntimeError &e) {
-            std::cout << "RuntimeError: " << e.what() << std::endl;
-            repl.vm.pc = repl.vm.code.size();
-        } catch (const SyntaxError &e) {
-            std::cout << "SyntaxError: " << e.what() << std::endl;
-        }
+    if (args.show_help) {
+        cli::show_help();
+        return EXIT_SUCCESS;
     }
+
+    if (args.show_version) {
+        cli::show_version();
+        return EXIT_SUCCESS;
+    }
+
+    if (!args.file_path.empty()) {
+        return cli::run_file(args.file_path, args.script_args);
+    }
+
+    return cli::run_repl();
 }
