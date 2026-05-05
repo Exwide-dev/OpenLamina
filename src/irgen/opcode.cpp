@@ -14,6 +14,16 @@ namespace irgen {
             case Type::Bool: return (asBool() ? "true" : "false");
             case Type::String: return "\"" + asString() + "\"";
             case Type::Function: return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
+            case Type::Vector: {
+                std::string result = "vec[";
+                const auto& elements = asVector();
+                for (size_t i = 0; i < elements.size(); ++i) {
+                    if (i > 0) result += ", ";
+                    result += elements[i].toString();
+                }
+                result += "]";
+                return result;
+            }
             default: return "<__UNKNOWN_ValueType>";
         }
     }
@@ -301,6 +311,38 @@ namespace irgen {
         } else {
             throw RuntimeError("Attribute not found: " + attr_name + " in module: " + module->name);
         }
+    }
+
+    inline void VEC_NEW::emit(VM &vm) const {
+        size_t element_count = static_cast<size_t>(operands[0].asInt());
+        std::vector<Value> elements;
+        elements.reserve(element_count);
+        
+        for (size_t i = 0; i < element_count; ++i) {
+            elements.push_back(vm.op_stack.popValue());
+        }
+        
+        // std::reverse(elements.begin(), elements.end());
+        
+        vm.op_stack.push(Value(std::move(elements)));
+    }
+
+    inline void INDEX::emit(VM &vm) const {
+        Value index = vm.op_stack.popValue();
+        Value obj = vm.op_stack.popValue();
+        
+        if (!obj.isVector()) {
+            throw RuntimeError("INDEX requires a vector object");
+        }
+        
+        ptrdiff_t idx = index.asInt();
+        const auto& vec = obj.asVector();
+        
+        if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+            throw RuntimeError("Index out of range");
+        }
+        
+        vm.op_stack.push(vec[static_cast<size_t>(idx)]);
     }
 
     Value ModuleObject::import(const std::string& module_name) {

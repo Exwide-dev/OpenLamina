@@ -30,6 +30,13 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::String) {
             const auto* string_node = dynamic_cast<lmx::StringNode*>(node);
             code.emplace_back(::irgen::PUSH(::irgen::Value(string_node->value)));
+        } else if (node->kind == lmx::ASTNodeType::Vector) {
+            const auto* vec_node = dynamic_cast<lmx::VectorNode*>(node);
+            for (auto elem : std::ranges::reverse_view(vec_node->elements)) {
+                auto elem_code = gen_code(elem, loop_stack);
+                code.insert(code.end(), elem_code.begin(), elem_code.end());
+            }
+            code.emplace_back(::irgen::VEC_NEW(vec_node->elements.size()));
         } else if (node->kind == lmx::ASTNodeType::Binary) {
             const auto* bin_node = dynamic_cast<lmx::BinaryNode*>(node);
             auto left_code = gen_code(bin_node->left, loop_stack);
@@ -305,6 +312,13 @@ namespace lm::irgen {
             auto obj_code = gen_code(member_node->object, loop_stack);
             code.insert(code.end(), obj_code.begin(), obj_code.end());
             code.emplace_back(::irgen::GETATTR(::irgen::Value(member_node->member)));
+        } else if (node->kind == lmx::ASTNodeType::IndexAccess) {
+            const auto* index_node = dynamic_cast<lmx::IndexAccessNode*>(node);
+            auto obj_code = gen_code(index_node->object, loop_stack);
+            auto index_code = gen_code(index_node->index, loop_stack);
+            code.insert(code.end(), obj_code.begin(), obj_code.end());
+            code.insert(code.end(), index_code.begin(), index_code.end());
+            code.emplace_back(::irgen::INDEX());
         } else if (node->kind == lmx::ASTNodeType::Program) {
             const auto* program_node = dynamic_cast<lmx::ProgramASTNode*>(node);
             for (const auto& stmt : program_node->stmts) {

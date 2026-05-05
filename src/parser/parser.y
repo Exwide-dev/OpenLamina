@@ -87,6 +87,9 @@
 %token <string_val> KW_IMPORT
 %token <string_val> KW_USE
 %token <string_val> KW_AS
+%token <string_val> KW_VEC
+%token <string_val> LBRACKET
+%token <string_val> RBRACKET
 
 %type <ast_node> program
 %type <ast_node> stmt
@@ -113,6 +116,7 @@
 %type <ast_list> block_stmt_list
 %type <ast_list> param_list  // 新增：参数列表
 %type <ast_list> arg_list  // 新增：实参列表
+%type <ast_list> vec_element_list  // 向量元素列表
 %type <ast_node> import_stmt
 %type <ast_node> use_stmt
 %type <name_parts> qualified_name
@@ -468,6 +472,11 @@ postfix_expr:
         LOG("postfix_expr (member access) parsed successfully");
         delete $3;
     }
+    | postfix_expr LBRACKET expr RBRACKET {
+        LOG("Parsing postfix_expr: index access");
+        $$ = new IndexAccessNode($1, $3);
+        LOG("postfix_expr (index access) parsed successfully");
+    }
     | KW_DO LPAREN param_list RPAREN block_stmt {
         /*KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
                   LOG("Parsing func_decl: " + *$2);
@@ -533,6 +542,29 @@ factor:
     | LPAREN expr RPAREN { 
         LOG("Parsing factor: (expr)");
         $$ = $2; 
+    }
+    | KW_VEC LBRACKET vec_element_list RBRACKET {
+        LOG("Parsing factor: vector literal");
+        $$ = new VectorNode(*$3);
+        LOG("vector literal parsed successfully");
+        delete $3;
+    }
+    ;
+
+vec_element_list:
+    /* empty */ {
+        LOG("Creating empty vec_element_list");
+        $$ = new std::vector<ASTNode*>();
+    }
+    | expr {
+        LOG("Creating vec_element_list with one element");
+        $$ = new std::vector<ASTNode*>();
+        $$->push_back($1);
+    }
+    | vec_element_list OPER_COMMA expr {
+        LOG("Adding element to vec_element_list");
+        $1->push_back($3);
+        $$ = $1;
     }
     ;
 

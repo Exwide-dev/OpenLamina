@@ -67,6 +67,8 @@ namespace irgen {
     class FINDMOD;
     class ATTR;
     class GETATTR;
+    class VEC_NEW;
+    class INDEX;
 
     #include <vector>
 #include <stdexcept>
@@ -320,7 +322,9 @@ namespace irgen {
         RET,
         FINDMOD,
         ATTR,
-        GETATTR
+        GETATTR,
+        VEC_NEW,
+        INDEX
     >;
 
     struct FunctionObject {
@@ -340,7 +344,8 @@ namespace irgen {
             Bool,
             String,
             Function,
-            Module
+            Module,
+            Vector
         };
 
     private:
@@ -351,7 +356,8 @@ namespace irgen {
             std::string,
             FunctionType,
             std::shared_ptr<FunctionObject>,
-            std::shared_ptr<ModuleObject>
+            std::shared_ptr<ModuleObject>,
+            std::vector<Value>
         > data;
 
     public:
@@ -385,6 +391,12 @@ namespace irgen {
 
         explicit Value(std::shared_ptr<ModuleObject> value)
             : type(Type::Module), data(value) {}
+
+        explicit Value(std::vector<Value> value)
+            : type(Type::Vector), data(std::move(value)) {}
+
+        explicit Value(std::initializer_list<Value> init)
+            : type(Type::Vector), data(std::vector<Value>(init)) {}
 
         Value operator()(VM &vm, const std::vector<Value> &args) const {
             if (type != Type::Function) {
@@ -429,6 +441,20 @@ return std::get<CppType>(data); \
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
         DEFINE_AS_METHOD(Module, Module, std::shared_ptr<ModuleObject>, "a module")
+
+        [[nodiscard]] const std::vector<Value>& asVector() const {
+            if (type != Type::Vector) {
+                throw RuntimeError("Value is not a vector");
+            }
+            return std::get<std::vector<Value>>(data);
+        }
+
+        [[nodiscard]] std::vector<Value>& asVector() {
+            if (type != Type::Vector) {
+                throw RuntimeError("Value is not a vector");
+            }
+            return std::get<std::vector<Value>>(data);
+        }
 
         Value operator+(const Value& other) const {
             if (type == Type::Number && other.type == Type::Number) {
@@ -568,6 +594,7 @@ return std::get<CppType>(data); \
         [[nodiscard]] bool isBool() const { return type == Type::Bool; }
         [[nodiscard]] bool isString() const { return type == Type::String; }
         [[nodiscard]] bool isFunction() const { return type == Type::Function; }
+        [[nodiscard]] bool isVector() const { return type == Type::Vector; }
 
         friend std::ostream &operator<<(std::ostream &os, const Value &value) {
             os << value.toString();
@@ -1056,6 +1083,28 @@ return std::get<CppType>(data); \
         explicit GETATTR(const Value& attr_name) {
             operands.emplace_back(attr_name);
         }
+
+        void emit(VM &vm) const;
+    };
+
+    class VEC_NEW {
+    public:
+        COMMON(VEC_NEW)
+        std::vector<Value> operands;
+
+        explicit VEC_NEW(const size_t element_count) {
+            operands.emplace_back(static_cast<ptrdiff_t>(element_count));
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    class INDEX {
+    public:
+        COMMON(INDEX)
+        std::vector<Value> operands;
+
+        INDEX() = default;
 
         void emit(VM &vm) const;
     };

@@ -52,8 +52,12 @@ namespace lexer {
             case KW_IMPORT: return "KW_IMPORT";
             case KW_USE: return "KW_USE";
             case KW_AS: return "KW_AS";
+            case KW_VEC: return "KW_VEC";
+            case LBRACKET: return "LBRACKET";
+            case RBRACKET: return "RBRACKET";
             case NUM_LITERAL: return "NUM_LITERAL";
             case IDENTIFIER: return "IDENTIFIER";
+            case STRING_LITERAL: return "STRING_LITERAL";
             case 0: return "EOF";
             default: return "UNKNOWN";
         }

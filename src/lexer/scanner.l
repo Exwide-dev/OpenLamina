@@ -80,6 +80,9 @@ using namespace lexer;
 "use"          { addToken(KW_USE, yytext); yylval.string_val = new std::string(yytext); return KW_USE; }
 "as"           { addToken(KW_AS, yytext); yylval.string_val = new std::string(yytext); return KW_AS; }
 "."            { addToken(OPER_DOT, yytext); yylval.string_val = new std::string(yytext); return OPER_DOT; }
+"["            { addToken(LBRACKET, yytext); yylval.string_val = new std::string(yytext); return LBRACKET; }
+"]"            { addToken(RBRACKET, yytext); yylval.string_val = new std::string(yytext); return RBRACKET; }
+"vec"          { addToken(KW_VEC, yytext); yylval.string_val = new std::string(yytext); return KW_VEC; }
 
 [0-9][0-9_]*  {
     std::string num = yytext;

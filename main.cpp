@@ -232,13 +232,13 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
 }
 
 [[noreturn]] int main() {
-    std::cout << "Testing module system..." << std::endl;
+    /*std::cout << "Testing module system..." << std::endl;
     test_module_system();
     std::cout << "Testing fib speed..." << std::endl;
     test_fib_speed();
     
     std::cout << "\nPress Enter to continue to REPL...";
-    std::cin.get();
+    std::cin.get();*/
 
 
     std::cout << welcome << std::endl;

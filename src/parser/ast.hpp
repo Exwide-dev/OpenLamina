@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <utility>
 #include <vector>
@@ -12,7 +12,7 @@ struct UseItem {
     UseItem(std::string n, std::string a) : name(std::move(n)), alias(std::move(a)) {}
 };
 
-// AST鑺傜偣绫诲瀷鏋氫妇
+// AST节点类型枚举
 enum class ASTNodeType {
     Unknown,
     BlockStmt,
@@ -42,7 +42,9 @@ enum class ASTNodeType {
     Program,
     VMCall,
     Import,
-    Use
+    Use,
+    Vector,
+    IndexAccess
 };
 
 // 鍓嶅悜澹版槑
@@ -110,6 +112,18 @@ struct StringNode final : ExprNode {
     ~StringNode() override = default;
 };
 
+struct VectorNode final : ExprNode {
+    std::vector<ASTNode*> elements;
+
+    explicit VectorNode(std::vector<ASTNode*> e) 
+        : ExprNode(ASTNodeType::Vector), elements(std::move(e)) {}
+    ~VectorNode() override {
+        for (const auto elem : elements) {
+            delete elem;
+        }
+    }
+};
+
 struct VarRefNode : ExprNode {
     std::string name;
 
@@ -163,6 +177,18 @@ struct MemberAccessNode final : ExprNode {
         : ExprNode(ASTNodeType::MemberAccess), object(obj), member(std::move(mem)) {}
     ~MemberAccessNode() override {
         delete object;
+    }
+};
+
+struct IndexAccessNode final : ExprNode {
+    ExprNode* object;
+    ExprNode* index;
+
+    IndexAccessNode(ExprNode* obj, ExprNode* idx)
+        : ExprNode(ASTNodeType::IndexAccess), object(obj), index(idx) {}
+    ~IndexAccessNode() override {
+        delete object;
+        delete index;
     }
 };
 
