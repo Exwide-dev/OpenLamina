@@ -7,6 +7,7 @@ project(OpenLamina
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(BUILD_SHARED_LIBS ON)
 
 # ==============================================
 # 1. 配置 Flex & Bison
@@ -122,11 +123,7 @@ FetchContent_MakeAvailable(LAMMP)
 # 链接 LammpCore 动态库
 target_link_libraries(OpenLamina PRIVATE LammpCore)
 
-# 如果需要使用 LAMMP 的头文件
-target_include_directories(OpenLamina PRIVATE
-        ${LAMMP_SOURCE_DIR}/include
-)
-
+# 复制 DLL 到输出目录
 if (WIN32 AND TARGET LammpCore)
     add_custom_command(TARGET OpenLamina POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -135,3 +132,8 @@ if (WIN32 AND TARGET LammpCore)
             COMMENT "Copying LammpCore.dll to output directory"
     )
 endif ()
+
+# 如果需要使用 LAMMP 的头文件
+target_include_directories(OpenLamina PRIVATE
+        ${LAMMP_SOURCE_DIR}/include
+)
