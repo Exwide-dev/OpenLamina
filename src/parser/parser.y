@@ -223,11 +223,10 @@ var_decl:
 
 // 新增：赋值语句规则
 assign_stmt:
-    IDENTIFIER ASSIGN expr {
-        LOG("Parsing assign_stmt: " + *$1 + " = ...");
-        $$ = new AssignNode(*$1, $3);
+    expr ASSIGN expr {
+        LOG("Parsing assign_stmt: ... = ...");
+        $$ = new AssignNode($1, $3);
         LOG("assign_stmt parsed successfully");
-        delete $1;
     }
     ;
 

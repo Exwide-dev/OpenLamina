@@ -69,6 +69,9 @@ namespace irgen {
     class GETATTR;
     class VEC_NEW;
     class INDEX;
+    class LOAD_REF;
+    class INDEX_REF;
+    class STORE_ARG;
 
     #include <vector>
 #include <stdexcept>
@@ -324,7 +327,10 @@ namespace irgen {
         ATTR,
         GETATTR,
         VEC_NEW,
-        INDEX
+        INDEX,
+        LOAD_REF,
+        INDEX_REF,
+        STORE_ARG
     >;
 
     struct FunctionObject {
@@ -334,6 +340,18 @@ namespace irgen {
     };
 
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
+
+    struct Ref {
+        enum class Kind { Direct, VectorElem } kind;
+        VM& vm;
+        size_t pool_index;
+        size_t elem_index;
+
+        explicit Ref(size_t idx, VM& vm)
+            : kind(Kind::Direct), pool_index(idx), elem_index(0), vm(vm) {}
+        Ref(size_t pool_idx, size_t elem_idx, VM& vm)
+            : kind(Kind::VectorElem), pool_index(pool_idx), elem_index(elem_idx), vm(vm) {}
+    };
 
     // Value 类型，支持多种类型的值
     class Value {
@@ -345,7 +363,8 @@ namespace irgen {
             String,
             Function,
             Module,
-            Vector
+            Vector,
+            Reference
         };
 
     private:
@@ -357,7 +376,8 @@ namespace irgen {
             FunctionType,
             std::shared_ptr<FunctionObject>,
             std::shared_ptr<ModuleObject>,
-            std::vector<Value>
+            std::vector<Value>,
+            std::shared_ptr<Ref>
         > data;
 
     public:
@@ -372,9 +392,6 @@ namespace irgen {
         template<IntegerType T>
         explicit Value(T value)
             : type(Type::Number), data(lang::lammp::Number(static_cast<int64_t>(value))) {}
-
-
-
 
         template<StringType T>
         explicit Value(T value)
@@ -395,8 +412,11 @@ namespace irgen {
         explicit Value(std::vector<Value> value)
             : type(Type::Vector), data(std::move(value)) {}
 
-        explicit Value(std::initializer_list<Value> init)
-            : type(Type::Vector), data(std::vector<Value>(init)) {}
+        Value(const std::initializer_list<Value> init)
+            : type(Type::Vector), data(std::vector(init)) {}
+
+        explicit Value(std::shared_ptr<Ref> ref)
+            : type(Type::Reference), data(std::move(ref)) {}
 
         Value operator()(VM &vm, const std::vector<Value> &args) const {
             if (type != Type::Function) {
@@ -454,6 +474,13 @@ return std::get<CppType>(data); \
                 throw RuntimeError("Value is not a vector");
             }
             return std::get<std::vector<Value>>(data);
+        }
+
+        [[nodiscard]] const std::shared_ptr<Ref>& asReference() const {
+            if (type != Type::Reference) {
+                throw RuntimeError("Value is not a reference");
+            }
+            return std::get<std::shared_ptr<Ref>>(data);
         }
 
         Value operator+(const Value& other) const {
@@ -573,14 +600,14 @@ return std::get<CppType>(data); \
             if (type != Type::Function) {
                 throw RuntimeError("Value is not a function");
             }
-            if (std::holds_alternative<std::shared_ptr<FunctionObject> >(data)) {
+            if (std::holds_alternative<std::shared_ptr<FunctionObject>>(data)) {
                 return std::get<std::shared_ptr<FunctionObject>>(data);
             }
             throw RuntimeError("Value is not a user-defined function");
         }
 
         [[nodiscard]] bool isUserFunction() const {
-            return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject> >(data);
+            return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject>>(data);
         }
 
         [[nodiscard]] bool isBuiltinFunction() const {
@@ -595,6 +622,7 @@ return std::get<CppType>(data); \
         [[nodiscard]] bool isString() const { return type == Type::String; }
         [[nodiscard]] bool isFunction() const { return type == Type::Function; }
         [[nodiscard]] bool isVector() const { return type == Type::Vector; }
+        [[nodiscard]] bool isReference() const { return type == Type::Reference; }
 
         friend std::ostream &operator<<(std::ostream &os, const Value &value) {
             os << value.toString();
@@ -938,9 +966,7 @@ return std::get<CppType>(data); \
         COMMON(STORE)
         std::vector<Value> operands;
 
-        explicit STORE(const std::string &name) {
-            operands.emplace_back(name);
-        }
+        STORE() = default;
 
         void emit(VM &vm) const;
     };
@@ -1109,6 +1135,40 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    class LOAD_REF {
+    public:
+        COMMON(LOAD_REF)
+        std::vector<Value> operands;
+
+        explicit LOAD_REF(const std::string& name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    class INDEX_REF {
+    public:
+        COMMON(INDEX_REF)
+        std::vector<Value> operands;
+
+        INDEX_REF() = default;
+
+        void emit(VM &vm) const;
+    };
+
+    class STORE_ARG {
+    public:
+        COMMON(STORE_ARG)
+        std::vector<Value> operands;
+
+        explicit STORE_ARG(const std::string& name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
     class StringPool {
         std::unordered_map<std::string, size_t> string_to_id;
         std::vector<std::string> id_to_string;
@@ -1166,12 +1226,13 @@ return std::get<CppType>(data); \
     public:
         Stack<Value> op_stack{}, call_stack{};
         std::vector<Opcode> code{};
-        std::vector<SymbolTable> symbol_stack{};
+        std::vector<SymbolTable> symbol_stack{SymbolTable()};
         Cache cache{};
         std::unordered_map<size_t, size_t> label_table{};
         size_t pc = 0;
         size_t label_counter = 0;
         std::shared_ptr<ModuleObject> main_module;
+        std::vector<Value> object_pool;
 
         void init_builtins();
 
@@ -1211,6 +1272,7 @@ return std::get<CppType>(data); \
             for (const auto& [id, val] : symbols.symbols) {
                 exports[g_string_pool.get_string(id)] = val;
             }
+            init();
         }
 
         explicit ModuleObject(const std::vector<SymbolTable> &symbol_stack) : is_user(true) {
@@ -1219,26 +1281,38 @@ return std::get<CppType>(data); \
                     exports[g_string_pool.get_string(id)] = val;
                 }
             }
+            init();
         }
 
         explicit ModuleObject(std::string n, VM* vm) 
-            : is_user(true), name(std::move(n)), full_name(name), owner_vm(vm) {}
+            : is_user(true), name(std::move(n)), full_name(name), owner_vm(vm) {
+            init();
+        }
 
-        void init() const {
-            if (owner_vm) {
-                owner_vm->run();
-            }
+        void init() {
+            LOG("VM INIT!");
+            // 不要在这里调用 run()，避免在构造阶段执行 VM
         }
 
         std::optional<Value> get_attr(const std::string& attrname) const {
-            const auto it = exports.find(attrname);
-            if (it != exports.end()) {
+            LOG("Finding " + attrname);
+
+            /*LOG("exports: ");
+            for (const auto& [atname, val] : exports) {
+                LOG(atname << " : " << val);
+            }*/
+
+            if (exports.contains(attrname)) {
+                const auto it = exports.find(attrname);
+                LOG("Found it in itself");
                 return it->second;
             }
+            if (submodules.contains(attrname)) {
             const auto mod_it = submodules.find(attrname);
-            if (mod_it != submodules.end()) {
+                LOG("Found it in submodule");
                 return Value(mod_it->second);
             }
+            LOG("Not found it");
             return std::nullopt;
         }
 

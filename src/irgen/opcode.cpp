@@ -24,6 +24,20 @@ namespace irgen {
                 result += "]";
                 return result;
             }
+            case Type::Reference: {
+                auto t = asReference();
+                if (t->pool_index < t->vm.object_pool.size()) {
+                    const auto& ref = t->vm.object_pool[t->pool_index];
+                    if (t->kind == Ref::Kind::VectorElem) {
+                        if (ref.isVector() && t->elem_index < ref.asVector().size()) {
+                            return ref.asVector()[t->elem_index].toString();
+                        }
+                        return std::format("<ref:pool[{}][{}]>", t->pool_index, t->elem_index);
+                    }
+                    return ref.toString();
+                }
+                return std::format("<ref:pool[{}]>", t->pool_index);
+            }
             default: return "<__UNKNOWN_ValueType>";
         }
     }
@@ -39,15 +53,17 @@ namespace irgen {
     // 初始化内置函数
     VM::VM() {
         main_module = std::make_shared<ModuleObject>("__main__", this);
+        object_pool.resize(1024);
         init_builtins();
     }
 
     VM::VM(std::vector<Opcode> c) : code(std::move(c)) {
         main_module = std::make_shared<ModuleObject>("__main__", this);
+        object_pool.resize(1024);
         init_builtins();
     }
 
-    void VM::init_builtins() {
+    void irgen::VM::init_builtins() {
         SymbolTable temp_symbols;
         lang::init_builtins(temp_symbols);
         
@@ -61,14 +77,14 @@ namespace irgen {
         main_module->set_attr("std", Value(std_module));
     }
 
-    void VM::run() {
+    void irgen::VM::run() {
         try {
             scan_labels();
             for (; pc < code.size(); pc++) {
                 std::visit([&](auto &op) -> void {
                     LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
                     op.emit(*this);
-                    LOG("VM " << op_stack.toString());
+                    LOG("irgen::VM " << op_stack.toString());
                 }, code[pc]);
             }
             if (!op_stack.empty()) {
@@ -82,140 +98,153 @@ namespace irgen {
         }
     }
 
-    std::optional<Value> VM::get_symbol(const std::string& name) const {
+    std::optional<Value> irgen::VM::get_symbol(const std::string& name) const {
         return main_module->get_attr(name);
     }
 
-    void VM::set_symbol(const std::string& name, const Value& value) {
+    void irgen::VM::set_symbol(const std::string& name, const Value& value) {
         main_module->set_attr(name, value);
     }
 
-    inline void PUSH::emit(VM &vm) const {
+    inline void PUSH::emit(irgen::VM &vm) const {
         vm.op_stack.push(operands[0]);
     }
 
-    inline void ADD::emit(VM &vm) {
+    inline void ADD::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a + b);
     }
 
-    inline void MUL::emit(VM &vm) {
+    inline void MUL::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a * b);
     }
 
-    inline void SUB::emit(VM &vm) {
+    inline void SUB::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a - b);
     }
 
-    inline void DIV::emit(VM &vm) {
+    inline void DIV::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a / b);
     }
 
-    inline void NEG::emit(VM &vm) {
+    inline void NEG::emit(irgen::VM &vm) {
         auto value = vm.op_stack.popValue();
         vm.op_stack.push(-value);
     }
 
-    inline void NOT::emit(VM &vm) {
+    inline void NOT::emit(irgen::VM &vm) {
         auto value = vm.op_stack.popValue();
         vm.op_stack.push(!value);
     }
 
-    inline void AND::emit(VM &vm) {
+    inline void AND::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a && b);
     }
 
-    inline void OR::emit(VM &vm) {
+    inline void OR::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a || b);
     }
 
-    inline void EQ::emit(VM &vm) {
+    inline void EQ::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(Value(a == b));
     }
 
-    inline void NEQ::emit(VM &vm) {
+    inline void NEQ::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(Value(a != b));
     }
 
-    inline void LT::emit(VM &vm) {
+    inline void LT::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a < b);
     }
 
-    inline void LTE::emit(VM &vm) {
+    inline void LTE::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a <= b);
     }
 
-    inline void GT::emit(VM &vm) {
+    inline void GT::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a > b);
     }
 
-    inline void GTE::emit(VM &vm) {
+    inline void GTE::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a >= b);
     }
 
-    inline void STORE::emit(VM &vm) const {
-        const auto& value = vm.op_stack.popValue();
-        const std::string var_name = g_string_pool.get_string(operands[0].asInt());
-        const auto var_id = static_cast<size_t>(operands[0].asInt());
-
-        vm.cache.add(var_id, value);
+    inline void STORE::emit(irgen::VM &vm) const {
+        Value value = vm.op_stack.popValue();
+        Value ref = vm.op_stack.popValue();
+        
+        if (!ref.isReference()) {
+            throw RuntimeError("STORE requires a reference on the stack");
+        }
+        
+        const auto& ref_ptr = ref.asReference();
+        const auto var_id = ref_ptr->pool_index;
+        
+        if (vm.symbol_stack.empty()) {
+            throw RuntimeError("No symbol table available");
+        }
+        
+        while (var_id >= vm.object_pool.size()) {
+            vm.object_pool.push_back(Value());
+        }
+        vm.object_pool[var_id] = value;
+        
+        vm.symbol_stack.back().set(var_id, value);
+        
+        // 同时添加到 main_module->exports 中
+        const std::string var_name = g_string_pool.get_string(var_id);
         vm.main_module->set_attr(var_name, value);
     }
 
-    inline void LOAD::emit(VM &vm) const {
+    inline void LOAD::emit(irgen::VM &vm) const {
         const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
         const auto var_id = static_cast<size_t>(operands[0].asInt());
-
-        if (const auto found = vm.cache.get(var_id)) {
-            vm.op_stack.push(*found);
-            return;
-        }
-
-        auto result = vm.main_module->get_attr(var_name);
-        if (result.has_value()) {
-            vm.op_stack.push(*result);
-            return;
-        }
 
         for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
             const auto& symbol_table = *it;
             if (symbol_table.exists(var_id)) {
                 auto k = symbol_table.get(var_id);
-                if (k.has_value()) vm.op_stack.push(k.value());
-                else throw RuntimeError("Var not found: " + std::to_string(var_id));
-                return;
+                if (k.has_value()) {
+                    vm.op_stack.push(k.value());
+                    return;
+                }
             }
         }
 
-        throw RuntimeError("Variable not found: " + g_string_pool.get_string(var_id));
+        if (auto result = vm.main_module->get_attr(var_name)) {
+            vm.op_stack.push(*result);
+            return;
+        }
+
+        throw RuntimeError("Variable not found: " + var_name);
     }
 
-    inline void LABEL::emit(VM &) {}
+    inline void LABEL::emit(irgen::VM &) {}
 
-    inline void GOTO::emit(VM &vm) const {
+    inline void GOTO::emit(irgen::VM &vm) const {
         const auto label_id = static_cast<size_t>(operands[0].asInt());
         if (not vm.label_table.contains(label_id)) {
             throw RuntimeError("Unknown label: " + std::to_string(label_id));
@@ -223,25 +252,27 @@ namespace irgen {
         vm.pc = vm.label_table[label_id];
     }
 
-    inline void IFTRUEGOTO::emit(VM &vm) const {
+    inline void IFTRUEGOTO::emit(irgen::VM &vm) const {
         if (vm.op_stack.popValue().asBool()) {
             GOTO(operands[0]).emit(vm);
         }
     }
 
-    inline void ENTER_SCOPE::emit(VM &vm) {
+    inline void ENTER_SCOPE::emit(irgen::VM &vm) {
+        LOG("Enter scope");
         vm.symbol_stack.emplace_back();
         vm.cache.enter_scope();
     }
 
-    inline void LEAVE_SCOPE::emit(VM &vm) {
+    inline void LEAVE_SCOPE::emit(irgen::VM &vm) {
+        LOG("Leave scope");
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.pop_back();
         }
         vm.cache.leave_scope();
     }
 
-    inline void CALL::emit(VM &vm) const {
+    inline void CALL::emit(irgen::VM &vm) const {
         Value func = vm.op_stack.popValue();
 
         if (!func.isFunction()) {
@@ -280,7 +311,7 @@ namespace irgen {
         }
     }
 
-    inline void FINDMOD::emit(VM &vm) {
+    inline void FINDMOD::emit(irgen::VM &vm) {
         const std::string module_name = g_string_pool.get_string(operands[0].asInt());
 
         if (module_name.empty()) {
@@ -291,7 +322,7 @@ namespace irgen {
         vm.op_stack.push(result);
     }
 
-    inline void ATTR::emit(VM &vm) {
+    inline void ATTR::emit(irgen::VM &vm) {
 
     }
 
@@ -309,11 +340,11 @@ namespace irgen {
         if (result.has_value()) {
             vm.op_stack.push(*result);
         } else {
-            throw RuntimeError("Attribute not found: " + attr_name + " in module: " + module->name);
+            throw RuntimeError("Attribute not found: " + attr_name + ", in module: " + module->name);
         }
     }
 
-    inline void VEC_NEW::emit(VM &vm) const {
+    inline void VEC_NEW::emit(irgen::VM &vm) const {
         size_t element_count = static_cast<size_t>(operands[0].asInt());
         std::vector<Value> elements;
         elements.reserve(element_count);
@@ -327,7 +358,7 @@ namespace irgen {
         vm.op_stack.push(Value(std::move(elements)));
     }
 
-    inline void INDEX::emit(VM &vm) const {
+    inline void INDEX::emit(irgen::VM &vm) const {
         Value index = vm.op_stack.popValue();
         Value obj = vm.op_stack.popValue();
         
@@ -343,6 +374,66 @@ namespace irgen {
         }
         
         vm.op_stack.push(vec[static_cast<size_t>(idx)]);
+    }
+
+    inline void LOAD_REF::emit(VM &vm) const {
+        const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
+        const auto pool_index = static_cast<size_t>(operands[0].asInt());
+        
+        while (pool_index >= vm.object_pool.size()) {
+            vm.object_pool.push_back(Value());
+        }
+
+        vm.op_stack.push(Value(std::make_shared<Ref>(pool_index, vm)));
+    }
+
+    inline void INDEX_REF::emit(VM &vm) const {
+        Value index = vm.op_stack.popValue();
+        Value obj = vm.op_stack.popValue();
+        
+        if (!obj.isReference()) {
+            throw RuntimeError("Cannot assign to rvalue expression");
+        }
+        
+        auto ref = obj.asReference();
+        if (ref->kind != irgen::Ref::Kind::Direct) {
+            throw RuntimeError("Cannot assign to rvalue expression");
+        }
+        
+        if (ref->pool_index >= vm.object_pool.size()) {
+            throw RuntimeError("Object pool index out of range");
+        }
+        
+        const Value& var_value = vm.object_pool[ref->pool_index];
+        if (!var_value.isVector()) {
+            throw RuntimeError("INDEX_REF requires a vector variable");
+        }
+        
+        ptrdiff_t idx = index.asInt();
+        const auto& vec = var_value.asVector();
+        
+        if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+            throw RuntimeError("Index out of range");
+        }
+        
+        vm.op_stack.push(Value(std::make_shared<Ref>(ref->pool_index, static_cast<size_t>(idx), vm)));
+    }
+
+    inline void STORE_ARG::emit(VM &vm) const {
+        Value value = vm.op_stack.popValue();
+        const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
+        
+        if (vm.symbol_stack.empty()) {
+            throw RuntimeError("No symbol table available");
+        }
+        
+        while (var_id >= vm.object_pool.size()) {
+            vm.object_pool.push_back(Value());
+        }
+        vm.object_pool[var_id] = value;
+        
+        vm.symbol_stack.back().set(var_id, value);
     }
 
     Value ModuleObject::import(const std::string& module_name) {
@@ -371,14 +462,19 @@ namespace irgen {
             throw RuntimeError("Invalid module name: " + module_name);
         }
 
-        std::vector<std::filesystem::path> search_paths = {
+        std::vector search_paths = {
             std::filesystem::current_path(),
             std::filesystem::current_path() / "modules",
             std::filesystem::current_path() / "lib",
-            std::filesystem::current_path() / "src"
+            std::filesystem::current_path() / "src",
+            std::filesystem::current_path() / "..",
+            std::filesystem::current_path() / ".." / "modules",
+            std::filesystem::current_path() / ".." / "lib",
+            std::filesystem::current_path() / ".." / "src"
         };
 
         for (const auto& base_path : search_paths) {
+            LOG("Search in path: " + base_path.string());
             std::filesystem::path module_path = base_path;
             for (size_t i = 0; i < path_components.size() - 1; ++i) {
                 module_path /= path_components[i];
@@ -417,14 +513,14 @@ namespace irgen {
     }
 
 
-    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
+    inline void LABEL::set_label(irgen::VM &vm, const std::optional<size_t> on) const {
         vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
     }
 
     template <StringType string>
     ModuleObject::ModuleObject(string code) : is_user(true) {
         const auto codes = lm::irgen::Generator(parse(code)).gen();
-        owner_vm = new VM(codes);
+        owner_vm = new irgen::VM(codes);
         owner_vm->run();
         
         for (const auto& [name, value] : owner_vm->main_module->exports) {

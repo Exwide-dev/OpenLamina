@@ -159,13 +159,17 @@ void test_module_system() {
         std::cout << "Basic execution test passed!\n";
         
         std::cout << "\nChecking for test_module.lm...\n";
-        if (std::filesystem::exists("test_module.lm")) {
+        std::filesystem::path module_path = "test_module.lm";
+        if (!std::filesystem::exists(module_path)) {
+            module_path = std::filesystem::path(__FILE__).parent_path().parent_path() / "test_module.lm";
+        }
+        /*if (std::filesystem::exists(module_path)) {
             std::cout << "test_module.lm found!\n";
         } else {
             std::cout << "test_module.lm NOT found!\n";
             std::cout << "Module system test skipped (test file not found)\n";
             return;
-        }
+        }*/
         
         const std::string import_test = R"(import test_module)";
         
@@ -232,13 +236,13 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
 }
 
 [[noreturn]] int main() {
-    /*std::cout << "Testing module system..." << std::endl;
+    std::cout << "Testing module system..." << std::endl;
     test_module_system();
-    std::cout << "Testing fib speed..." << std::endl;
-    test_fib_speed();
+    //std::cout << "Testing fib speed..." << std::endl;
+    //test_fib_speed();
     
     std::cout << "\nPress Enter to continue to REPL...";
-    std::cin.get();*/
+    std::cin.get();
 
 
     std::cout << welcome << std::endl;

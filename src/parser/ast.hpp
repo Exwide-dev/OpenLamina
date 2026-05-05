@@ -12,6 +12,12 @@ struct UseItem {
     UseItem(std::string n, std::string a) : name(std::move(n)), alias(std::move(a)) {}
 };
 
+// 值类别枚举
+enum class ValueCategory {
+    LVALUE,
+    RVALUE
+};
+
 // AST节点类型枚举
 enum class ASTNodeType {
     Unknown,
@@ -68,6 +74,10 @@ struct ASTNode {
 struct ExprNode : ASTNode {
     explicit ExprNode(const ASTNodeType t = ASTNodeType::Expr) : ASTNode(t) {}
     ~ExprNode() override = default;
+    
+    [[nodiscard]] virtual ValueCategory getValueCategory() const {
+        return ValueCategory::RVALUE;
+    }
 };
 
 struct TypeNode : ASTNode {
@@ -96,6 +106,9 @@ struct NumberNode final : ExprNode {
 
     explicit NumberNode(std::string  v) : ExprNode(ASTNodeType::Number), value(std::move(v)) {}
     ~NumberNode() override = default;
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
 };
 
 struct BoolNode final : ExprNode {
@@ -103,6 +116,9 @@ struct BoolNode final : ExprNode {
 
     explicit BoolNode(const bool v) : ExprNode(ASTNodeType::Bool), value(v) {}
     ~BoolNode() override = default;
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
 };
 
 struct StringNode final : ExprNode {
@@ -110,6 +126,9 @@ struct StringNode final : ExprNode {
 
     explicit StringNode(std::string  v) : ExprNode(ASTNodeType::String), value(std::move(v)) {}
     ~StringNode() override = default;
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
 };
 
 struct VectorNode final : ExprNode {
@@ -122,6 +141,9 @@ struct VectorNode final : ExprNode {
             delete elem;
         }
     }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
 };
 
 struct VarRefNode : ExprNode {
@@ -129,6 +151,9 @@ struct VarRefNode : ExprNode {
 
     explicit VarRefNode(std::string  n) : ExprNode(ASTNodeType::VarRef), name(std::move(n)) {}
     ~VarRefNode() override = default;
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::LVALUE;
+    }
 };
 
 struct UnaryNode final : ExprNode {
@@ -139,6 +164,9 @@ struct UnaryNode final : ExprNode {
         : ExprNode(ASTNodeType::Unary), op(std::move(o)), operand(oper) {}
     ~UnaryNode() override {
         delete operand;
+    }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
     }
 };
 
@@ -152,6 +180,9 @@ struct BinaryNode : ExprNode {
     ~BinaryNode() override {
         delete left;
         delete right;
+    }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
     }
 };
 
@@ -167,6 +198,9 @@ struct FuncCallExprNode final : ExprNode {
             delete arg;
         }
     }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
 };
 
 struct MemberAccessNode final : ExprNode {
@@ -177,6 +211,9 @@ struct MemberAccessNode final : ExprNode {
         : ExprNode(ASTNodeType::MemberAccess), object(obj), member(std::move(mem)) {}
     ~MemberAccessNode() override {
         delete object;
+    }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return object->getValueCategory();
     }
 };
 
@@ -189,6 +226,9 @@ struct IndexAccessNode final : ExprNode {
     ~IndexAccessNode() override {
         delete object;
         delete index;
+    }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return object->getValueCategory();
     }
 };
 
@@ -231,11 +271,11 @@ struct VarDeclNode final : ASTNode {
 
 // 新增：赋值语句节点
 struct AssignNode final : ASTNode {
-    std::string name;
+    ExprNode* var;
     ExprNode* value;
 
-    AssignNode(std::string n, ExprNode* v)
-        : ASTNode(ASTNodeType::Assign), name(std::move(n)), value(v) {}
+    AssignNode(ExprNode* n, ExprNode* v)
+        : ASTNode(ASTNodeType::Assign), var(n), value(v) {}
     ~AssignNode() override {
         delete value;
     }
