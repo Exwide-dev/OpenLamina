@@ -107,35 +107,6 @@ target_compile_definitions(OpenLamina PRIVATE
 
 message(STATUS "OpenLamina: Fetching LAMMP")
 
-#[[
-# 选项：离线模式
-option(OPENLAMINA_OFFLINE "Skip network access for dependencies" OFF)
-
-# 设置缓存目录
-set(FETCHCONTENT_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/.cache/fetch_content)
-if(OPENLAMINA_OFFLINE)
-    set(FETCHCONTENT_FULLY_DISCONNECTED ON)
-endif()
-
-include(FetchContent)
-
-FetchContent_Declare(
-    LAMMP
-    GIT_REPOSITORY https://github.com/Lamina-dev/LAMMP.git
-    GIT_TAG main
-)
-
-FetchContent_MakeAvailable(LAMMP)
-]]
-
-option(OPENLAMINA_OFFLINE "Skip network access for dependencies" OFF)
-
-# 设置缓存目录
-set(FETCHCONTENT_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/.cache/fetch_content)
-if (OPENLAMINA_OFFLINE)
-    set(FETCHCONTENT_FULLY_DISCONNECTED ON)
-endif ()
-
 include(FetchContent)
 
 FetchContent_Declare(
