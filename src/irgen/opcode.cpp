@@ -3,12 +3,14 @@
 #include <cmath>
 #include <fstream>
 #include <filesystem>
+#include <ranges>
 
 #include "generator.hpp"
 
 namespace irgen {
     std::string Value::toString() const {
-        switch (type) {
+        const Value& self = deref();
+        switch (self.type) {
             case Type::None: return "None";
             case Type::Number: return asNumber().toString();
             case Type::Bool: return (asBool() ? "true" : "false");
@@ -19,47 +21,49 @@ namespace irgen {
                 const auto& elements = asVector();
                 for (size_t i = 0; i < elements.size(); ++i) {
                     if (i > 0) result += ", ";
-                    result += elements[i].toString();
+                    result += elements[i]->toString();
                 }
                 result += "]";
                 return result;
             }
             case Type::Reference: {
                 auto t = asReference();
-                if (t->pool_index < t->vm.object_pool.size()) {
-                    const auto& ref = t->vm.object_pool[t->pool_index];
-                    if (t->kind == Ref::Kind::VectorElem) {
-                        if (ref.isVector() && t->elem_index < ref.asVector().size()) {
-                            return ref.asVector()[t->elem_index].toString();
-                        }
-                        return std::format("<ref:pool[{}][{}]>", t->pool_index, t->elem_index);
-                    }
-                    return ref.toString();
-                }
-                return std::format("<ref:pool[{}]>", t->pool_index);
+                return t->get().toString();
             }
-            default: return "<__UNKNOWN_ValueType>";
+            case Type::Module: {
+                const auto t = asModule();
+                return std::format("Module {}: {{ \n{}", t->full_name, [&] -> std::string {
+                    std::string result;
+                    for (const auto& [a, b] : t->exports) {
+                        result.append(std::format("  {}: {}\n", a, b.toString()));
+                    }
+                    return result + "}}";
+                }());
+            }
+            default: return "<__UNKNOWN_Value>";
         }
     }
 
-    std::optional<Value> SymbolTable::get(const size_t id) const noexcept {
+    std::optional<std::shared_ptr<Value>> SymbolTable::get(const size_t id) const noexcept {
         return symbols.try_get(id);
     }
 
     void SymbolTable::set(const size_t id, const Value &value) {
-        symbols.set(id, value);
+        symbols.set(id, std::make_shared<Value>(value));
+    }
+
+    void SymbolTable::set(const size_t id, std::shared_ptr<Value> value) {
+        symbols.set(id, std::move(value));
     }
 
     // 初始化内置函数
     VM::VM() {
         main_module = std::make_shared<ModuleObject>("__main__", this);
-        object_pool.resize(1024);
         init_builtins();
     }
 
     VM::VM(std::vector<Opcode> c) : code(std::move(c)) {
         main_module = std::make_shared<ModuleObject>("__main__", this);
-        object_pool.resize(1024);
         init_builtins();
     }
 
@@ -68,7 +72,7 @@ namespace irgen {
         lang::init_builtins(temp_symbols);
         
         for (const auto& [id, val] : temp_symbols.symbols) {
-            main_module->set_attr(g_string_pool.get_string(id), val);
+            main_module->set_attr(g_string_pool.get_string(id), *val);
         }
         
         auto std_module = std::make_shared<ModuleObject>(lang::standard_mod);
@@ -113,133 +117,142 @@ namespace irgen {
     inline void ADD::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a + b);
+        vm.op_stack.push(a.deref() + b.deref());
     }
 
     inline void MUL::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a * b);
+        vm.op_stack.push(a.deref() * b.deref());
     }
 
     inline void SUB::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a - b);
+        vm.op_stack.push(a.deref() - b.deref());
     }
 
     inline void DIV::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a / b);
+        vm.op_stack.push(a.deref() / b.deref());
     }
 
     inline void NEG::emit(irgen::VM &vm) {
         auto value = vm.op_stack.popValue();
-        vm.op_stack.push(-value);
+        vm.op_stack.push(-value.deref());
     }
 
     inline void NOT::emit(irgen::VM &vm) {
         auto value = vm.op_stack.popValue();
-        vm.op_stack.push(!value);
+        vm.op_stack.push(!value.deref());
     }
 
     inline void AND::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a && b);
+        vm.op_stack.push(a.deref() && b.deref());
     }
 
     inline void OR::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a || b);
+        vm.op_stack.push(a.deref() || b.deref());
     }
 
     inline void EQ::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(Value(a == b));
+        vm.op_stack.push(Value(a.deref() == b.deref()));
     }
 
     inline void NEQ::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(Value(a != b));
+        vm.op_stack.push(Value(a.deref() != b.deref()));
     }
 
     inline void LT::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a < b);
+        vm.op_stack.push(a.deref() < b.deref());
     }
 
     inline void LTE::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a <= b);
+        vm.op_stack.push(a.deref() <= b.deref());
     }
 
     inline void GT::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a > b);
+        vm.op_stack.push(a.deref() > b.deref());
     }
 
     inline void GTE::emit(irgen::VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
-        vm.op_stack.push(a >= b);
+        vm.op_stack.push(a.deref() >= b.deref());
     }
 
     inline void STORE::emit(irgen::VM &vm) const {
         Value value = vm.op_stack.popValue();
         Value ref = vm.op_stack.popValue();
+        ref.set(value);
         
-        if (!ref.isReference()) {
-            throw RuntimeError("STORE requires a reference on the stack");
+        if (ref.isReference()) {
+            auto ref_ptr = ref.asReference();
+            if (ref_ptr->value_ptr && vm.main_module) {
+                // 更新所有匹配的符号
+                for (auto& symbol_table : vm.symbol_stack) {
+                    for (const auto& [id, val] : symbol_table.symbols) {
+                        if (val.get() == ref_ptr->value_ptr.get()) {
+                            vm.main_module->set_attr(g_string_pool.get_string(id), *val);
+                        }
+                    }
+                }
+            }
         }
-        
-        const auto& ref_ptr = ref.asReference();
-        const auto var_id = ref_ptr->pool_index;
-        
-        if (vm.symbol_stack.empty()) {
-            throw RuntimeError("No symbol table available");
-        }
-        
-        while (var_id >= vm.object_pool.size()) {
-            vm.object_pool.push_back(Value());
-        }
-        vm.object_pool[var_id] = value;
-        
-        vm.symbol_stack.back().set(var_id, value);
-        
-        // 同时添加到 main_module->exports 中
-        const std::string var_name = g_string_pool.get_string(var_id);
-        vm.main_module->set_attr(var_name, value);
     }
 
     inline void LOAD::emit(irgen::VM &vm) const {
-        const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
         const auto var_id = static_cast<size_t>(operands[0].asInt());
+        const std::string var_name = g_string_pool.get_string(var_id);
 
-        for (auto it = vm.symbol_stack.rbegin(); it != vm.symbol_stack.rend(); ++it) {
-            const auto& symbol_table = *it;
+        std::shared_ptr<Value> value_ptr;
+        
+        // 先从符号栈查找
+        for (auto & symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
             if (symbol_table.exists(var_id)) {
                 auto k = symbol_table.get(var_id);
                 if (k.has_value()) {
-                    vm.op_stack.push(k.value());
-                    return;
+                    value_ptr = *k;
+                    break;
                 }
             }
         }
 
-        if (auto result = vm.main_module->get_attr(var_name)) {
-            vm.op_stack.push(*result);
-            return;
+        // 找不到则从模块查找或创建新值
+        if (!value_ptr) {
+            if (vm.main_module) {
+                auto attr = vm.main_module->get_attr(var_name);
+                if (attr.has_value()) {
+                    value_ptr = std::make_shared<Value>(*attr);
+                }
+            }
+            
+            if (!value_ptr) {
+                value_ptr = std::make_shared<Value>();
+            }
+            
+            if (!vm.symbol_stack.empty()) {
+                vm.symbol_stack.back().set(var_id, value_ptr);
+            }
         }
 
-        throw RuntimeError("Variable not found: " + var_name);
+        // 总是返回引用，确保一致性
+        vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
     }
 
     inline void LABEL::emit(irgen::VM &) {}
@@ -272,10 +285,11 @@ namespace irgen {
         vm.cache.leave_scope();
     }
 
-    inline void CALL::emit(irgen::VM &vm) const {
+    inline void CALL::emit(VM &vm) const {
         Value func = vm.op_stack.popValue();
+        LOG(ITIS(,func,.toString()) << ", type: " << func.type_name());
 
-        if (!func.isFunction()) {
+        if (not func.isFunction()) {
             throw RuntimeError("Not a function");
         }
 
@@ -330,15 +344,18 @@ namespace irgen {
         const std::string attr_name = g_string_pool.get_string(operands[0].asInt());
 
         Value obj = vm.op_stack.popValue();
-        if (obj.getType() != Value::Type::Module) {
+        const Value& module_val = obj.deref();
+        if (module_val.getType() != Value::Type::Module) {
             throw RuntimeError("GETATTR requires a module object");
         }
 
-        auto module = obj.asModule();
+        auto module = module_val.asModule();
         auto result = module->get_attr(attr_name);
         
         if (result.has_value()) {
-            vm.op_stack.push(*result);
+            // 对于模块属性，我们创建一个共享的值并返回引用
+            auto value_ptr = std::make_shared<Value>(*result);
+            vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
         } else {
             throw RuntimeError("Attribute not found: " + attr_name + ", in module: " + module->name);
         }
@@ -346,11 +363,11 @@ namespace irgen {
 
     inline void VEC_NEW::emit(irgen::VM &vm) const {
         size_t element_count = static_cast<size_t>(operands[0].asInt());
-        std::vector<Value> elements;
+        std::vector<std::shared_ptr<Value>> elements;
         elements.reserve(element_count);
         
         for (size_t i = 0; i < element_count; ++i) {
-            elements.push_back(vm.op_stack.popValue());
+            elements.push_back(std::make_shared<Value>(vm.op_stack.popValue()));
         }
         
         // std::reverse(elements.begin(), elements.end());
@@ -359,79 +376,35 @@ namespace irgen {
     }
 
     inline void INDEX::emit(irgen::VM &vm) const {
-        Value index = vm.op_stack.popValue();
+        Value index_val = vm.op_stack.popValue();
         Value obj = vm.op_stack.popValue();
         
-        if (!obj.isVector()) {
+        // 解引用索引
+        const Value& idx_deref = index_val.deref();
+        ptrdiff_t idx = idx_deref.asInt();
+        
+        // 解引用对象
+        Value& obj_deref = obj.deref();
+        if (!obj_deref.isVector()) {
             throw RuntimeError("INDEX requires a vector object");
         }
         
-        ptrdiff_t idx = index.asInt();
-        const auto& vec = obj.asVector();
-        
+        auto& vec = obj_deref.asVector();
         if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
             throw RuntimeError("Index out of range");
         }
         
-        vm.op_stack.push(vec[static_cast<size_t>(idx)]);
-    }
-
-    inline void LOAD_REF::emit(VM &vm) const {
-        const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
-        const auto pool_index = static_cast<size_t>(operands[0].asInt());
-        
-        while (pool_index >= vm.object_pool.size()) {
-            vm.object_pool.push_back(Value());
-        }
-
-        vm.op_stack.push(Value(std::make_shared<Ref>(pool_index, vm)));
-    }
-
-    inline void INDEX_REF::emit(VM &vm) const {
-        Value index = vm.op_stack.popValue();
-        Value obj = vm.op_stack.popValue();
-        
-        if (!obj.isReference()) {
-            throw RuntimeError("Cannot assign to rvalue expression");
-        }
-        
-        auto ref = obj.asReference();
-        if (ref->kind != irgen::Ref::Kind::Direct) {
-            throw RuntimeError("Cannot assign to rvalue expression");
-        }
-        
-        if (ref->pool_index >= vm.object_pool.size()) {
-            throw RuntimeError("Object pool index out of range");
-        }
-        
-        const Value& var_value = vm.object_pool[ref->pool_index];
-        if (!var_value.isVector()) {
-            throw RuntimeError("INDEX_REF requires a vector variable");
-        }
-        
-        ptrdiff_t idx = index.asInt();
-        const auto& vec = var_value.asVector();
-        
-        if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
-            throw RuntimeError("Index out of range");
-        }
-        
-        vm.op_stack.push(Value(std::make_shared<Ref>(ref->pool_index, static_cast<size_t>(idx), vm)));
+        // 无论什么情况，我们都返回对向量元素的引用
+        vm.op_stack.push(Value(std::make_shared<Ref>(vec[static_cast<size_t>(idx)])));
     }
 
     inline void STORE_ARG::emit(VM &vm) const {
         Value value = vm.op_stack.popValue();
-        const std::string& var_name = g_string_pool.get_string(operands[0].asInt());
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         
         if (vm.symbol_stack.empty()) {
             throw RuntimeError("No symbol table available");
         }
-        
-        while (var_id >= vm.object_pool.size()) {
-            vm.object_pool.push_back(Value());
-        }
-        vm.object_pool[var_id] = value;
         
         vm.symbol_stack.back().set(var_id, value);
     }

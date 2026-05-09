@@ -33,7 +33,6 @@ namespace cli {
 
     /**
      * @brief 启动 REPL 交互环境
-     * @return 退出码
      */
     int run_repl();
 

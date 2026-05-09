@@ -9,7 +9,7 @@
 
 namespace cli {
 
-    Args parse_args(int argc, char* argv[]) {
+    Args parse_args(const int argc, char* argv[]) {
         Args args;
         
         for (int i = 1; i < argc; ++i) {
@@ -121,7 +121,7 @@ Contact OpenLamina-Developing for more information)",
             try {
                 std::cout << ">>> ";
                 if (!repl_instance.exec_input()) {
-                    break;
+                    continue;
                 }
 
                 if (!repl_instance.vm.op_stack.empty()) {
@@ -130,15 +130,18 @@ Contact OpenLamina-Developing for more information)",
                         std::cout << top << std::endl;
                     }
                 }
+               repl_instance.vm.op_stack.clear();
             } catch (const RuntimeError& e) {
                 std::cout << "RuntimeError: " << e.what() << std::endl;
                 repl_instance.vm.pc = repl_instance.vm.code.size();
             } catch (const SyntaxError& e) {
                 std::cout << "SyntaxError: " << e.what() << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Occured an exception: " << e.what()
+                          << "\nExit." << std::endl;
+                throw;
             }
         }
-
-        return 0;
     }
 
     void show_help() {
@@ -153,10 +156,10 @@ Contact OpenLamina-Developing for more information)",
     }
 
     void show_version() {
-        std::cout << 
-            "OpenLamina v" << OPENLAMINA_VERSION_MAJOR << "." 
-            << OPENLAMINA_VERSION_MINOR << "." << OPENLAMINA_VERSION_PATCH << "\n"
-            << std::endl;
+        std::cout << "OpenLamina v"
+            << OPENLAMINA_VERSION_MAJOR << "."
+            << OPENLAMINA_VERSION_MINOR << "."
+            << OPENLAMINA_VERSION_PATCH << std::endl;
     }
 
 } // namespace cli

@@ -194,28 +194,31 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
 }
 
 int main(const int argc, char* argv[]) {
-#ifdef DEBUG
     std::cout << "Testing module system..." << std::endl;
     test_module_system();
     std::cout << "Testing fib speed..." << std::endl;
-    test_fib_speed();
-    std::cout << "\nPress Enter to continue to REPL...";
+    //test_fib_speed();
+    //std::cout << "\nPress Enter to continue to REPL...";
     std::cin.get();
-#endif
-    auto args = cli::parse_args(argc, argv);
+    const auto [
+        show_help,
+        show_version,
+        file_path,
+        script_args
+    ] = cli::parse_args(argc, argv);
 
-    if (args.show_help) {
+    if (show_help) {
         cli::show_help();
         return EXIT_SUCCESS;
     }
 
-    if (args.show_version) {
+    if (show_version) {
         cli::show_version();
         return EXIT_SUCCESS;
     }
 
-    if (!args.file_path.empty()) {
-        return cli::run_file(args.file_path, args.script_args);
+    if (!file_path.empty()) {
+        return cli::run_file(file_path, script_args);
     }
 
     return cli::run_repl();

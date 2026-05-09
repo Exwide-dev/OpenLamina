@@ -15,6 +15,7 @@
 #include <map>
 #include <flat_map>
 #include <memory>
+#include <unordered_set>
 
 #include "../tools/debug.hpp"
 #include "../tools/error.hpp"
@@ -69,8 +70,6 @@ namespace irgen {
     class GETATTR;
     class VEC_NEW;
     class INDEX;
-    class LOAD_REF;
-    class INDEX_REF;
     class STORE_ARG;
 
     #include <vector>
@@ -150,7 +149,7 @@ namespace irgen {
         }
 
         template<typename MapType>
-        explicit ArrMap(const MapType& map, const T& def = T{}) : default_value(def) {
+        explicit ArrMap(const MapType& map, T def = T{}) : default_value(std::move(def)) {
             for (const auto& [key, value] : map) {
                 set(key, value);
             }
@@ -328,8 +327,6 @@ namespace irgen {
         GETATTR,
         VEC_NEW,
         INDEX,
-        LOAD_REF,
-        INDEX_REF,
         STORE_ARG
     >;
 
@@ -342,15 +339,23 @@ namespace irgen {
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
 
     struct Ref {
-        enum class Kind { Direct, VectorElem } kind;
-        VM& vm;
-        size_t pool_index;
-        size_t elem_index;
+        std::shared_ptr<Value> value_ptr;
 
-        explicit Ref(size_t idx, VM& vm)
-            : kind(Kind::Direct), pool_index(idx), elem_index(0), vm(vm) {}
-        Ref(size_t pool_idx, size_t elem_idx, VM& vm)
-            : kind(Kind::VectorElem), pool_index(pool_idx), elem_index(elem_idx), vm(vm) {}
+        explicit Ref(std::shared_ptr<Value> ptr);
+        
+        Value& get() {
+            if (!value_ptr) {
+                throw RuntimeError("Null reference");
+            }
+            return *value_ptr;
+        }
+        
+        [[nodiscard]] const Value& get() const {
+            if (!value_ptr) {
+                throw RuntimeError("Null reference");
+            }
+            return *value_ptr;
+        }
     };
 
     // Value 类型，支持多种类型的值
@@ -376,7 +381,7 @@ namespace irgen {
             FunctionType,
             std::shared_ptr<FunctionObject>,
             std::shared_ptr<ModuleObject>,
-            std::vector<Value>,
+            std::vector<std::shared_ptr<Value>>,
             std::shared_ptr<Ref>
         > data;
 
@@ -409,11 +414,18 @@ namespace irgen {
         explicit Value(std::shared_ptr<ModuleObject> value)
             : type(Type::Module), data(value) {}
 
-        explicit Value(std::vector<Value> value)
+        explicit Value(std::vector<std::shared_ptr<Value>> value)
             : type(Type::Vector), data(std::move(value)) {}
 
         Value(const std::initializer_list<Value> init)
-            : type(Type::Vector), data(std::vector(init)) {}
+            : type(Type::Vector) {
+            std::vector<std::shared_ptr<Value>> vec;
+            vec.reserve(init.size());
+            for (const auto& val : init) {
+                vec.push_back(std::make_shared<Value>(val));
+            }
+            data = std::move(vec);
+        }
 
         explicit Value(std::shared_ptr<Ref> ref)
             : type(Type::Reference), data(std::move(ref)) {}
@@ -428,12 +440,43 @@ namespace irgen {
             throw RuntimeError("User-defined functions should be called via CALL instruction");
         }
 
-        [[nodiscard]] Type getType() const { return type; }
+        [[nodiscard]] Type getType() const { 
+            if (type == Type::Reference) {
+                return asReference()->get().getType();
+            }
+            return type; 
+        }
+
+        [[nodiscard]] std::string type_name() const {
+            switch (type) {
+                case Type::None:
+                    return "None";
+                case Type::String:
+                    return "String";
+                case Type::Number:
+                    return "Number";
+                case Type::Bool:
+                    return "Bool";
+                case Type::Function:
+                    return "Function";
+                case Type::Module:
+                    return "Module";
+                case Type::Vector:
+                    return "Vector";
+                case Type::Reference:
+                    return "Reference";
+                default:
+                    return "<Unknown_Type>";
+            }
+        }
 
         [[nodiscard]] std::string toString() const;
 
 #define DEFINE_AS_METHOD(FieldName, EnumValue, CppType, ErrorMsg) \
 [[nodiscard]] CppType as##FieldName() const { \
+if (type == Type::Reference) { \
+return asReference()->get().as##FieldName(); \
+} \
 if (type != Type::EnumValue) { \
 throw RuntimeError("Value is not " ErrorMsg); \
 } \
@@ -441,6 +484,9 @@ return std::get<CppType>(data); \
 }
 
         [[nodiscard]] const lang::lammp::Number& asNumber() const {
+            if (type == Type::Reference) {
+                return asReference()->get().asNumber();
+            }
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
@@ -448,6 +494,9 @@ return std::get<CppType>(data); \
         }
 
         [[nodiscard]] lang::lammp::Number& asNumber() {
+            if (type == Type::Reference) {
+                return const_cast<lang::lammp::Number&>(asReference()->get().asNumber());
+            }
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
@@ -462,18 +511,20 @@ return std::get<CppType>(data); \
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
         DEFINE_AS_METHOD(Module, Module, std::shared_ptr<ModuleObject>, "a module")
 
-        [[nodiscard]] const std::vector<Value>& asVector() const {
-            if (type != Type::Vector) {
+        [[nodiscard]] const std::vector<std::shared_ptr<Value>>& asVector() const {
+            const Value& self = deref();
+            if (self.type != Type::Vector) {
                 throw RuntimeError("Value is not a vector");
             }
-            return std::get<std::vector<Value>>(data);
+            return std::get<std::vector<std::shared_ptr<Value>>>(self.data);
         }
 
-        [[nodiscard]] std::vector<Value>& asVector() {
-            if (type != Type::Vector) {
+        [[nodiscard]] std::vector<std::shared_ptr<Value>>& asVector() {
+            Value& self = deref();
+            if (self.type != Type::Vector) {
                 throw RuntimeError("Value is not a vector");
             }
-            return std::get<std::vector<Value>>(data);
+            return std::get<std::vector<std::shared_ptr<Value>>>(self.data);
         }
 
         [[nodiscard]] const std::shared_ptr<Ref>& asReference() const {
@@ -484,145 +535,207 @@ return std::get<CppType>(data); \
         }
 
         Value operator+(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() + other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() + b.asNumber());
             }
-            if (type == Type::String && other.type == Type::String) {
-                return Value(asString() + other.asString());
+            if (a.type == Type::String && b.type == Type::String) {
+                return Value(a.asString() + b.asString());
             }
             throw RuntimeError("Unsupported + operation");
         }
 
         Value operator-(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() - other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() - b.asNumber());
             }
             throw RuntimeError("Unsupported - operation");
         }
 
         Value operator*(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() * other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() * b.asNumber());
             }
             throw RuntimeError("Unsupported * operation");
         }
 
         Value operator/(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() / other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() / b.asNumber());
             }
             throw RuntimeError("Unsupported / operation");
         }
 
         Value operator-() const {
-            if (type == Type::Number) {
-                return Value(-asNumber());
+            const Value& self = deref();
+            if (self.type == Type::Number) {
+                return Value(-self.asNumber());
             }
             throw RuntimeError("Unsupported unary - operation");
         }
 
         Value operator!() const {
-            if (type == Type::Bool) {
-                return Value(!asBool());
+            const Value& self = deref();
+            if (self.type == Type::Bool) {
+                return Value(!self.asBool());
             }
             throw RuntimeError("Unsupported ! operation");
         }
 
         Value operator&&(const Value& other) const {
-            if (type == Type::Bool && other.type == Type::Bool) {
-                return Value(asBool() && other.asBool());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Bool && b.type == Type::Bool) {
+                return Value(a.asBool() && b.asBool());
             }
             throw RuntimeError("Unsupported && operation");
         }
 
         Value operator||(const Value& other) const {
-            if (type == Type::Bool && other.type == Type::Bool) {
-                return Value(asBool() || other.asBool());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Bool && b.type == Type::Bool) {
+                return Value(a.asBool() || b.asBool());
             }
             throw RuntimeError("Unsupported || operation");
         }
 
         Value operator<(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() < other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() < b.asNumber());
             }
             throw RuntimeError("Unsupported < operation");
         }
 
         Value operator<=(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() <= other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() <= b.asNumber());
             }
             throw RuntimeError("Unsupported <= operation");
         }
 
         Value operator>(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() > other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() > b.asNumber());
             }
             throw RuntimeError("Unsupported > operation");
         }
 
         Value operator>=(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() >= other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() >= b.asNumber());
             }
             throw RuntimeError("Unsupported >= operation");
         }
 
         bool operator==(const Value& other) {
-            if (type == Type::Number && other.type == Type::Number) {
-                return asNumber() == other.asNumber();
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return a.asNumber() == b.asNumber();
             }
-            if (type == Type::Bool && other.type == Type::Bool) {
-                return asBool() == other.asBool();
+            if (a.type == Type::Bool && b.type == Type::Bool) {
+                return a.asBool() == b.asBool();
             }
-            if (type == Type::String && other.type == Type::String) {
-                return asString() == other.asString();
+            if (a.type == Type::String && b.type == Type::String) {
+                return a.asString() == b.asString();
             }
             throw RuntimeError("Unsupported == operation");
         }
 
         Value operator!=(const Value& other) const {
-            if (type == Type::Number && other.type == Type::Number) {
-                return Value(asNumber() != other.asNumber());
+            const Value& a = deref();
+            const Value& b = other.deref();
+            if (a.type == Type::Number && b.type == Type::Number) {
+                return Value(a.asNumber() != b.asNumber());
             }
-            if (type == Type::Bool && other.type == Type::Bool) {
-                return Value(asBool() != other.asBool());
+            if (a.type == Type::Bool && b.type == Type::Bool) {
+                return Value(a.asBool() != b.asBool());
             }
-            if (type == Type::String && other.type == Type::String) {
-                return Value(asString() != other.asString());
+            if (a.type == Type::String && b.type == Type::String) {
+                return Value(a.asString() != b.asString());
             }
             throw RuntimeError("Unsupported != operation");
         }
 
         [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
-            if (type != Type::Function) {
+            const Value& self = deref();
+            if (self.type != Type::Function) {
                 throw RuntimeError("Value is not a function");
             }
-            if (std::holds_alternative<std::shared_ptr<FunctionObject>>(data)) {
-                return std::get<std::shared_ptr<FunctionObject>>(data);
+            if (std::holds_alternative<std::shared_ptr<FunctionObject>>(self.data)) {
+                return std::get<std::shared_ptr<FunctionObject>>(self.data);
             }
             throw RuntimeError("Value is not a user-defined function");
         }
 
         [[nodiscard]] bool isUserFunction() const {
-            return type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject>>(data);
+            const Value& self = deref();
+            return self.type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject>>(self.data);
         }
 
         [[nodiscard]] bool isBuiltinFunction() const {
-            return type == Type::Function and std::holds_alternative<FunctionType>(data);
+            const Value& self = deref();
+            return self.type == Type::Function and std::holds_alternative<FunctionType>(self.data);
         }
 
 #undef DEFINE_AS_METHOD
 
-        [[nodiscard]] bool isNone() const { return type == Type::None; }
-        [[nodiscard]] bool isInt() const { return type == Type::Number; }
-        [[nodiscard]] bool isBool() const { return type == Type::Bool; }
-        [[nodiscard]] bool isString() const { return type == Type::String; }
-        [[nodiscard]] bool isFunction() const { return type == Type::Function; }
-        [[nodiscard]] bool isVector() const { return type == Type::Vector; }
+        [[nodiscard]] bool isNone() const { 
+            return deref().type == Type::None; 
+        }
+        [[nodiscard]] bool isInt() const { 
+            return deref().type == Type::Number; 
+        }
+        [[nodiscard]] bool isBool() const { 
+            return deref().type == Type::Bool; 
+        }
+        [[nodiscard]] bool isString() const { 
+            return deref().type == Type::String; 
+        }
+        [[nodiscard]] bool isFunction() const { 
+            return deref().type == Type::Function; 
+        }
+        [[nodiscard]] bool isVector() const { 
+            return deref().type == Type::Vector; 
+        }
         [[nodiscard]] bool isReference() const { return type == Type::Reference; }
+
+        void set(const Value& value) {
+            if (type != Type::Reference) {
+                throw RuntimeError("Cannot set a non-reference value");
+            }
+            *std::get<std::shared_ptr<Ref>>(data)->value_ptr = value.deref();
+        }
+
+        [[nodiscard]] const Value& deref() const {
+            if (type == Type::Reference) {
+                return std::get<std::shared_ptr<Ref>>(data)->value_ptr->deref();
+            }
+            return *this;
+        }
+
+        Value& deref() {
+            if (type == Type::Reference) {
+                return std::get<std::shared_ptr<Ref>>(data)->value_ptr->deref();
+            }
+            return *this;
+        }
 
         friend std::ostream &operator<<(std::ostream &os, const Value &value) {
             os << value.toString();
@@ -630,17 +743,36 @@ return std::get<CppType>(data); \
         }
     };
 
+    inline Ref::Ref(std::shared_ptr<Value> ptr) {
+        std::unordered_set<std::shared_ptr<Value>> visited;
+        
+        while (ptr->isReference()) {
+            if (visited.contains(ptr)) {
+                throw RuntimeError("Circular reference detected");
+            }
+            visited.insert(ptr);
+            ptr = ptr->asReference()->value_ptr;
+        }
+        
+        value_ptr = std::move(ptr);
+    }
+
+
     class SymbolTable {
     public:
-        ArrMap<Value> symbols;
+        ArrMap<std::shared_ptr<Value>> symbols;
         SymbolTable() = default;
 
-        explicit SymbolTable(const std::flat_map<size_t, Value>& symbols)
-            : symbols(std::move(symbols)) {}
+        explicit SymbolTable(const std::flat_map<size_t, std::shared_ptr<Value>>& symbols)
+            : symbols(symbols) {}
+
+        explicit SymbolTable(std::flat_map<size_t, std::shared_ptr<Value>>&& symbols)
+            : symbols(symbols) {}
 
         void set(size_t id, const Value &value);
+        void set(size_t id, std::shared_ptr<Value> value);
 
-        [[nodiscard]] std::optional<Value> get(size_t id) const noexcept;
+        [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const noexcept;
 
         [[nodiscard]] bool exists(const size_t id) const {
             return symbols.contains(id);
@@ -1135,28 +1267,6 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
-    class LOAD_REF {
-    public:
-        COMMON(LOAD_REF)
-        std::vector<Value> operands;
-
-        explicit LOAD_REF(const std::string& name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    class INDEX_REF {
-    public:
-        COMMON(INDEX_REF)
-        std::vector<Value> operands;
-
-        INDEX_REF() = default;
-
-        void emit(VM &vm) const;
-    };
-
     class STORE_ARG {
     public:
         COMMON(STORE_ARG)
@@ -1232,7 +1342,6 @@ return std::get<CppType>(data); \
         size_t pc = 0;
         size_t label_counter = 0;
         std::shared_ptr<ModuleObject> main_module;
-        std::vector<Value> object_pool;
 
         void init_builtins();
 
@@ -1270,7 +1379,7 @@ return std::get<CppType>(data); \
 
         explicit(false) ModuleObject(const SymbolTable& symbols) : is_user(false) {
             for (const auto& [id, val] : symbols.symbols) {
-                exports[g_string_pool.get_string(id)] = val;
+                exports[g_string_pool.get_string(id)] = *val;
             }
             init();
         }
@@ -1278,7 +1387,7 @@ return std::get<CppType>(data); \
         explicit ModuleObject(const std::vector<SymbolTable> &symbol_stack) : is_user(true) {
             for (const auto& table : symbol_stack) {
                 for (const auto& [id, val] : table.symbols) {
-                    exports[g_string_pool.get_string(id)] = val;
+                    exports[g_string_pool.get_string(id)] = *val;
                 }
             }
             init();
