@@ -72,15 +72,6 @@ elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
     message(STATUS "OpenLamina: RELEASE mode (aggressive optimization)")
 endif ()
 
-if (WIN32 AND TARGET LammpCore)
-    add_custom_command(TARGET optimizer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:LammpCore>"
-        "$<TARGET_FILE_DIR:optimizer>"
-        COMMENT "Copying LammpCore.dll to optimizer directory"
-    )
-endif()
-
 target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -90,7 +81,7 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" OFF)
+option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" ON)
 
 if (FETCH_LAMMP)
     message(STATUS "OpenLamina: Fetching LAMMP")
@@ -119,6 +110,8 @@ if (FETCH_LAMMP)
     target_include_directories(OpenLamina PRIVATE
             ${LAMMP_SOURCE_DIR}/include
     )
+
+    target_link_libraries(OpenLamina PRIVATE LammpCore)
 else()
     message(STATUS "Try to use local LAMMP")
     # 链接 LammpCore 动态库

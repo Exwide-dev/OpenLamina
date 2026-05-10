@@ -216,7 +216,7 @@ void run_test() {
 }
 
 int main(const int argc, char* argv[]) {
-    run_test();
+    // run_test();
     const auto [
         show_help,
         show_version,
