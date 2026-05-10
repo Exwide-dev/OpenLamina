@@ -22,26 +22,40 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # ==================== 设置编译器为 Clang ====================
-    - name: Set compiler (Linux)
+    # ==================== 安装 Clang 21.1.7 ====================
+    - name: Install Clang 21 (Ubuntu)
       if: runner.os == 'Linux'
       run: |
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "CXX=clang++" >> $GITHUB_ENV
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" -y
         sudo apt-get update
-        sudo apt-get install -y clang
+        sudo apt-get install -y clang-21 lld-21
+        echo "CC=clang-21" >> $GITHUB_ENV
+        echo "CXX=clang++-21" >> $GITHUB_ENV
 
-    - name: Set compiler (macOS)
+    - name: Install Clang 21 (macOS)
       if: runner.os == 'macOS'
       run: |
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "CXX=clang++" >> $GITHUB_ENV
+        brew update
+        brew install llvm@21
+        echo "/usr/local/opt/llvm@21/bin" >> $GITHUB_PATH
+        echo "CC=/usr/local/opt/llvm@21/bin/clang" >> $GITHUB_ENV
+        echo "CXX=/usr/local/opt/llvm@21/bin/clang++" >> $GITHUB_ENV
 
-    - name: Set compiler (Windows)
+    - name: Install Clang 21 (Windows)
       if: runner.os == 'Windows'
       run: |
-        echo "CC=clang-cl" >> $GITHUB_ENV
-        echo "CXX=clang-cl" >> $GITHUB_ENV
+        choco install llvm --version=21.1.7 -y
+        echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "CC=clang.exe" >> $GITHUB_ENV
+        echo "CXX=clang++.exe" >> $GITHUB_ENV
+
+    # ==================== 验证 Clang 版本 ====================
+    - name: Verify Clang version
+      shell: bash
+      run: |
+        clang --version
+        clang++ --version
 
     # ==================== 安装 Flex 和 Bison ====================
     - name: Install Flex and Bison (Linux)
@@ -70,8 +84,8 @@ jobs:
         cmake -B build \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DFETCH_LAMMP=ON \
-          -DCMAKE_C_COMPILER=${{ env.CC }} \
-          -DCMAKE_CXX_COMPILER=${{ env.CXX }}
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_CXX_COMPILER=clang++
 
     # ==================== 构建 ====================
     - name: Build
