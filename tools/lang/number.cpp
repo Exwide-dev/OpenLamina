@@ -37,7 +37,7 @@ Number::BigNum::BigNum(int64_t val) {
         return;
     }
     is_negative = val < 0;
-    uint64_t abs_val = static_cast<uint64_t>(is_negative ? -val : val);
+    auto abs_val = static_cast<uint64_t>(is_negative ? -val : val);
     size = abs_val > LIMB_MAX ? 2 : 1;
     allocate(size);
     if (size == 1) {

@@ -21,7 +21,7 @@ std::string(#expr) + ": " + fn(expr)
 std::string(#expr) + ": " + fn(expr)suffix
 
 #define LOG(msg) \
-std::cout << "\033[33m[DEBUG] " << __FILE__ << " | " << msg << "\033[0m" << std::endl
+std::cout << "\033[33m[DEBUG] " << __FILE__ << ":" << __LINE__ << " | " << msg << "\033[0m" << std::endl
 
 #else
 

@@ -176,12 +176,25 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     vm.run();
 
     const std::vector tests = {20, 25, 30};
-    constexpr int n = 20;
 
     for (const auto& test : tests) {
+        constexpr int n = 20;
         const auto tstart = clock();
+        auto ast = parse(test_fib_format(test));
+        auto tcode = lm::irgen::Generator(ast).gen();
+        std::cerr << "AST: " << std::endl;
+        printAST(ast);
+        std::cerr << "Code: " << std::endl;
+        std::string codes;
+        size_t j = 0;
+        for (auto const& elem : code) {
+            std::visit([&](auto& op) {
+                codes.append(std::format("{:3} | {}\n", j, op.toString()));
+            }, elem);
+            j++;
+        }
+        std::cerr << codes << std::endl;
         for (int i = 0; i < n; i++) {
-            auto tcode = lm::irgen::Generator(parse(test_fib_format(test))).gen();
             std::cerr << "Testing " << test_fib_format(test) << std::endl;
             vm.code.insert(vm.code.end(), tcode.begin(), tcode.end());
             vm.run();
@@ -193,13 +206,17 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     delete got_ast;
 }
 
-int main(const int argc, char* argv[]) {
+void run_test() {
     std::cout << "Testing module system..." << std::endl;
     test_module_system();
     std::cout << "Testing fib speed..." << std::endl;
-    //test_fib_speed();
-    //std::cout << "\nPress Enter to continue to REPL...";
+    test_fib_speed();
+    std::cout << "\nPress Enter to continue to REPL...";
     std::cin.get();
+}
+
+int main(const int argc, char* argv[]) {
+    run_test();
     const auto [
         show_help,
         show_version,

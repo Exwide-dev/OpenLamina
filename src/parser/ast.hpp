@@ -12,13 +12,11 @@ struct UseItem {
     UseItem(std::string n, std::string a) : name(std::move(n)), alias(std::move(a)) {}
 };
 
-// 值类别枚举
 enum class ValueCategory {
     LVALUE,
     RVALUE
 };
 
-// AST节点类型枚举
 enum class ASTNodeType {
     Unknown,
     BlockStmt,
@@ -53,12 +51,10 @@ enum class ASTNodeType {
     IndexAccess
 };
 
-// 鍓嶅悜澹版槑
 struct ASTNode;
 struct ExprNode;
 struct TypeNode;
 
-// AST鑺傜偣鍩虹被
 struct ASTNode {
     ASTNodeType kind;
     std::vector<ASTNode*> children;
@@ -83,7 +79,7 @@ struct ExprNode : ASTNode {
 struct TypeNode : ASTNode {
     std::string name;
 
-    explicit TypeNode(std::string  n) : ASTNode(ASTNodeType::Type), name(std::move(n)) {}
+    explicit TypeNode(std::string n) : ASTNode(ASTNodeType::Type), name(std::move(n)) {}
     ~TypeNode() override = default;
 };
 
@@ -104,7 +100,7 @@ struct CompositeTypeNode final : TypeNode {
 struct NumberNode final : ExprNode {
     std::string value;
 
-    explicit NumberNode(std::string  v) : ExprNode(ASTNodeType::Number), value(std::move(v)) {}
+    explicit NumberNode(std::string v) : ExprNode(ASTNodeType::Number), value(std::move(v)) {}
     ~NumberNode() override = default;
     [[nodiscard]] ValueCategory getValueCategory() const override {
         return ValueCategory::RVALUE;
@@ -124,7 +120,7 @@ struct BoolNode final : ExprNode {
 struct StringNode final : ExprNode {
     std::string value;
 
-    explicit StringNode(std::string  v) : ExprNode(ASTNodeType::String), value(std::move(v)) {}
+    explicit StringNode(std::string v) : ExprNode(ASTNodeType::String), value(std::move(v)) {}
     ~StringNode() override = default;
     [[nodiscard]] ValueCategory getValueCategory() const override {
         return ValueCategory::RVALUE;
@@ -149,7 +145,7 @@ struct VectorNode final : ExprNode {
 struct VarRefNode : ExprNode {
     std::string name;
 
-    explicit VarRefNode(std::string  n) : ExprNode(ASTNodeType::VarRef), name(std::move(n)) {}
+    explicit VarRefNode(std::string n) : ExprNode(ASTNodeType::VarRef), name(std::move(n)) {}
     ~VarRefNode() override = default;
     [[nodiscard]] ValueCategory getValueCategory() const override {
         return ValueCategory::LVALUE;
@@ -160,7 +156,7 @@ struct UnaryNode final : ExprNode {
     std::string op;
     ExprNode* operand;
 
-    UnaryNode(std::string  o, ExprNode* oper)
+    UnaryNode(std::string o, ExprNode* oper)
         : ExprNode(ASTNodeType::Unary), op(std::move(o)), operand(oper) {}
     ~UnaryNode() override {
         delete operand;
@@ -175,7 +171,7 @@ struct BinaryNode : ExprNode {
     ExprNode* left;
     ExprNode* right;
 
-    BinaryNode(ExprNode* l, ExprNode* r, std::string  o)
+    BinaryNode(ExprNode* l, ExprNode* r, std::string o)
         : ExprNode(ASTNodeType::Binary), op(std::move(o)), left(l), right(r) {}
     ~BinaryNode() override {
         delete left;
@@ -236,7 +232,7 @@ struct VMCallNode final : ExprNode {
     std::string index;
     std::vector<ASTNode*> args;
 
-    VMCallNode(std::string  idx, std::vector<ASTNode*> a)
+    VMCallNode(std::string idx, std::vector<ASTNode*> a)
         : ExprNode(ASTNodeType::VMCall), index(std::move(idx)), args(std::move(a)) {}
     ~VMCallNode() override {
         for (const auto arg : args) {
@@ -262,14 +258,13 @@ struct VarDeclNode final : ASTNode {
     ExprNode* init;
     bool is_redecl;
 
-    VarDeclNode(std::string  n, ExprNode* i, bool redec = true)
+    VarDeclNode(std::string n, ExprNode* i, bool redec = true)
         : ASTNode(ASTNodeType::VarDecl), name(std::move(n)), init(i), is_redecl(redec) {}
     ~VarDeclNode() override {
         delete init;
     }
 };
 
-// 新增：赋值语句节点
 struct AssignNode final : ASTNode {
     ExprNode* var;
     ExprNode* value;
@@ -288,7 +283,7 @@ struct FuncDeclNode final : ASTNode {
     std::vector<TypeNode*> args_type;
     TypeNode* ret_type{};
 
-    FuncDeclNode(std::string  n, std::vector<std::string> p, BlockStmtNode* b)
+    FuncDeclNode(std::string n, std::vector<std::string> p, BlockStmtNode* b)
         : ASTNode(ASTNodeType::FuncDecl), name(std::move(n)), params(std::move(p)), body(b) {}
     ~FuncDeclNode() override {
         delete body;
@@ -323,7 +318,7 @@ struct ExternFuncNode : ASTNode {
     StringNode* lib_name;
     TypeNode* ret_type;
 
-    ExternFuncNode(std::string  n, std::vector<std::string> p,
+    ExternFuncNode(std::string n, std::vector<std::string> p,
                    std::vector<TypeNode*> a, StringNode* l,
                    TypeNode* r)
         : ASTNode(ASTNodeType::ExternFunc), name(std::move(n)), params(std::move(p)),
@@ -408,7 +403,7 @@ struct ModuleNode final : ASTNode {
     std::vector<ExternFuncNode*> dyn_funcs;
     std::vector<ModuleNode*> children;
 
-    ModuleNode(std::string  n, const Types t, StringNode* l,
+    ModuleNode(std::string n, const Types t, StringNode* l,
               std::vector<VarDeclNode*> v,
               std::vector<FuncDeclNode*> o,
               std::vector<ExternFuncNode*> d,

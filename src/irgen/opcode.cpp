@@ -52,8 +52,8 @@ namespace irgen {
         symbols.set(id, std::make_shared<Value>(value));
     }
 
-    void SymbolTable::set(const size_t id, std::shared_ptr<Value> value) {
-        symbols.set(id, std::move(value));
+    void SymbolTable::set(const size_t id, const std::shared_ptr<Value>& value) {
+        symbols.set(id, value);
     }
 
     // 初始化内置函数
@@ -67,7 +67,7 @@ namespace irgen {
         init_builtins();
     }
 
-    void irgen::VM::init_builtins() {
+    void VM::init_builtins() {
         SymbolTable temp_symbols;
         lang::init_builtins(temp_symbols);
         
@@ -81,14 +81,14 @@ namespace irgen {
         main_module->set_attr("std", Value(std_module));
     }
 
-    void irgen::VM::run() {
+    void VM::run() {
         try {
             scan_labels();
             for (; pc < code.size(); pc++) {
                 std::visit([&](auto &op) -> void {
                     LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
                     op.emit(*this);
-                    LOG("irgen::VM " << op_stack.toString());
+                    LOG("VM " << op_stack.toString());
                 }, code[pc]);
             }
             if (!op_stack.empty()) {
@@ -102,107 +102,115 @@ namespace irgen {
         }
     }
 
-    std::optional<Value> irgen::VM::get_symbol(const std::string& name) const {
+    std::optional<Value> VM::get_symbol(const std::string& name) const {
         return main_module->get_attr(name);
     }
 
-    void irgen::VM::set_symbol(const std::string& name, const Value& value) {
+    void VM::set_symbol(const std::string& name, const Value& value) {
         main_module->set_attr(name, value);
     }
 
-    inline void PUSH::emit(irgen::VM &vm) const {
+    inline void PUSH::emit(VM &vm) const {
         vm.op_stack.push(operands[0]);
     }
 
-    inline void ADD::emit(irgen::VM &vm) {
+    inline void ADD::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() + b.deref());
     }
 
-    inline void MUL::emit(irgen::VM &vm) {
+    inline void MUL::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() * b.deref());
     }
 
-    inline void SUB::emit(irgen::VM &vm) {
+    inline void SUB::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() - b.deref());
     }
 
-    inline void DIV::emit(irgen::VM &vm) {
+    inline void DIV::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() / b.deref());
     }
 
-    inline void NEG::emit(irgen::VM &vm) {
+    inline void NEG::emit(VM &vm) {
         auto value = vm.op_stack.popValue();
         vm.op_stack.push(-value.deref());
     }
 
-    inline void NOT::emit(irgen::VM &vm) {
+    inline void NOT::emit(VM &vm) {
         auto value = vm.op_stack.popValue();
         vm.op_stack.push(!value.deref());
     }
 
-    inline void AND::emit(irgen::VM &vm) {
+    inline void AND::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() && b.deref());
     }
 
-    inline void OR::emit(irgen::VM &vm) {
+    inline void OR::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() || b.deref());
     }
 
-    inline void EQ::emit(irgen::VM &vm) {
+    inline void EQ::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(Value(a.deref() == b.deref()));
     }
 
-    inline void NEQ::emit(irgen::VM &vm) {
+    inline void NEQ::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(Value(a.deref() != b.deref()));
     }
 
-    inline void LT::emit(irgen::VM &vm) {
+    inline void LT::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() < b.deref());
     }
 
-    inline void LTE::emit(irgen::VM &vm) {
+    inline void LTE::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() <= b.deref());
     }
 
-    inline void GT::emit(irgen::VM &vm) {
+    inline void GT::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() > b.deref());
     }
 
-    inline void GTE::emit(irgen::VM &vm) {
+    inline void GTE::emit(VM &vm) {
         auto b = vm.op_stack.popValue();
         auto a = vm.op_stack.popValue();
         vm.op_stack.push(a.deref() >= b.deref());
     }
 
-    inline void STORE::emit(irgen::VM &vm) const {
+    std::string SymbolTable::toString() const {
+        std::string k;
+        for (const auto& [a, b] : *this) {
+            k.append(std::format("{} : {}({})", a, b->toString(), b->type_name()));
+        }
+        return k;
+    }
+
+    inline void STORE::emit(VM &vm) const {
         Value value = vm.op_stack.popValue();
         Value ref = vm.op_stack.popValue();
         ref.set(value);
         
         if (ref.isReference()) {
-            auto ref_ptr = ref.asReference();
+            const auto& ref_ptr = ref.asReference();
             if (ref_ptr->value_ptr && vm.main_module) {
                 // 更新所有匹配的符号
                 for (auto& symbol_table : vm.symbol_stack) {
@@ -214,11 +222,17 @@ namespace irgen {
                 }
             }
         }
+
+        LOG("Done, now symbol: " << vm.symbol_stack.back().toString());
     }
 
-    inline void LOAD::emit(irgen::VM &vm) const {
+    inline void LOAD::emit(VM &vm) const {
+        /*if (operands[1].asBool()) {
+            vm.op_stack.push(Value(std::make_shared<Ref>(std::make_shared<Value>())));
+            return;
+        }*/
         const auto var_id = static_cast<size_t>(operands[0].asInt());
-        const std::string var_name = g_string_pool.get_string(var_id);
+        const std::string& var_name = g_string_pool.get_string(var_id);
 
         std::shared_ptr<Value> value_ptr;
         
@@ -255,9 +269,9 @@ namespace irgen {
         vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
     }
 
-    inline void LABEL::emit(irgen::VM &) {}
+    inline void LABEL::emit(VM &) {}
 
-    inline void GOTO::emit(irgen::VM &vm) const {
+    inline void GOTO::emit(VM &vm) const {
         const auto label_id = static_cast<size_t>(operands[0].asInt());
         if (not vm.label_table.contains(label_id)) {
             throw RuntimeError("Unknown label: " + std::to_string(label_id));
@@ -265,19 +279,19 @@ namespace irgen {
         vm.pc = vm.label_table[label_id];
     }
 
-    inline void IFTRUEGOTO::emit(irgen::VM &vm) const {
+    inline void IFTRUEGOTO::emit(VM &vm) const {
         if (vm.op_stack.popValue().asBool()) {
             GOTO(operands[0]).emit(vm);
         }
     }
 
-    inline void ENTER_SCOPE::emit(irgen::VM &vm) {
+    inline void ENTER_SCOPE::emit(VM &vm) {
         LOG("Enter scope");
         vm.symbol_stack.emplace_back();
         vm.cache.enter_scope();
     }
 
-    inline void LEAVE_SCOPE::emit(irgen::VM &vm) {
+    inline void LEAVE_SCOPE::emit(VM &vm) {
         LOG("Leave scope");
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.pop_back();
@@ -325,7 +339,7 @@ namespace irgen {
         }
     }
 
-    inline void FINDMOD::emit(irgen::VM &vm) {
+    inline void FINDMOD::emit(VM &vm) {
         const std::string module_name = g_string_pool.get_string(operands[0].asInt());
 
         if (module_name.empty()) {
@@ -336,9 +350,6 @@ namespace irgen {
         vm.op_stack.push(result);
     }
 
-    inline void ATTR::emit(irgen::VM &vm) {
-
-    }
 
     inline void GETATTR::emit(VM &vm) const {
         const std::string attr_name = g_string_pool.get_string(operands[0].asInt());
@@ -361,7 +372,7 @@ namespace irgen {
         }
     }
 
-    inline void VEC_NEW::emit(irgen::VM &vm) const {
+    inline void VEC_NEW::emit(VM &vm) const {
         size_t element_count = static_cast<size_t>(operands[0].asInt());
         std::vector<std::shared_ptr<Value>> elements;
         elements.reserve(element_count);
@@ -375,7 +386,7 @@ namespace irgen {
         vm.op_stack.push(Value(std::move(elements)));
     }
 
-    inline void INDEX::emit(irgen::VM &vm) const {
+    inline void INDEX::emit(VM &vm) const {
         Value index_val = vm.op_stack.popValue();
         Value obj = vm.op_stack.popValue();
         
@@ -399,15 +410,25 @@ namespace irgen {
     }
 
     inline void STORE_ARG::emit(VM &vm) const {
-        Value value = vm.op_stack.popValue();
+        const Value value = vm.op_stack.popValue();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         
-        if (vm.symbol_stack.empty()) {
+        /*if (vm.symbol_stack.empty()) {
             throw RuntimeError("No symbol table available");
-        }
+        }*/
         
         vm.symbol_stack.back().set(var_id, value);
     }
+
+    void NEW_VAR::emit(VM &vm) const {
+        auto var_val = std::make_shared<Ref>(std::make_shared<Value>());
+        Value var(var_val);
+        LOG(ITIS(,operands[0].type_name()));
+        // vm.symbol_stack.back().set(operands[0].asInt(), var);
+        vm.main_module->set_attr(g_string_pool.get_string(operands[0].asInt()), var);
+        vm.op_stack.push(var);
+    }
+
 
     Value ModuleObject::import(const std::string& module_name) {
         auto existing = get_attr(module_name);
@@ -486,14 +507,14 @@ namespace irgen {
     }
 
 
-    inline void LABEL::set_label(irgen::VM &vm, const std::optional<size_t> on) const {
+    inline void LABEL::set_label(VM &vm, const std::optional<size_t> on) const {
         vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
     }
 
     template <StringType string>
     ModuleObject::ModuleObject(string code) : is_user(true) {
         const auto codes = lm::irgen::Generator(parse(code)).gen();
-        owner_vm = new irgen::VM(codes);
+        owner_vm = new VM(codes);
         owner_vm->run();
         
         for (const auto& [name, value] : owner_vm->main_module->exports) {

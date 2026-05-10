@@ -52,7 +52,6 @@ class Number {
             std::string result;
             result.reserve(actual_len);
 
-            // lammp_to_str_ 输出的是最低有效位在前，所以需要反向读取
             for (mp_size_t i = 0; i < actual_len; ++i) {
                 const mp_byte_t digit = buffer[actual_len - 1 - i];
                 if (digit < 10) {

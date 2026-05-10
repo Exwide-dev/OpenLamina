@@ -109,7 +109,7 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::VarDecl) {
             const auto* var_decl_node = dynamic_cast<lmx::VarDeclNode*>(node);
             if (var_decl_node->init) {
-                code.emplace_back(::irgen::LOAD(var_decl_node->name));
+                code.emplace_back(::irgen::NEW_VAR(var_decl_node->name));
                 auto init_code = gen_code(var_decl_node->init, loop_stack);
                 code.insert(code.end(), init_code.begin(), init_code.end());
                 code.emplace_back(::irgen::STORE());
@@ -119,8 +119,12 @@ namespace lm::irgen {
             if (assign_node->var->getValueCategory() != lmx::ValueCategory::LVALUE) {
                 throw RuntimeError("Left-hand side of assignment must be an lvalue");
             }
-            auto var_code = gen_code(assign_node->var, loop_stack);
-            code.insert(code.end(), var_code.begin(), var_code.end());
+            if (assign_node->var->kind == lmx::ASTNodeType::VarRef) {
+                code.emplace_back(::irgen::NEW_VAR(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
+            } else {
+                auto var_code = gen_code(assign_node->var, loop_stack);
+                code.insert(code.end(), var_code.begin(), var_code.end());
+            }
             auto value_code = gen_code(assign_node->value, loop_stack);
             code.insert(code.end(), value_code.begin(), value_code.end());
             code.emplace_back(::irgen::STORE());

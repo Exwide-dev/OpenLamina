@@ -1,4 +1,3 @@
-# 修正 CMake 最低版本要求
 cmake_minimum_required(VERSION 3.15)
 project(OpenLamina
         VERSION 0.1.3
@@ -9,9 +8,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(BUILD_SHARED_LIBS ON)
 
-# ==============================================
-# 1. 配置 Flex & Bison
-# ==============================================
 find_package(FLEX REQUIRED)
 find_package(BISON REQUIRED)
 
@@ -20,7 +16,6 @@ set(LEXER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/lexer/scanner.l")
 set(PARSER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/parser/parser.y")
 
 # 定义 Flex 和 Bison 的生成目标
-# 这里会生成 lexer.cpp 和 parser.cpp 等文件
 FLEX_TARGET(OpenLaminaScanner ${LEXER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/lexer_generated.cpp
         COMPILE_FLAGS --nounistd)
 BISON_TARGET(OpenLaminaParser ${PARSER_SRC} ${CMAKE_CURRENT_BINARY_DIR}/parser.tab.cpp)
@@ -28,48 +23,37 @@ BISON_TARGET(OpenLaminaParser ${PARSER_SRC} ${CMAKE_CURRENT_BINARY_DIR}/parser.t
 # 声明 Flex 和 Bison 的依赖关系
 ADD_FLEX_BISON_DEPENDENCY(OpenLaminaScanner OpenLaminaParser)
 
-# ==============================================
-# 2. 配置 SymEngine
-# ==============================================
-# 如果 SymEngine 安装在了非标准路径，可以通过 PATHS 指定
-# find_package(SymEngine 0.6.0 CONFIG PATHS /path/to/symengine)
-# find_package(SymEngine 0.6.0 CONFIG REQUIRED)
-
-# ==============================================
-# 3. 创建可执行文件
-# ==============================================
-# 将你项目中的其他源文件（如 main.cpp）和生成的文件一起添加
 add_executable(
     OpenLamina
     main.cpp
     ${FLEX_OpenLaminaScanner_OUTPUTS}
     ${BISON_OpenLaminaParser_OUTPUTS}
-        tools/debug.cpp
-        tools/debug.hpp
-        tools/error.cpp
-        tools/error.hpp
-        tools/lang/builtins.cpp
-        tools/lang/builtins.hpp
+    tools/debug.cpp
+    tools/debug.hpp
+    tools/error.cpp
+    tools/error.hpp
+    tools/lang/builtins.cpp
+    tools/lang/builtins.hpp
 
-        src/irgen/generator.cpp
-        src/irgen/generator.hpp
-        src/lexer/lex.cpp
-        src/front-end/front_end.cpp
-        src/front-end/front_end.hpp
+    src/irgen/generator.cpp
+    src/irgen/generator.hpp
+    src/lexer/lex.cpp
+    src/front-end/front_end.cpp
+    src/front-end/front_end.hpp
 
-        src/irgen/opcode.cpp
-        src/irgen/opcode.hpp
-        src/repl/repl.cpp
-        src/repl/repl.hpp
-        src/lexer/lexer_vars.hpp
-        tools/lang/number.cpp
-        tools/lang/number.hpp
-        src/compiler/module_compiler.cpp
-        src/compiler/module_compiler.hpp
-        src/compiler/module_manager.cpp
-        src/compiler/module_manager.hpp
-        tools/cli.cpp
-        tools/cli.hpp
+    src/irgen/opcode.cpp
+    src/irgen/opcode.hpp
+    src/repl/repl.cpp
+    src/repl/repl.hpp
+    src/lexer/lexer_vars.hpp
+    tools/lang/number.cpp
+    tools/lang/number.hpp
+    src/compiler/module_compiler.cpp
+    src/compiler/module_compiler.hpp
+    src/compiler/module_manager.cpp
+    src/compiler/module_manager.hpp
+    tools/cli.cpp
+    tools/cli.hpp
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -88,17 +72,17 @@ elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
     message(STATUS "OpenLamina: RELEASE mode (aggressive optimization)")
 endif ()
 
+if (WIN32 AND TARGET LammpCore)
+    add_custom_command(TARGET optimizer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:LammpCore>"
+        "$<TARGET_FILE_DIR:optimizer>"
+        COMMENT "Copying LammpCore.dll to optimizer directory"
+    )
+endif()
 
-# ==============================================
-# 4. 链接库与包含目录
-# ==============================================
-# 包含 Flex/Bison 生成的文件所在的目录（通常是 CMAKE_CURRENT_BINARY_DIR）
 target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-# 包含源码目录
 target_include_directories(OpenLamina PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-# 链接 SymEngine 库
-# target_link_libraries(OpenLamina PRIVATE ${SYMENGINE_LIBRARIES})
 
 target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
@@ -106,34 +90,37 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-message(STATUS "OpenLamina: Fetching LAMMP")
+option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" OFF)
 
-include(FetchContent)
+if (FETCH_LAMMP)
+    message(STATUS "OpenLamina: Fetching LAMMP")
+    include(FetchContent)
 
-FetchContent_Declare(
-        LAMMP
-        GIT_REPOSITORY https://github.com/Lamina-dev/LAMMP.git
-        GIT_TAG main
-)
-
-set(USE_ASM OFF CACHE BOOL "Disable assembly" FORCE)
-
-FetchContent_MakeAvailable(LAMMP)
-
-# 链接 LammpCore 动态库
-target_link_libraries(OpenLamina PRIVATE LammpCore)
-
-# 复制 DLL 到输出目录
-if (WIN32 AND TARGET LammpCore)
-    add_custom_command(TARGET OpenLamina POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:LammpCore>"
-            "$<TARGET_FILE_DIR:OpenLamina>"
-            COMMENT "Copying LammpCore.dll to output directory"
+    FetchContent_Declare(
+            LAMMP
+            GIT_REPOSITORY https://github.com/Lamina-dev/LAMMP.git
+            GIT_TAG main
     )
-endif ()
 
-# 如果需要使用 LAMMP 的头文件
-target_include_directories(OpenLamina PRIVATE
-        ${LAMMP_SOURCE_DIR}/include
-)
+    set(USE_ASM OFF CACHE BOOL "Disable assembly" FORCE)
+
+    FetchContent_MakeAvailable(LAMMP)
+
+    # 复制 DLL 到输出目录
+    if (WIN32 AND TARGET LammpCore)
+        add_custom_command(TARGET OpenLamina POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:LammpCore>"
+                "$<TARGET_FILE_DIR:OpenLamina>"
+                COMMENT "Copying LammpCore.dll to output directory"
+        )
+    endif ()
+
+    target_include_directories(OpenLamina PRIVATE
+            ${LAMMP_SOURCE_DIR}/include
+    )
+else()
+    message(STATUS "Try to use local LAMMP")
+    # 链接 LammpCore 动态库
+    target_link_libraries(OpenLamina PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/libLammpCore.dll)
+endif()

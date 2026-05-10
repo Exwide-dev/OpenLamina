@@ -42,7 +42,7 @@ namespace cli {
                 return 1;
             }
 
-            std::string source((std::istreambuf_iterator<char>(file)),
+            std::string source((std::istreambuf_iterator(file)),
                              std::istreambuf_iterator<char>());
             file.close();
 
