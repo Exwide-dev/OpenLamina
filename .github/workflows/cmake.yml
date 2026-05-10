@@ -52,10 +52,9 @@ jobs:
 
     # ==================== 验证 Clang 版本 ====================
     - name: Verify Clang version
-      shell: bash
       run: |
-        clang --version
-        clang++ --version
+        ${{ env.CC }} --version
+        ${{ env.CXX }} --version
 
     # ==================== 安装 Flex 和 Bison ====================
     - name: Install Flex and Bison (Linux)
@@ -84,8 +83,8 @@ jobs:
         cmake -B build \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DFETCH_LAMMP=ON \
-          -DCMAKE_C_COMPILER=clang \
-          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_C_COMPILER=${{ env.CC }} \
+          -DCMAKE_CXX_COMPILER=${{ env.CXX }}
 
     # ==================== 构建 ====================
     - name: Build
