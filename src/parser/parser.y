@@ -66,6 +66,7 @@
 %token <string_val> OPER_GE   // >=
 %token <string_val> OPER_COMMA  // ,
 %token <string_val> OPER_DOT // .
+%token <string_val> OPER_COLON // :
 %token <string_val> ASSIGN
 %token <string_val> LPAREN
 %token <string_val> RPAREN
@@ -117,6 +118,7 @@
 %type <ast_list> param_list  // 新增：参数列表
 %type <ast_list> arg_list  // 新增：实参列表
 %type <ast_list> vec_element_list  // 向量元素列表
+%type <ast_list> dict_entry_list   // 字典条目列表
 %type <ast_node> import_stmt
 %type <ast_node> use_stmt
 %type <name_parts> qualified_name
@@ -548,6 +550,19 @@ factor:
         LOG("vector literal parsed successfully");
         delete $3;
     }
+    | LBRACE dict_entry_list RBRACE {
+        LOG("Parsing factor: dictionary literal");
+        std::vector<lmx::DictEntryNode*> entries;
+        for (auto node : *$2) {
+            auto entry = dynamic_cast<lmx::DictEntryNode*>(node);
+            if (entry) {
+                entries.push_back(entry);
+            }
+        }
+        $$ = new lmx::DictionaryNode(entries);
+        LOG("dictionary literal parsed successfully");
+        delete $2;
+    }
     ;
 
 vec_element_list:
@@ -563,6 +578,25 @@ vec_element_list:
     | vec_element_list OPER_COMMA expr {
         LOG("Adding element to vec_element_list");
         $1->push_back($3);
+        $$ = $1;
+    }
+    ;
+
+dict_entry_list:
+    /* empty */ {
+        LOG("Creating empty dict_entry_list");
+        $$ = new std::vector<ASTNode*>();
+    }
+    | STRING_LITERAL OPER_COLON expr {
+        LOG("Creating dict_entry_list with one entry");
+        $$ = new std::vector<ASTNode*>();
+        $$->push_back(new lmx::DictEntryNode(new StringNode(*$1), $3));
+        delete $1;
+    }
+    | dict_entry_list OPER_COMMA STRING_LITERAL OPER_COLON expr {
+        LOG("Adding entry to dict_entry_list");
+        $1->push_back(new lmx::DictEntryNode(new StringNode(*$3), $5));
+        delete $3;
         $$ = $1;
     }
     ;

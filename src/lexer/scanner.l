@@ -79,6 +79,7 @@ using namespace lexer;
 "import"       { addToken(KW_IMPORT, yytext); yylval.string_val = new std::string(yytext); return KW_IMPORT; }
 "use"          { addToken(KW_USE, yytext); yylval.string_val = new std::string(yytext); return KW_USE; }
 "as"           { addToken(KW_AS, yytext); yylval.string_val = new std::string(yytext); return KW_AS; }
+":"            { addToken(OPER_COLON, yytext); yylval.string_val = new std::string(yytext); return OPER_COLON; }
 "."            { addToken(OPER_DOT, yytext); yylval.string_val = new std::string(yytext); return OPER_DOT; }
 "["            { addToken(LBRACKET, yytext); yylval.string_val = new std::string(yytext); return LBRACKET; }
 "]"            { addToken(RBRACKET, yytext); yylval.string_val = new std::string(yytext); return RBRACKET; }

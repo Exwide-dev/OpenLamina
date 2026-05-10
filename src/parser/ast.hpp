@@ -48,7 +48,9 @@ enum class ASTNodeType {
     Import,
     Use,
     Vector,
-    IndexAccess
+    IndexAccess,
+    Dictionary,
+    DictEntry
 };
 
 struct ASTNode;
@@ -135,6 +137,32 @@ struct VectorNode final : ExprNode {
     ~VectorNode() override {
         for (const auto elem : elements) {
             delete elem;
+        }
+    }
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
+};
+
+struct DictEntryNode : ASTNode {
+    ExprNode* key;
+    ExprNode* value;
+
+    DictEntryNode(ExprNode* k, ExprNode* v) : ASTNode(ASTNodeType::DictEntry), key(k), value(v) {}
+    ~DictEntryNode() override {
+        delete key;
+        delete value;
+    }
+};
+
+struct DictionaryNode final : ExprNode {
+    std::vector<DictEntryNode*> entries;
+
+    explicit DictionaryNode(std::vector<DictEntryNode*> e)
+        : ExprNode(ASTNodeType::Dictionary), entries(std::move(e)) {}
+    ~DictionaryNode() override {
+        for (const auto entry : entries) {
+            delete entry;
         }
     }
     [[nodiscard]] ValueCategory getValueCategory() const override {

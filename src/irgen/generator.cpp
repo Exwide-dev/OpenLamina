@@ -34,13 +34,22 @@ namespace lm::irgen {
             const auto* string_node = dynamic_cast<lmx::StringNode*>(node);
             code.emplace_back(::irgen::PUSH(::irgen::Value(string_node->value)));
         } else if (node->kind == lmx::ASTNodeType::Vector) {
-            const auto* vec_node = dynamic_cast<lmx::VectorNode*>(node);
-            for (auto elem : std::ranges::reverse_view(vec_node->elements)) {
-                auto elem_code = gen_code(elem, loop_stack);
-                code.insert(code.end(), elem_code.begin(), elem_code.end());
-            }
-            code.emplace_back(::irgen::VEC_NEW(vec_node->elements.size()));
-        } else if (node->kind == lmx::ASTNodeType::Binary) {
+        const auto* vec_node = dynamic_cast<lmx::VectorNode*>(node);
+        for (auto elem : std::ranges::reverse_view(vec_node->elements)) {
+            auto elem_code = gen_code(elem, loop_stack);
+            code.insert(code.end(), elem_code.begin(), elem_code.end());
+        }
+        code.emplace_back(::irgen::VEC_NEW(vec_node->elements.size()));
+    } else if (node->kind == lmx::ASTNodeType::Dictionary) {
+        const auto* dict_node = dynamic_cast<lmx::DictionaryNode*>(node);
+        for (auto entry : std::ranges::reverse_view(dict_node->entries)) {
+            auto key_code = gen_code(entry->key, loop_stack);
+            auto value_code = gen_code(entry->value, loop_stack);
+            code.insert(code.end(), key_code.begin(), key_code.end());
+            code.insert(code.end(), value_code.begin(), value_code.end());
+        }
+        code.emplace_back(::irgen::DICT_NEW(dict_node->entries.size()));
+    } else if (node->kind == lmx::ASTNodeType::Binary) {
             const auto* bin_node = dynamic_cast<lmx::BinaryNode*>(node);
             auto left_code = gen_code(bin_node->left, loop_stack);
             auto right_code = gen_code(bin_node->right, loop_stack);
@@ -109,7 +118,7 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::VarDecl) {
             const auto* var_decl_node = dynamic_cast<lmx::VarDeclNode*>(node);
             if (var_decl_node->init) {
-                code.emplace_back(::irgen::NEW_VAR(var_decl_node->name));
+                code.emplace_back(::irgen::NEW_CONST(var_decl_node->name));
                 auto init_code = gen_code(var_decl_node->init, loop_stack);
                 code.insert(code.end(), init_code.begin(), init_code.end());
                 code.emplace_back(::irgen::STORE());
@@ -120,7 +129,7 @@ namespace lm::irgen {
                 throw RuntimeError("Left-hand side of assignment must be an lvalue");
             }
             if (assign_node->var->kind == lmx::ASTNodeType::VarRef) {
-                code.emplace_back(::irgen::NEW_VAR(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
+                code.emplace_back(::irgen::LOAD(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
             } else {
                 auto var_code = gen_code(assign_node->var, loop_stack);
                 code.insert(code.end(), var_code.begin(), var_code.end());
@@ -160,7 +169,7 @@ namespace lm::irgen {
 
             code.insert(code.end(), func_body.begin(), func_body.end());
 
-            code.emplace_back(::irgen::LOAD(func_decl_node->name));
+            code.emplace_back(::irgen::NEW_VAR(func_decl_node->name));
             code.emplace_back(::irgen::PUSH(::irgen::Value(func_obj)));
             code.emplace_back(::irgen::STORE());
         } else if (node->kind == lmx::ASTNodeType::DoFuncDecl) {
@@ -179,8 +188,7 @@ namespace lm::irgen {
             func_body.emplace_back(::irgen::ENTER_SCOPE());
 
             for (const auto& param : do_func_node->params) {
-                func_body.emplace_back(::irgen::LOAD(param));
-                func_body.emplace_back(::irgen::STORE());
+                func_body.emplace_back(::irgen::STORE_ARG(param));
             }
 
             if (do_func_node->body) {
@@ -307,7 +315,7 @@ namespace lm::irgen {
             std::string store_name = import_node->alias.empty()
                 ? import_node->module_name.back()
                 : import_node->alias;
-            code.emplace_back(::irgen::LOAD(store_name));
+            code.emplace_back(::irgen::NEW_VAR(store_name));
             code.emplace_back(::irgen::FINDMOD(::irgen::Value(full_module_name)));
             code.emplace_back(::irgen::STORE());
         } else if (node->kind == lmx::ASTNodeType::Use) {
@@ -321,7 +329,7 @@ namespace lm::irgen {
             for (const auto& item : use_node->items) {
                 code.emplace_back(::irgen::GETATTR(::irgen::Value(item.name)));
                 std::string alias = item.alias.empty() ? item.name : item.alias;
-                code.emplace_back(::irgen::LOAD(alias));
+                code.emplace_back(::irgen::NEW_VAR(alias));
                 code.emplace_back(::irgen::STORE());
             }
         } else if (node->kind == lmx::ASTNodeType::MemberAccess) {

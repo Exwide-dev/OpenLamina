@@ -26,6 +26,18 @@ namespace irgen {
                 result += "]";
                 return result;
             }
+            case Type::Dictionary: {
+                std::string result = "{";
+                const auto& entries = asDictionary();
+                size_t i = 0;
+                for (const auto& [key, value] : entries) {
+                    if (i > 0) result += ", ";
+                    result += "\"" + key + "\": " + value->toString();
+                    ++i;
+                }
+                result += "}";
+                return result;
+            }
             case Type::Reference: {
                 auto t = asReference();
                 return t->get().toString();
@@ -37,7 +49,7 @@ namespace irgen {
                     for (const auto& [a, b] : t->exports) {
                         result.append(std::format("  {}: {}\n", a, b.toString()));
                     }
-                    return result + "}}";
+                    return result + "}";
                 }());
             }
             default: return "<__UNKNOWN_Value>";
@@ -54,6 +66,14 @@ namespace irgen {
 
     void SymbolTable::set(const size_t id, const std::shared_ptr<Value>& value) {
         symbols.set(id, value);
+    }
+
+    void SymbolTable::set_constant(size_t id, bool is_constant) {
+        constants.set(id, is_constant);
+    }
+
+    bool SymbolTable::is_constant(const size_t id) const noexcept {
+        return constants.get(id);
     }
 
     // 初始化内置函数
@@ -207,12 +227,35 @@ namespace irgen {
     inline void STORE::emit(VM &vm) const {
         Value value = vm.op_stack.popValue();
         Value ref = vm.op_stack.popValue();
-        ref.set(value);
+        
+        bool is_const = false;
+        bool has_value = false;
         
         if (ref.isReference()) {
             const auto& ref_ptr = ref.asReference();
+            if (ref_ptr->value_ptr && !vm.symbol_stack.empty()) {
+                // 在修改之前先检查常量状态
+                for (auto& symbol_table : vm.symbol_stack) {
+                    for (const auto& [id, val] : symbol_table.symbols) {
+                        if (val.get() == ref_ptr->value_ptr.get()) {
+                            is_const = symbol_table.is_constant(id);
+                            // 直接检查类型，避免 deref() 的问题
+                            has_value = val->getType() != Value::Type::None;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // 如果是常量且已有值，不允许修改
+            if (is_const && has_value) {
+                throw RuntimeError("Cannot modify constant");
+            }
+            
+            // 执行赋值
+            ref.set(value);
+            
             if (ref_ptr->value_ptr && vm.main_module) {
-                // 更新所有匹配的符号
                 for (auto& symbol_table : vm.symbol_stack) {
                     for (const auto& [id, val] : symbol_table.symbols) {
                         if (val.get() == ref_ptr->value_ptr.get()) {
@@ -227,10 +270,6 @@ namespace irgen {
     }
 
     inline void LOAD::emit(VM &vm) const {
-        /*if (operands[1].asBool()) {
-            vm.op_stack.push(Value(std::make_shared<Ref>(std::make_shared<Value>())));
-            return;
-        }*/
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         const std::string& var_name = g_string_pool.get_string(var_id);
 
@@ -256,17 +295,24 @@ namespace irgen {
                 }
             }
             
+            // 如果仍然找不到，创建一个新的变量（不是常量）
             if (!value_ptr) {
-                value_ptr = std::make_shared<Value>();
-            }
-            
-            if (!vm.symbol_stack.empty()) {
-                vm.symbol_stack.back().set(var_id, value_ptr);
+                value_ptr = std::make_shared<Value>(std::make_shared<Ref>(std::make_shared<Value>()));
+                if (!vm.symbol_stack.empty()) {
+                    vm.symbol_stack.back().set(var_id, value_ptr);
+                    vm.symbol_stack.back().set_constant(var_id, false);
+                }
+                vm.op_stack.push(*value_ptr);
+                return;
             }
         }
 
-        // 总是返回引用，确保一致性
-        vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
+        // 如果值已经是引用，直接返回，否则包装成引用
+        if (value_ptr->isReference()) {
+            vm.op_stack.push(*value_ptr);
+        } else {
+            vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
+        }
     }
 
     inline void LABEL::emit(VM &) {}
@@ -381,32 +427,53 @@ namespace irgen {
             elements.push_back(std::make_shared<Value>(vm.op_stack.popValue()));
         }
         
-        // std::reverse(elements.begin(), elements.end());
-        
         vm.op_stack.push(Value(std::move(elements)));
+    }
+
+    inline void DICT_NEW::emit(VM &vm) const {
+        size_t entry_count = static_cast<size_t>(operands[0].asInt());
+        std::unordered_map<std::string, std::shared_ptr<Value>> dict;
+        
+        for (size_t i = 0; i < entry_count; ++i) {
+            Value value = vm.op_stack.popValue();
+            Value key_val = vm.op_stack.popValue();
+            std::string key = key_val.deref().asString();
+            dict[key] = std::make_shared<Value>(value);
+        }
+        
+        vm.op_stack.push(Value(std::move(dict)));
     }
 
     inline void INDEX::emit(VM &vm) const {
         Value index_val = vm.op_stack.popValue();
         Value obj = vm.op_stack.popValue();
         
-        // 解引用索引
-        const Value& idx_deref = index_val.deref();
-        ptrdiff_t idx = idx_deref.asInt();
-        
         // 解引用对象
         Value& obj_deref = obj.deref();
-        if (!obj_deref.isVector()) {
-            throw RuntimeError("INDEX requires a vector object");
-        }
         
-        auto& vec = obj_deref.asVector();
-        if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
-            throw RuntimeError("Index out of range");
+        if (obj_deref.isVector()) {
+            const Value& idx_deref = index_val.deref();
+            ptrdiff_t idx = idx_deref.asInt();
+            
+            auto& vec = obj_deref.asVector();
+            if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+                throw RuntimeError("Index out of range");
+            }
+            
+            vm.op_stack.push(Value(std::make_shared<Ref>(vec[static_cast<size_t>(idx)])));
+        } else if (obj_deref.isDictionary()) {
+            std::string key = index_val.deref().asString();
+            
+            auto& dict = obj_deref.asDictionary();
+            auto it = dict.find(key);
+            if (it == dict.end()) {
+                throw RuntimeError("Key not found: " + key);
+            }
+            
+            vm.op_stack.push(Value(std::make_shared<Ref>(it->second)));
+        } else {
+            throw RuntimeError("INDEX requires a vector or dictionary object");
         }
-        
-        // 无论什么情况，我们都返回对向量元素的引用
-        vm.op_stack.push(Value(std::make_shared<Ref>(vec[static_cast<size_t>(idx)])));
     }
 
     inline void STORE_ARG::emit(VM &vm) const {
@@ -421,11 +488,30 @@ namespace irgen {
     }
 
     void NEW_VAR::emit(VM &vm) const {
-        auto var_val = std::make_shared<Ref>(std::make_shared<Value>());
-        Value var(var_val);
-        LOG(ITIS(,operands[0].type_name()));
-        // vm.symbol_stack.back().set(operands[0].asInt(), var);
-        vm.main_module->set_attr(g_string_pool.get_string(operands[0].asInt()), var);
+        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
+        Value var(ref_val);
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
+        const auto var_name = g_string_pool.get_string(var_id);
+        
+        if (!vm.symbol_stack.empty()) {
+            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set_constant(var_id, false);
+        }
+        vm.main_module->set_attr(var_name, var);
+        vm.op_stack.push(var);
+    }
+
+    void NEW_CONST::emit(VM &vm) const {
+        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
+        Value var(ref_val);
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
+        const auto var_name = g_string_pool.get_string(var_id);
+        
+        if (!vm.symbol_stack.empty()) {
+            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set_constant(var_id, true);
+        }
+        vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
     }
 

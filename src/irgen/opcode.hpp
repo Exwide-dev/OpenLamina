@@ -12,7 +12,7 @@
 #include <vector>
 #include <variant>
 #include <unordered_map>
-#include <flat_map>
+#include <map>
 #include <memory>
 #include <unordered_set>
 #include <initializer_list>
@@ -68,9 +68,11 @@ namespace irgen {
     class ATTR;
     class GETATTR;
     class VEC_NEW;
-    class INDEX;
+class DICT_NEW;
+class INDEX;
     class STORE_ARG;
     class NEW_VAR;
+    class NEW_CONST;
 
     template<typename T>
     class ArrMap {
@@ -324,9 +326,11 @@ namespace irgen {
         FINDMOD,
         GETATTR,
         VEC_NEW,
+        DICT_NEW,
         INDEX,
         STORE_ARG,
-        NEW_VAR
+        NEW_VAR,
+        NEW_CONST
     >;
 
     struct FunctionObject {
@@ -368,6 +372,7 @@ namespace irgen {
             Function,
             Module,
             Vector,
+            Dictionary,
             Reference
         };
 
@@ -381,6 +386,7 @@ namespace irgen {
             std::shared_ptr<FunctionObject>,
             std::shared_ptr<ModuleObject>,
             std::vector<std::shared_ptr<Value> >,
+            std::unordered_map<std::string, std::shared_ptr<Value> >,
             std::shared_ptr<Ref>
         > data;
 
@@ -424,6 +430,10 @@ namespace irgen {
 
         explicit Value(std::vector<std::shared_ptr<Value> > value)
             : type(Type::Vector), data(std::move(value)) {
+        }
+
+        explicit Value(std::unordered_map<std::string, std::shared_ptr<Value> > value)
+            : type(Type::Dictionary), data(std::move(value)) {
         }
 
         Value(const std::initializer_list<Value> init)
@@ -473,6 +483,8 @@ namespace irgen {
                     return "Module";
                 case Type::Vector:
                     return "Vector";
+                case Type::Dictionary:
+                    return "Dictionary";
                 case Type::Reference:
                     return "Reference";
                 default:
@@ -536,6 +548,22 @@ return std::get<CppType>(data); \
                 throw RuntimeError("Value is not a vector");
             }
             return std::get<std::vector<std::shared_ptr<Value> > >(self.data);
+        }
+
+        [[nodiscard]] const std::unordered_map<std::string, std::shared_ptr<Value> > &asDictionary() const {
+            const Value &self = deref();
+            if (self.type != Type::Dictionary) {
+                throw RuntimeError("Value is not a dictionary");
+            }
+            return std::get<std::unordered_map<std::string, std::shared_ptr<Value> > >(self.data);
+        }
+
+        [[nodiscard]] std::unordered_map<std::string, std::shared_ptr<Value> > &asDictionary() {
+            Value &self = deref();
+            if (self.type != Type::Dictionary) {
+                throw RuntimeError("Value is not a dictionary");
+            }
+            return std::get<std::unordered_map<std::string, std::shared_ptr<Value> > >(self.data);
         }
 
         [[nodiscard]] const std::shared_ptr<Ref> &asReference() const {
@@ -731,6 +759,10 @@ return std::get<CppType>(data); \
             return deref().type == Type::Vector;
         }
 
+        [[nodiscard]] bool isDictionary() const {
+            return deref().type == Type::Dictionary;
+        }
+
         [[nodiscard]] bool isReference() const { return type == Type::Reference; }
 
         void set(const Value &value) const {
@@ -758,6 +790,10 @@ return std::get<CppType>(data); \
             os << value.toString();
             return os;
         }
+
+        bool isNumber() const {
+            return deref().type == Type::Number;
+        };
     };
 
     inline Ref::Ref(std::shared_ptr<Value> ptr) {
@@ -777,21 +813,26 @@ return std::get<CppType>(data); \
 
     class SymbolTable {
     public:
-        ArrMap<std::shared_ptr<Value> > symbols;
+        ArrMap<std::shared_ptr<Value>> symbols;
+        ArrMap<bool> constants;
 
         SymbolTable() = default;
 
-        explicit SymbolTable(const std::flat_map<size_t, std::shared_ptr<Value> > &symbols)
+        explicit SymbolTable(const std::map<size_t, std::shared_ptr<Value> > &symbols)
             : symbols(symbols) {
         }
 
-        explicit SymbolTable(std::flat_map<size_t, std::shared_ptr<Value> > &&symbols)
+        explicit SymbolTable(std::map<size_t, std::shared_ptr<Value> > &&symbols)
             : symbols(symbols) {
         }
 
         void set(size_t id, const Value &value);
 
         void set(size_t id, const std::shared_ptr<Value> &value);
+
+        void set_constant(size_t id, bool is_constant);
+
+        [[nodiscard]] bool is_constant(size_t id) const noexcept;
 
         [[nodiscard]] std::string toString() const;
 
@@ -1274,6 +1315,18 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    class DICT_NEW {
+    public:
+        COMMON(DICT_NEW)
+        std::vector<Value> operands;
+
+        explicit DICT_NEW(const size_t entry_count) {
+            operands.emplace_back(static_cast<ptrdiff_t>(entry_count));
+        }
+
+        void emit(VM &vm) const;
+    };
+
     class INDEX {
     public:
         COMMON(INDEX)
@@ -1302,6 +1355,18 @@ return std::get<CppType>(data); \
         std::vector<Value> operands;
 
         explicit NEW_VAR(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    class NEW_CONST {
+    public:
+        COMMON(NEW_CONST)
+        std::vector<Value> operands;
+
+        explicit NEW_CONST(const std::string &name) {
             operands.emplace_back(name);
         }
 
