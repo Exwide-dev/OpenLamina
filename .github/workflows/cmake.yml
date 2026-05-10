@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
 env:
   BUILD_TYPE: Release
 
@@ -21,6 +22,28 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # ==================== 设置编译器为 Clang ====================
+    - name: Set compiler (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CXX=clang++" >> $GITHUB_ENV
+        sudo apt-get update
+        sudo apt-get install -y clang
+
+    - name: Set compiler (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CXX=clang++" >> $GITHUB_ENV
+
+    - name: Set compiler (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        echo "CC=clang-cl" >> $GITHUB_ENV
+        echo "CXX=clang-cl" >> $GITHUB_ENV
+
+    # ==================== 安装 Flex 和 Bison ====================
     - name: Install Flex and Bison (Linux)
       if: runner.os == 'Linux'
       run: |
@@ -40,13 +63,24 @@ jobs:
         choco install winflexbison3 -y
         echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+    # ==================== 配置 CMake ====================
     - name: Configure CMake
+      shell: bash
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DFETCH_LAMMP=ON
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DFETCH_LAMMP=ON \
+          -DCMAKE_C_COMPILER=${{ env.CC }} \
+          -DCMAKE_CXX_COMPILER=${{ env.CXX }}
 
+    # ==================== 构建 ====================
     - name: Build
-      run: cmake --build build --config ${{ env.BUILD_TYPE }}
+      shell: bash
+      working-directory: ./build
+      run: |
+        cmake --build . --config ${{ env.BUILD_TYPE }} --parallel
 
+    # ==================== 上传 artifacts ====================
     - name: Upload artifacts (Windows)
       if: runner.os == 'Windows'
       uses: actions/upload-artifact@v4
