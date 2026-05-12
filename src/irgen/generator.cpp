@@ -43,12 +43,16 @@ namespace lm::irgen {
     } else if (node->kind == lmx::ASTNodeType::Dictionary) {
         const auto* dict_node = dynamic_cast<lmx::DictionaryNode*>(node);
         for (auto entry : std::ranges::reverse_view(dict_node->entries)) {
-            auto key_code = gen_code(entry->key, loop_stack);
-            auto value_code = gen_code(entry->value, loop_stack);
-            code.insert(code.end(), key_code.begin(), key_code.end());
-            code.insert(code.end(), value_code.begin(), value_code.end());
+            auto entry_code = gen_code(entry, loop_stack);
+            code.insert(code.end(), entry_code.begin(), entry_code.end());
         }
         code.emplace_back(::irgen::DICT_NEW(dict_node->entries.size()));
+    } else if (node->kind == lmx::ASTNodeType::DictEntry) {
+        const auto* entry_node = dynamic_cast<lmx::DictEntryNode*>(node);
+        auto key_code = gen_code(entry_node->key, loop_stack);
+        auto value_code = gen_code(entry_node->value, loop_stack);
+        code.insert(code.end(), key_code.begin(), key_code.end());
+        code.insert(code.end(), value_code.begin(), value_code.end());
     } else if (node->kind == lmx::ASTNodeType::Binary) {
             const auto* bin_node = dynamic_cast<lmx::BinaryNode*>(node);
             auto left_code = gen_code(bin_node->left, loop_stack);
@@ -250,7 +254,7 @@ namespace lm::irgen {
                 code.insert(code.end(), cond_code.begin(), cond_code.end());
 
                 code.emplace_back(::irgen::NOT());
-                code.emplace_back(::irgen::IFTRUEGOTO(loop_end_label));
+                code.emplace_back(::irgen::GOTOIF(loop_end_label));
             }
 
             if (while_node->body) {
@@ -282,7 +286,7 @@ namespace lm::irgen {
             code.insert(code.end(), cond_code.begin(), cond_code.end());
 
             code.emplace_back(::irgen::NOT());
-            code.emplace_back(::irgen::IFTRUEGOTO(else_label));
+            code.emplace_back(::irgen::GOTOIF(else_label));
 
             if (if_node->then_block) {
                 auto then_code = gen_code(if_node->then_block, loop_stack);

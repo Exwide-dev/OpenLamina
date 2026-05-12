@@ -89,6 +89,8 @@
 %token <string_val> KW_USE
 %token <string_val> KW_AS
 %token <string_val> KW_VEC
+%token <string_val> KW_CONST
+%token <string_val> KW_VAR
 %token <string_val> LBRACKET
 %token <string_val> RBRACKET
 
@@ -221,6 +223,12 @@ var_decl:
         LOG("var_decl parsed successfully");
         delete $2;
     }
+    | KW_CONST IDENTIFIER ASSIGN expr {
+        LOG("Parsing var_decl: const " + *$2 + " = ...");
+        $$ = new VarDeclNode(*$2, $4, false);
+        LOG("var_decl parsed successfully");
+        delete $2;
+    }
     ;
 
 // 新增：赋值语句规则
@@ -228,6 +236,11 @@ assign_stmt:
     expr ASSIGN expr {
         LOG("Parsing assign_stmt: ... = ...");
         $$ = new AssignNode($1, $3);
+        LOG("assign_stmt parsed successfully");
+    }
+    | KW_VAR IDENTIFIER ASSIGN expr {
+        LOG("Parsing assign_stmt: ... = ...");
+        $$ = new AssignNode(new VarRefNode(*$2), $4);
         LOG("assign_stmt parsed successfully");
     }
     ;
@@ -550,6 +563,12 @@ factor:
         LOG("vector literal parsed successfully");
         delete $3;
     }
+    | LBRACKET vec_element_list RBRACKET {
+        LOG("Parsing factor: vector literal");
+        $$ = new VectorNode(*$2);
+        LOG("vector literal parsed successfully");
+        delete $2;
+    }
     | LBRACE dict_entry_list RBRACE {
         LOG("Parsing factor: dictionary literal");
         std::vector<lmx::DictEntryNode*> entries;
@@ -587,16 +606,14 @@ dict_entry_list:
         LOG("Creating empty dict_entry_list");
         $$ = new std::vector<ASTNode*>();
     }
-    | STRING_LITERAL OPER_COLON expr {
+    | expr OPER_COLON expr {
         LOG("Creating dict_entry_list with one entry");
         $$ = new std::vector<ASTNode*>();
-        $$->push_back(new lmx::DictEntryNode(new StringNode(*$1), $3));
-        delete $1;
+        $$->push_back(new lmx::DictEntryNode($1, $3));
     }
-    | dict_entry_list OPER_COMMA STRING_LITERAL OPER_COLON expr {
+    | dict_entry_list OPER_COMMA expr OPER_COLON expr {
         LOG("Adding entry to dict_entry_list");
-        $1->push_back(new lmx::DictEntryNode(new StringNode(*$3), $5));
-        delete $3;
+        $1->push_back(new lmx::DictEntryNode($3, $5));
         $$ = $1;
     }
     ;
@@ -693,5 +710,5 @@ use_item:
 
 void yyerror(const char* s) {
     has_err = true;
-    detail_msg = std::string("Details: ") + s;
+    detail_msg = s;
 }

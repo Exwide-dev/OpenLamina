@@ -204,6 +204,25 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             printAST(acc->index, indent + 2);
             break;
         }
-        default: std::cout << indent_str << "Unknown Node Type\n";
+        case lmx::ASTNodeType::Dictionary: {
+            const auto dict = dynamic_cast<lmx::DictionaryNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "Dictionary: " << std::endl;
+            for (const auto& dict_entry_node : dict->entries)
+                printAST(dict_entry_node, indent + 2);
+            std::cout << std::endl;
+            break;
+        }
+        case lmx::ASTNodeType::DictEntry: {
+            const auto entry = dynamic_cast<lmx::DictEntryNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "DictEntry: " << std::endl;
+            std::cout << indent_str << "  key: " << std::endl;
+            printAST(entry->key, indent + 4);
+            std::cout << indent_str << "  value:" << std::endl;
+            printAST(entry->value, indent + 4);
+            break;
+        }
+        default:
+            std::cout << indent_str << "Unknown Node Type: "
+                      << static_cast<size_t>(node->kind) << std::endl;
     }
 }

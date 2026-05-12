@@ -65,6 +65,10 @@ using namespace lexer;
 ">"            { addToken(OPER_GT, yytext); yylval.string_val = new std::string(yytext); return OPER_GT; }
 "<="           { addToken(OPER_LE, yytext); yylval.string_val = new std::string(yytext); return OPER_LE; }
 ">="           { addToken(OPER_GE, yytext); yylval.string_val = new std::string(yytext); return OPER_GE; }
+":"            { addToken(OPER_COLON, yytext); yylval.string_val = new std::string(yytext); return OPER_COLON; }
+"."            { addToken(OPER_DOT, yytext); yylval.string_val = new std::string(yytext); return OPER_DOT; }
+"["            { addToken(LBRACKET, yytext); yylval.string_val = new std::string(yytext); return LBRACKET; }
+"]"            { addToken(RBRACKET, yytext); yylval.string_val = new std::string(yytext); return RBRACKET; }
 
 "let"          { addToken(KW_LET, yytext); yylval.string_val = new std::string(yytext); return KW_LET; }
 "func"         { addToken(KW_FUNC, yytext); yylval.string_val = new std::string(yytext); return KW_FUNC; }
@@ -73,16 +77,14 @@ using namespace lexer;
 "if"           { addToken(KW_IF, yytext); yylval.string_val = new std::string(yytext); return KW_IF; }
 "else"         { addToken(KW_ELSE, yytext); yylval.string_val = new std::string(yytext); return KW_ELSE; }
 "loop"         { addToken(KW_LOOP, yytext); yylval.string_val = new std::string(yytext); return KW_LOOP; }
-"while"         { addToken(KW_WHILE, yytext); yylval.string_val = new std::string(yytext); return KW_WHILE; }
+"while"        { addToken(KW_WHILE, yytext); yylval.string_val = new std::string(yytext); return KW_WHILE; }
 "break"        { addToken(KW_BREAK, yytext); yylval.string_val = new std::string(yytext); return KW_BREAK; }
 "continue"     { addToken(KW_CONTINUE, yytext); yylval.string_val = new std::string(yytext); return KW_CONTINUE; }
 "import"       { addToken(KW_IMPORT, yytext); yylval.string_val = new std::string(yytext); return KW_IMPORT; }
 "use"          { addToken(KW_USE, yytext); yylval.string_val = new std::string(yytext); return KW_USE; }
 "as"           { addToken(KW_AS, yytext); yylval.string_val = new std::string(yytext); return KW_AS; }
-":"            { addToken(OPER_COLON, yytext); yylval.string_val = new std::string(yytext); return OPER_COLON; }
-"."            { addToken(OPER_DOT, yytext); yylval.string_val = new std::string(yytext); return OPER_DOT; }
-"["            { addToken(LBRACKET, yytext); yylval.string_val = new std::string(yytext); return LBRACKET; }
-"]"            { addToken(RBRACKET, yytext); yylval.string_val = new std::string(yytext); return RBRACKET; }
+"const"        { addToken(KW_CONST, yytext); yylval.string_val = new std::string(yytext); return KW_CONST; }
+"var"          { addToken(KW_VAR, yytext); yylval.string_val = new std::string(yytext); return KW_VAR; }
 "vec"          { addToken(KW_VEC, yytext); yylval.string_val = new std::string(yytext); return KW_VEC; }
 
 [0-9][0-9_]*  {

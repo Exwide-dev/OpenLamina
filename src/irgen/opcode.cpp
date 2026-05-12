@@ -32,7 +32,7 @@ namespace irgen {
                 size_t i = 0;
                 for (const auto& [key, value] : entries) {
                     if (i > 0) result += ", ";
-                    result += "\"" + key + "\": " + value->toString();
+                    result.append(key->toString() + ": " + value->toString());
                     ++i;
                 }
                 result += "}";
@@ -325,7 +325,7 @@ namespace irgen {
         vm.pc = vm.label_table[label_id];
     }
 
-    inline void IFTRUEGOTO::emit(VM &vm) const {
+    inline void GOTOIF::emit(VM &vm) const {
         if (vm.op_stack.popValue().asBool()) {
             GOTO(operands[0]).emit(vm);
         }
@@ -431,14 +431,13 @@ namespace irgen {
     }
 
     inline void DICT_NEW::emit(VM &vm) const {
-        size_t entry_count = static_cast<size_t>(operands[0].asInt());
-        std::unordered_map<std::string, std::shared_ptr<Value>> dict;
+        auto entry_count = static_cast<size_t>(operands[0].asInt());
+        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> dict;
         
         for (size_t i = 0; i < entry_count; ++i) {
             Value value = vm.op_stack.popValue();
             Value key_val = vm.op_stack.popValue();
-            std::string key = key_val.deref().asString();
-            dict[key] = std::make_shared<Value>(value);
+            dict[std::make_shared<Value>(key_val)] = std::make_shared<Value>(value);
         }
         
         vm.op_stack.push(Value(std::move(dict)));
@@ -456,21 +455,25 @@ namespace irgen {
             ptrdiff_t idx = idx_deref.asInt();
             
             auto& vec = obj_deref.asVector();
-            if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+            if (idx < 0 or static_cast<size_t>(idx) >= vec.size()) {
                 throw RuntimeError("Index out of range");
             }
             
             vm.op_stack.push(Value(std::make_shared<Ref>(vec[static_cast<size_t>(idx)])));
         } else if (obj_deref.isDictionary()) {
-            std::string key = index_val.deref().asString();
+            const auto& key = index_val.deref();
             
             auto& dict = obj_deref.asDictionary();
-            auto it = dict.find(key);
-            if (it == dict.end()) {
-                throw RuntimeError("Key not found: " + key);
+            std::shared_ptr<Value> it;
+            for (const auto& [tkey, tval] : dict) {
+                if (*tkey == key) {
+                    it = std::make_shared<Value>(*tval);
+                    vm.op_stack.push(Value(std::make_shared<Ref>(it)));
+                    return;
+                }
             }
-            
-            vm.op_stack.push(Value(std::make_shared<Ref>(it->second)));
+            throw RuntimeError("key" + key.toString() + " not found");
+
         } else {
             throw RuntimeError("INDEX requires a vector or dictionary object");
         }

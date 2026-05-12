@@ -167,9 +167,9 @@ namespace lang {
         if (args.size() % 2 != 0) {
             throw RuntimeError("dict requires even number of arguments (key-value pairs)");
         }
-        std::unordered_map<std::string, std::shared_ptr<Value>> dict;
+        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> dict;
         for (size_t i = 0; i < args.size(); i += 2) {
-            std::string key = args[i].deref().asString();
+            auto key = std::make_shared<Value>(args[i].deref());
             dict[key] = std::make_shared<Value>(args[i+1]);
         }
         return Value(std::move(dict));
@@ -183,7 +183,7 @@ namespace lang {
         }
         std::vector<std::shared_ptr<Value>> keys;
         for (const auto& [key, value] : val.asDictionary()) {
-            keys.push_back(std::make_shared<Value>(key));
+            keys.push_back(key);
         }
         return Value(std::move(keys));
     }
@@ -210,7 +210,7 @@ namespace lang {
         std::vector<std::shared_ptr<Value>> items;
         for (const auto& [key, value] : val.asDictionary()) {
             std::vector<std::shared_ptr<Value>> pair;
-            pair.push_back(std::make_shared<Value>(key));
+            pair.push_back(key);
             pair.push_back(value);
             items.push_back(std::make_shared<Value>(std::move(pair)));
         }
@@ -223,7 +223,7 @@ namespace lang {
         if (!dict_val.isDictionary()) {
             throw RuntimeError("get requires a dictionary as first argument");
         }
-        std::string key = args[1].deref().asString();
+        auto key = std::make_shared<Value>(args[1].deref());
         const auto& dict = dict_val.asDictionary();
         auto it = dict.find(key);
         if (it != dict.end()) {
@@ -232,7 +232,7 @@ namespace lang {
         if (args.size() >= 3) {
             return args[2];
         }
-        throw RuntimeError("Key not found: " + key);
+        throw RuntimeError("Key not found: " + key->toString());
     }
 
     irgen::ModuleObject math_mod = [] {

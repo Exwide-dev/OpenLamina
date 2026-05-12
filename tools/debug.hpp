@@ -3,7 +3,7 @@
 #include "../src/parser/ast.hpp"
 
 #define DEBUG
-#undef DEBUG
+// #undef DEBUG
 #ifdef DEBUG
 
 #define ITIS(...) \

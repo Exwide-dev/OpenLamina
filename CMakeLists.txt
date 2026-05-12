@@ -81,7 +81,7 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" ON)
+option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" OFF)
 
 if (FETCH_LAMMP)
     message(STATUS "OpenLamina: Fetching LAMMP")

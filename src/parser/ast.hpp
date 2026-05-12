@@ -144,7 +144,7 @@ struct VectorNode final : ExprNode {
     }
 };
 
-struct DictEntryNode : ASTNode {
+struct DictEntryNode final : ASTNode {
     ExprNode* key;
     ExprNode* value;
 
