@@ -393,7 +393,7 @@ namespace irgen {
             std::shared_ptr<ModuleObject>,
             std::vector<std::shared_ptr<Value>>,
             std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>,
-            std::shared_ptr<Ref>
+            Ref
         > data;
 
     public:
@@ -452,8 +452,24 @@ namespace irgen {
             data = std::move(vec);
         }
 
-        explicit Value(std::shared_ptr<Ref> ref)
+        explicit Value(Ref ref)
             : type(Type::Reference), data(std::move(ref)) {
+        }
+
+        static Value makeRef(Value &&val) {
+            return Value(Ref(std::make_shared<Value>(std::move(val))));
+        }
+
+        static Value makeRef(const Value &val) {
+            return Value(Ref(std::make_shared<Value>(val)));
+        }
+
+        static Value makeRef(std::shared_ptr<Value> val_ptr) {
+            return Value(Ref(std::move(val_ptr)));
+        }
+
+        static Value makeEmptyRef() {
+            return Value(Ref(std::make_shared<Value>()));
         }
 
         Value operator()(VM &vm, const std::vector<Value> &args) const {
@@ -468,7 +484,7 @@ namespace irgen {
 
         [[nodiscard]] Type getType() const {
             if (type == Type::Reference) {
-                return asReference()->get().getType();
+                return asReference().get().getType();
             }
             return type;
         }
@@ -503,7 +519,7 @@ namespace irgen {
 #define DEFINE_AS_METHOD(FieldName, EnumValue, CppType, ErrorMsg) \
 [[nodiscard]] CppType as##FieldName() const { \
 if (type == Type::Reference) { \
-return asReference()->get().as##FieldName(); \
+return asReference().get().as##FieldName(); \
 } \
 if (type != Type::EnumValue) { \
 throw RuntimeError("Value is not " ErrorMsg); \
@@ -513,7 +529,7 @@ return std::get<CppType>(data); \
 
         [[nodiscard]] const lang::lammp::Number &asNumber() const {
             if (type == Type::Reference) {
-                return asReference()->get().asNumber();
+                return asReference().get().asNumber();
             }
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
@@ -523,7 +539,7 @@ return std::get<CppType>(data); \
 
         [[nodiscard]] lang::lammp::Number &asNumber() {
             if (type == Type::Reference) {
-                return const_cast<lang::lammp::Number &>(asReference()->get().asNumber());
+                return const_cast<lang::lammp::Number &>(asReference().get().asNumber());
             }
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
@@ -572,11 +588,25 @@ return std::get<CppType>(data); \
             return std::get<std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>>(self.data);
         }
 
-        [[nodiscard]] const std::shared_ptr<Ref> &asReference() const {
+        [[nodiscard]] Ref &asReference() {
             if (type != Type::Reference) {
                 throw RuntimeError("Value is not a reference");
             }
-            return std::get<std::shared_ptr<Ref>>(data);
+            return std::get<Ref>(data);
+        }
+
+        [[nodiscard]] const Ref &asReference() const {
+            if (type != Type::Reference) {
+                throw RuntimeError("Value is not a reference");
+            }
+            return std::get<Ref>(data);
+        }
+
+        std::shared_ptr<Value> getRefValuePtr() {
+            if (type != Type::Reference) {
+                throw RuntimeError("Value is not a reference");
+            }
+            return std::get<Ref>(data).value_ptr;
         }
 
         Value operator+(const Value &other) const {
@@ -775,19 +805,19 @@ return std::get<CppType>(data); \
             if (type != Type::Reference) {
                 throw RuntimeError("Cannot set a non-reference value");
             }
-            *std::get<std::shared_ptr<Ref>>(data)->value_ptr = value.deref();
+            *std::get<Ref>(data).value_ptr = value.deref();
         }
 
         [[nodiscard]] const Value &deref() const {
             if (type == Type::Reference) {
-                return std::get<std::shared_ptr<Ref>>(data)->value_ptr->deref();
+                return std::get<Ref>(data).value_ptr->deref();
             }
             return *this;
         }
 
         Value &deref() {
             if (type == Type::Reference) {
-                return std::get<std::shared_ptr<Ref>>(data)->value_ptr->deref();
+                return std::get<Ref>(data).value_ptr->deref();
             }
             return *this;
         }
@@ -802,18 +832,16 @@ return std::get<CppType>(data); \
         };
     };
 
-    inline Ref::Ref(std::shared_ptr<Value> ptr) {
+    inline Ref::Ref(std::shared_ptr<Value> ptr) : value_ptr(std::move(ptr)) {
         std::unordered_set<std::shared_ptr<Value>> visited;
 
-        while (ptr->isReference()) {
-            if (visited.contains(ptr)) {
+        while (value_ptr->isReference()) {
+            if (visited.contains(value_ptr)) {
                 throw RuntimeError("Circular reference detected");
             }
-            visited.insert(ptr);
-            ptr = ptr->asReference()->value_ptr;
+            visited.insert(value_ptr);
+            value_ptr = value_ptr->asReference().value_ptr;
         }
-
-        value_ptr = std::move(ptr);
     }
 
 

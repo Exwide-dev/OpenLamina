@@ -40,7 +40,7 @@ namespace irgen {
             }
             case Type::Reference: {
                 auto t = asReference();
-                return t->get().toString();
+                return t.get().toString();
             }
             case Type::Module: {
                 const auto t = asModule();
@@ -234,11 +234,11 @@ namespace irgen {
             bool has_value = false;
             bool is_const = false;
             const auto& ref_ptr = ref.asReference();
-            if (ref_ptr->value_ptr && !vm.symbol_stack.empty()) {
+            if (ref_ptr.value_ptr && !vm.symbol_stack.empty()) {
                 // 在修改之前先检查常量状态
                 for (auto& symbol_table : vm.symbol_stack) {
                     for (const auto& [id, val] : symbol_table.symbols) {
-                        if (val.get() == ref_ptr->value_ptr.get()) {
+                        if (val.get() == ref_ptr.value_ptr.get()) {
                             is_const = symbol_table.is_constant(id);
                             // 直接检查类型，避免 deref() 的问题
                             has_value = val->getType() != Value::Type::None;
@@ -270,7 +270,7 @@ namespace irgen {
             if (value_ptr->isReference()) {
                 vm.op_stack.push(*value_ptr);
             } else {
-                vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
+                vm.op_stack.push(Value::makeRef(value_ptr));
             }
             return;
         }
@@ -308,7 +308,7 @@ namespace irgen {
         if (value_ptr->isReference()) {
             vm.op_stack.push(*value_ptr);
         } else {
-            vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
+            vm.op_stack.push(Value::makeRef(value_ptr));
         }
     }
 
@@ -440,7 +440,7 @@ namespace irgen {
         if (result.has_value()) {
             // 对于模块属性，我们创建一个共享的值并返回引用
             auto value_ptr = std::make_shared<Value>(*result);
-            vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
+            vm.op_stack.push(Value::makeRef(value_ptr));
         } else {
             throw RuntimeError("Attribute not found: " + attr_name + ", in module: " + module->name);
         }
@@ -487,7 +487,7 @@ namespace irgen {
                 throw RuntimeError("Index out of range");
             }
             
-            vm.op_stack.push(Value(std::make_shared<Ref>(vec[static_cast<size_t>(idx)])));
+            vm.op_stack.push(Value::makeRef(vec[static_cast<size_t>(idx)]));
         } else if (obj_deref.isDictionary()) {
             const auto& key = index_val.deref();
             
@@ -496,7 +496,7 @@ namespace irgen {
             for (const auto& [tkey, tval] : dict) {
                 if (*tkey == key) {
                     it = std::make_shared<Value>(*tval);
-                    vm.op_stack.push(Value(std::make_shared<Ref>(it)));
+                    vm.op_stack.push(Value::makeRef(it));
                     return;
                 }
             }
@@ -517,57 +517,53 @@ namespace irgen {
     }
 
     void NEW_VAR::emit(VM &vm) const {
-        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
-        Value var(ref_val);
+        Value var = Value::makeEmptyRef();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         const auto var_name = g_string_pool.get_string(var_id);
         
         if (!vm.symbol_stack.empty()) {
-            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
             vm.symbol_stack.back().set_constant(var_id, false);
-            vm.cache.add(var_id, ref_val->value_ptr);
+            vm.cache.add(var_id, var.getRefValuePtr());
         }
         vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
     }
 
     void NEW_CONST::emit(VM &vm) const {
-        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
-        Value var(ref_val);
+        Value var = Value::makeEmptyRef();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         const auto var_name = g_string_pool.get_string(var_id);
         
         if (!vm.symbol_stack.empty()) {
-            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
             vm.symbol_stack.back().set_constant(var_id, true);
-            vm.cache.add(var_id, ref_val->value_ptr);
+            vm.cache.add(var_id, var.getRefValuePtr());
         }
         vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
     }
 
     void NEW_INTERN_VAR::emit(VM &vm) const {
-        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
-        Value var(ref_val);
+        Value var = Value::makeEmptyRef();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         
         if (!vm.symbol_stack.empty()) {
-            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
             vm.symbol_stack.back().set_constant(var_id, false);
-            vm.cache.add(var_id, ref_val->value_ptr);
+            vm.cache.add(var_id, var.getRefValuePtr());
         }
         vm.op_stack.push(var);
     }
 
     void NEW_INTERN_CONST::emit(VM &vm) const {
-        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
-        Value var(ref_val);
+        Value var = Value::makeEmptyRef();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         
         if (!vm.symbol_stack.empty()) {
-            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
             vm.symbol_stack.back().set_constant(var_id, true);
-            vm.cache.add(var_id, ref_val->value_ptr);
+            vm.cache.add(var_id, var.getRefValuePtr());
         }
         vm.op_stack.push(var);
     }
