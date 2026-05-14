@@ -30,8 +30,8 @@
     std::string error_msg() {
          std::string err_msg;
          err_msg += std::string("Error at line ") + std::to_string(yylineno)
-                  + ", near '" + (yytext ? yytext : "") + "'\nLexer Details: " + lexer::details
-                  + "\nParser Details: " + detail_msg;
+                  + ", near '" + (yytext ? yytext : "") + (!std::string(lexer::details).empty() ? "'\nLexer Details: " + lexer::details : "")
+                  + (!std::string(detail_msg).empty() ? "\nParser Details: " + detail_msg : "");
          return err_msg;
     }
 }
@@ -91,6 +91,8 @@
 %token <string_val> KW_VEC
 %token <string_val> KW_CONST
 %token <string_val> KW_VAR
+%token <string_val> KW_INTERN
+%token <string_val> KW_EXPORT
 %token <string_val> LBRACKET
 %token <string_val> RBRACKET
 
@@ -219,15 +221,45 @@ stmt:
 var_decl:
     KW_LET IDENTIFIER ASSIGN expr {
         LOG("Parsing var_decl: let " + *$2 + " = ...");
-        $$ = new VarDeclNode(*$2, $4, false);
+        $$ = new VarDeclNode(*$2, $4, false, Visibility::Exported);
         LOG("var_decl parsed successfully");
         delete $2;
     }
     | KW_CONST IDENTIFIER ASSIGN expr {
         LOG("Parsing var_decl: const " + *$2 + " = ...");
-        $$ = new VarDeclNode(*$2, $4, false);
+        $$ = new VarDeclNode(*$2, $4, true, Visibility::Exported);
         LOG("var_decl parsed successfully");
         delete $2;
+    }
+    | KW_INTERN IDENTIFIER ASSIGN expr {
+        LOG("Parsing var_decl: intern " + *$2 + " = ...");
+        $$ = new VarDeclNode(*$2, $4, false, Visibility::Internal);
+        LOG("var_decl parsed successfully");
+        delete $2;
+    }
+    | KW_INTERN KW_CONST IDENTIFIER ASSIGN expr {
+        LOG("Parsing var_decl: intern const " + *$3 + " = ...");
+        $$ = new VarDeclNode(*$3, $5, true, Visibility::Internal);
+        LOG("var_decl parsed successfully");
+        delete $3;
+    }
+    | KW_EXPORT IDENTIFIER ASSIGN expr {
+        LOG("Parsing var_decl: export " + *$2 + " = ...");
+        $$ = new VarDeclNode(*$2, $4, false, Visibility::Exported);
+        LOG("var_decl parsed successfully");
+        delete $2;
+    }
+    | KW_EXPORT KW_CONST IDENTIFIER ASSIGN expr {
+        LOG("Parsing var_decl: export const " + *$3 + " = ...");
+        $$ = new VarDeclNode(*$3, $5, true, Visibility::Exported);
+        LOG("var_decl parsed successfully");
+        delete $3;
+    }
+    | IDENTIFIER ASSIGN expr {
+        LOG("Parsing var_decl: default export " + *$1 + " = ...");
+        $$ = new VarDeclNode(*$1, $3, false, Visibility::Exported);
+        LOG("var_decl parsed successfully");
+        delete $1;
     }
     ;
 
@@ -298,6 +330,34 @@ func_decl:
         LOG("func_decl parsed successfully");
         delete $2;
         delete $4;
+    }
+    | KW_INTERN KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: intern func " + *$3);
+        std::vector<std::string> params;
+        for (auto& node : *$5) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        $$ = new FuncDeclNode(*$3, params, dynamic_cast<BlockStmtNode*>($7), Visibility::Internal);
+        LOG("func_decl (intern) parsed successfully");
+        delete $3;
+        delete $5;
+    }
+    | KW_EXPORT KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: export func " + *$3);
+        std::vector<std::string> params;
+        for (auto& node : *$5) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        $$ = new FuncDeclNode(*$3, params, dynamic_cast<BlockStmtNode*>($7), Visibility::Exported);
+        LOG("func_decl (export) parsed successfully");
+        delete $3;
+        delete $5;
     }
     ;
 

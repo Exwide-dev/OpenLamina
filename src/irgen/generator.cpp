@@ -122,7 +122,19 @@ namespace lm::irgen {
         } else if (node->kind == lmx::ASTNodeType::VarDecl) {
             const auto* var_decl_node = dynamic_cast<lmx::VarDeclNode*>(node);
             if (var_decl_node->init) {
-                code.emplace_back(::irgen::NEW_CONST(var_decl_node->name));
+                if (var_decl_node->visibility == lmx::Visibility::Internal) {
+                    if (var_decl_node->is_const) {
+                        code.emplace_back(::irgen::NEW_INTERN_CONST(var_decl_node->name));
+                    } else {
+                        code.emplace_back(::irgen::NEW_INTERN_VAR(var_decl_node->name));
+                    }
+                } else {
+                    if (var_decl_node->is_const) {
+                        code.emplace_back(::irgen::NEW_CONST(var_decl_node->name));
+                    } else {
+                        code.emplace_back(::irgen::NEW_VAR(var_decl_node->name));
+                    }
+                }
                 auto init_code = gen_code(var_decl_node->init, loop_stack);
                 code.insert(code.end(), init_code.begin(), init_code.end());
                 code.emplace_back(::irgen::STORE());
@@ -133,7 +145,7 @@ namespace lm::irgen {
                 throw RuntimeError("Left-hand side of assignment must be an lvalue");
             }
             if (assign_node->var->kind == lmx::ASTNodeType::VarRef) {
-                code.emplace_back(::irgen::LOAD(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
+                code.emplace_back(::irgen::NEW_VAR(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
             } else {
                 auto var_code = gen_code(assign_node->var, loop_stack);
                 code.insert(code.end(), var_code.begin(), var_code.end());
@@ -150,6 +162,7 @@ namespace lm::irgen {
             auto func_obj = std::make_shared<::irgen::FunctionObject>();
             func_obj->params = func_decl_node->params;
             func_obj->location = func_label;
+            func_obj->name = func_decl_node->name;
 
             std::vector<::irgen::Opcode> func_body;
 
@@ -173,7 +186,11 @@ namespace lm::irgen {
 
             code.insert(code.end(), func_body.begin(), func_body.end());
 
-            code.emplace_back(::irgen::NEW_VAR(func_decl_node->name));
+            if (func_decl_node->visibility == lmx::Visibility::Internal) {
+                code.emplace_back(::irgen::NEW_INTERN_VAR(func_decl_node->name));
+            } else {
+                code.emplace_back(::irgen::NEW_VAR(func_decl_node->name));
+            }
             code.emplace_back(::irgen::PUSH(::irgen::Value(func_obj)));
             code.emplace_back(::irgen::STORE());
         } else if (node->kind == lmx::ASTNodeType::DoFuncDecl) {

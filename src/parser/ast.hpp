@@ -17,6 +17,11 @@ enum class ValueCategory {
     RVALUE
 };
 
+enum class Visibility {
+    Exported,
+    Internal
+};
+
 enum class ASTNodeType {
     Unknown,
     BlockStmt,
@@ -284,10 +289,11 @@ struct BlockStmtNode final : ASTNode {
 struct VarDeclNode final : ASTNode {
     std::string name;
     ExprNode* init;
-    bool is_redecl;
+    bool is_const;
+    Visibility visibility;
 
-    VarDeclNode(std::string n, ExprNode* i, bool redec = true)
-        : ASTNode(ASTNodeType::VarDecl), name(std::move(n)), init(i), is_redecl(redec) {}
+    VarDeclNode(std::string n, ExprNode* i, bool is_const = false, Visibility vis = Visibility::Exported)
+        : ASTNode(ASTNodeType::VarDecl), name(std::move(n)), init(i), is_const(is_const), visibility(vis) {}
     ~VarDeclNode() override {
         delete init;
     }
@@ -310,9 +316,10 @@ struct FuncDeclNode final : ASTNode {
     BlockStmtNode* body;
     std::vector<TypeNode*> args_type;
     TypeNode* ret_type{};
+    Visibility visibility = Visibility::Exported;
 
-    FuncDeclNode(std::string n, std::vector<std::string> p, BlockStmtNode* b)
-        : ASTNode(ASTNodeType::FuncDecl), name(std::move(n)), params(std::move(p)), body(b) {}
+    FuncDeclNode(std::string n, std::vector<std::string> p, BlockStmtNode* b, Visibility v = Visibility::Exported)
+        : ASTNode(ASTNodeType::FuncDecl), name(std::move(n)), params(std::move(p)), body(b), visibility(v) {}
     ~FuncDeclNode() override {
         delete body;
         for (const auto type : args_type) {

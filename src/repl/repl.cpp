@@ -24,6 +24,7 @@ bool repl::REPL::exec_input(const std::function<std::string()> &input_func) {
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();
 
+    vm.call_stack.clear();
     delete got_ast;
     return true;
 }

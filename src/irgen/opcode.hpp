@@ -74,6 +74,8 @@ namespace irgen {
     class STORE_ARG;
     class NEW_VAR;
     class NEW_CONST;
+    class NEW_INTERN_VAR;
+    class NEW_INTERN_CONST;
 
     template<typename T>
     class ArrMap {
@@ -328,13 +330,19 @@ namespace irgen {
         INDEX,
         STORE_ARG,
         NEW_VAR,
-        NEW_CONST
+        NEW_CONST,
+        NEW_INTERN_VAR,
+        NEW_INTERN_CONST
     >;
-
+    
     struct FunctionObject {
         std::vector<std::string> params;
         std::vector<Opcode> body;
         size_t location;
+        std::string name = "<anonymous>";
+        VM* owner_vm = nullptr;
+        
+        Value call(VM& caller_vm, const std::vector<Value>& args);
     };
 
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
@@ -845,14 +853,17 @@ return std::get<CppType>(data); \
         [[nodiscard]] bool empty() const { return symbols.empty(); }
     };
 
-    template<typename Stackable>
+    template<typename Stackable, size_t reserve = 256>
     class Stack {
         std::vector<Stackable> data;
 
     public:
-        Stack() = default;
+        Stack() {
+            data.reserve(reserve);
+        }
 
         explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
+            data.reserve(reserve);
         }
 
         void push(const Stackable &value) {
@@ -926,38 +937,33 @@ return std::get<CppType>(data); \
     class Cache {
         static constexpr size_t SLOT_COUNT = 16;
 
-        // 单个作用域的数据
         struct Scope {
-            std::array<std::pair<size_t, Value>, SLOT_COUNT> slots; // (id, value)
-            std::unordered_map<size_t, size_t> id_to_index;         // id -> slot index
-            size_t next_slot = 0;                                   // 下一个要覆盖的槽位
+            std::array<std::pair<size_t, std::shared_ptr<Value>>, SLOT_COUNT> slots;
+            std::unordered_map<size_t, size_t> id_to_index;
+            size_t next_slot = 0;
 
             Scope() {
-                // 初始化所有槽位的 id 为 0（无效 id）
                 for (auto &id: slots | std::views::keys) {
                     id = 0;
                 }
             }
         };
 
-        std::vector<Scope> scopes; // 作用域栈，栈顶为当前作用域
+        std::vector<Scope> scopes;
 
     public:
         Cache() {
-            scopes.emplace_back(); // 全局作用域
+            scopes.emplace_back();
         }
 
-        // 添加或更新变量（原有 API 中的 add）
-        void add(size_t id, const Value &val) {
+        void add(size_t id, const std::shared_ptr<Value> &val) {
             auto &scope = scopes.back();
             auto it = scope.id_to_index.find(id);
             if (it != scope.id_to_index.end()) {
-                // 已存在：直接更新
                 scope.slots[it->second].second = val;
                 return;
             }
 
-            // 新变量：覆盖最旧的槽位（FIFO）
             size_t idx = scope.next_slot;
             size_t old_id = scope.slots[idx].first;
             if (old_id != 0) {
@@ -968,36 +974,28 @@ return std::get<CppType>(data); \
             scope.next_slot = (idx + 1) % SLOT_COUNT;
         }
 
-        // 获取变量（返回 optional）
-        [[nodiscard]] std::optional<Value> get(size_t id) const {
+        [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const {
             const auto &scope = scopes.back();
-            auto it = scope.id_to_index.find(id);
+            const auto it = scope.id_to_index.find(id);
             if (it != scope.id_to_index.end()) {
                 return scope.slots[it->second].second;
             }
             return std::nullopt;
         }
 
-        // 通过 [] 获取（不存在则抛异常）
-        Value operator[](size_t id) const {
-            auto opt = get(id);
-            if (opt.has_value()) {
-                return *opt;
-            }
-            throw std::out_of_range("No such variable with id: " + std::to_string(id));
+        [[nodiscard]] bool contains(size_t id) const {
+            const auto &scope = scopes.back();
+            return scope.id_to_index.contains(id);
         }
 
-        // 进入新作用域
         void enter_scope() {
             scopes.emplace_back();
         }
 
-        // 退出当前作用域
         void leave_scope() {
             scopes.pop_back();
         }
 
-        // 清空所有作用域（重置 Cache）
         void clear() {
             scopes.clear();
             scopes.emplace_back();
@@ -1371,6 +1369,30 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    class NEW_INTERN_VAR {
+    public:
+        COMMON(NEW_INTERN_VAR)
+        std::vector<Value> operands;
+
+        explicit NEW_INTERN_VAR(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    class NEW_INTERN_CONST {
+    public:
+        COMMON(NEW_INTERN_CONST)
+        std::vector<Value> operands;
+
+        explicit NEW_INTERN_CONST(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
     class StringPool {
         std::unordered_map<std::string, size_t> string_to_id;
         std::vector<std::string> id_to_string;
@@ -1428,6 +1450,7 @@ return std::get<CppType>(data); \
     class VM {
     public:
         Stack<Value> op_stack{}, call_stack{};
+        std::vector<std::string> traceback{};
         std::vector<Opcode> code{};
         std::vector<SymbolTable> symbol_stack{SymbolTable()};
         Cache cache{};

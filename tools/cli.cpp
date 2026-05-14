@@ -97,7 +97,7 @@ namespace cli {
 #endif
 
             return std::format(
-                R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {} {}
+                R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {} {}, C++ standard {}
 Powered by Flex and Bison
 Contact OpenLamina-Developing for more information)",
                 OPENLAMINA_VERSION_MAJOR,
@@ -107,7 +107,8 @@ Contact OpenLamina-Developing for more information)",
                 get_arch(),
                 OPENLAMINA_BUILD_DATE,
                 OPENLAMINA_BUILD_TIME,
-                hash_part
+                hash_part,
+                __cplusplus
             );
 #undef OPENLAMINA_BUILD_HASH
 #undef OPENLAMINA_BUILD_DATE
@@ -134,6 +135,13 @@ Contact OpenLamina-Developing for more information)",
             } catch (const RuntimeError& e) {
                 std::cout << "RuntimeError: " << e.what() << std::endl;
                 repl_instance.vm.pc = repl_instance.vm.code.size();
+                std::cout << "Traceback: " << [&]{
+                    std::string result;
+                    for (const auto& call: repl_instance.vm.traceback) {
+                        result.append(call + " -> ");
+                    }
+                    return result.substr(0, result.size() - 4);
+                }() << std::endl;
             } catch (const SyntaxError& e) {
                 std::cout << "SyntaxError: " << e.what() << std::endl;
             } catch (const std::exception& e) {

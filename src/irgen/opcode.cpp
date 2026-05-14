@@ -78,11 +78,13 @@ namespace irgen {
 
     // 初始化内置函数
     VM::VM() {
+        symbol_stack.reserve(256);
         main_module = std::make_shared<ModuleObject>("__main__", this);
         init_builtins();
     }
 
     VM::VM(std::vector<Opcode> c) : code(std::move(c)) {
+        symbol_stack.reserve(256);
         main_module = std::make_shared<ModuleObject>("__main__", this);
         init_builtins();
     }
@@ -219,19 +221,18 @@ namespace irgen {
     std::string SymbolTable::toString() const {
         std::string k;
         for (const auto& [a, b] : *this) {
-            k.append(std::format("{} : {}({})", a, b->toString(), b->type_name()));
+            k.append(std::format("{} : {}({}), ", a, b->toString(), b->type_name()));
         }
-        return k;
+        return k.substr(0, k.size() - 2);
     }
 
     inline void STORE::emit(VM &vm) const {
         Value value = vm.op_stack.popValue();
         Value ref = vm.op_stack.popValue();
-        
-        bool is_const = false;
-        bool has_value = false;
-        
+
         if (ref.isReference()) {
+            bool has_value = false;
+            bool is_const = false;
             const auto& ref_ptr = ref.asReference();
             if (ref_ptr->value_ptr && !vm.symbol_stack.empty()) {
                 // 在修改之前先检查常量状态
@@ -254,16 +255,6 @@ namespace irgen {
             
             // 执行赋值
             ref.set(value);
-            
-            if (ref_ptr->value_ptr && vm.main_module) {
-                for (auto& symbol_table : vm.symbol_stack) {
-                    for (const auto& [id, val] : symbol_table.symbols) {
-                        if (val.get() == ref_ptr->value_ptr.get()) {
-                            vm.main_module->set_attr(g_string_pool.get_string(id), *val);
-                        }
-                    }
-                }
-            }
         }
 
         LOG("Done, now symbol: " << vm.symbol_stack.back().toString());
@@ -271,43 +262,49 @@ namespace irgen {
 
     inline void LOAD::emit(VM &vm) const {
         const auto var_id = static_cast<size_t>(operands[0].asInt());
+
+        // 1. 先从 Cache 查找
+        const auto cached = vm.cache.get(var_id);
+        if (cached.has_value()) {
+            const auto& value_ptr = *cached;
+            if (value_ptr->isReference()) {
+                vm.op_stack.push(*value_ptr);
+            } else {
+                vm.op_stack.push(Value(std::make_shared<Ref>(value_ptr)));
+            }
+            return;
+        }
+
+        // 2. Cache 未命中，从符号栈查找
+        std::shared_ptr<Value> value_ptr;
         const std::string& var_name = g_string_pool.get_string(var_id);
 
-        std::shared_ptr<Value> value_ptr;
-        
-        // 先从符号栈查找
-        for (auto & symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
+        for (auto& symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
             if (symbol_table.exists(var_id)) {
                 auto k = symbol_table.get(var_id);
                 if (k.has_value()) {
                     value_ptr = *k;
+                    vm.cache.add(var_id, value_ptr);
                     break;
                 }
             }
         }
 
-        // 找不到则从模块查找或创建新值
-        if (!value_ptr) {
-            if (vm.main_module) {
-                auto attr = vm.main_module->get_attr(var_name);
-                if (attr.has_value()) {
-                    value_ptr = std::make_shared<Value>(*attr);
-                }
-            }
-            
-            // 如果仍然找不到，创建一个新的变量（不是常量）
-            if (!value_ptr) {
-                value_ptr = std::make_shared<Value>(std::make_shared<Ref>(std::make_shared<Value>()));
-                if (!vm.symbol_stack.empty()) {
-                    vm.symbol_stack.back().set(var_id, value_ptr);
-                    vm.symbol_stack.back().set_constant(var_id, false);
-                }
-                vm.op_stack.push(*value_ptr);
-                return;
+        // 3. 符号栈未找到，从模块查找
+        if (!value_ptr && vm.main_module) {
+            auto attr = vm.main_module->get_attr(var_name);
+            if (attr.has_value()) {
+                value_ptr = std::make_shared<Value>(*attr);
+                vm.cache.add(var_id, value_ptr);
             }
         }
 
-        // 如果值已经是引用，直接返回，否则包装成引用
+        // 4. 仍未找到，报错
+        if (!value_ptr) {
+            throw RuntimeError("Var not found: " + var_name);
+        }
+
+        // 5. 压栈
         if (value_ptr->isReference()) {
             vm.op_stack.push(*value_ptr);
         } else {
@@ -349,20 +346,45 @@ namespace irgen {
         Value func = vm.op_stack.popValue();
         LOG(ITIS(,func,.toString()) << ", type: " << func.type_name());
 
-        if (not func.isFunction()) {
+        if (!func.isFunction()) {
             throw RuntimeError("Not a function");
         }
 
         if (func.isUserFunction()) {
             auto func_obj = func.asFunctionObject();
-            vm.call_stack.push(Value(vm.pc));
+            auto arg_count = operands[0].asInt();
+            std::vector<Value> args;
+            args.reserve(arg_count);
+            for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                args.emplace_back(vm.op_stack.popValue());
+            }
 
-            if (vm.label_table.contains(func_obj->location)) {
-                vm.pc = vm.label_table[func_obj->location];
+            if (!func_obj->owner_vm) {
+                func_obj->owner_vm = &vm;
+            }
+
+            if (func_obj->owner_vm == &vm) {
+                vm.traceback.emplace_back(func_obj->name);
+                vm.call_stack.push(Value(vm.pc));
+
+                for (auto it = args.rbegin(); it != args.rend(); ++it) {
+                    vm.op_stack.push(*it);
+                }
+
+                if (vm.label_table.contains(func_obj->location)) {
+                    vm.pc = vm.label_table[func_obj->location];
+                } else {
+                    if (!vm.traceback.empty()) {
+                        vm.traceback.pop_back();
+                    }
+                    throw RuntimeError("Function label not found: " + std::to_string(func_obj->location));
+                }
             } else {
-                throw RuntimeError("Function label not found: " + std::to_string(func_obj->location));
+                Value result = func_obj->call(vm, args);
+                vm.op_stack.push(result);
             }
         } else {
+            vm.traceback.emplace_back("<builtin>");
             auto arg_count = operands[0].asInt();
             std::vector<Value> args;
             args.reserve(arg_count);
@@ -373,6 +395,9 @@ namespace irgen {
             auto builtin_func = func.asFunction();
             auto result = builtin_func(vm, args);
             vm.op_stack.push(result);
+            if (!vm.traceback.empty()) {
+                vm.traceback.pop_back();
+            }
         }
     }
 
@@ -380,8 +405,11 @@ namespace irgen {
         if (!vm.call_stack.empty()) {
             auto return_addr = vm.call_stack.popValue().asInt();
             vm.pc = static_cast<size_t>(return_addr);
+            if (!vm.traceback.empty()) {
+                vm.traceback.pop_back();
+            }
         } else {
-            vm.pc = vm.code.size();
+            throw RuntimeError("RET when call stack is empty");
         }
     }
 
@@ -483,11 +511,9 @@ namespace irgen {
         const Value value = vm.op_stack.popValue();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
         
-        /*if (vm.symbol_stack.empty()) {
-            throw RuntimeError("No symbol table available");
-        }*/
-        
-        vm.symbol_stack.back().set(var_id, value);
+        auto value_ptr = std::make_shared<Value>(value);
+        vm.symbol_stack.back().set(var_id, value_ptr);
+        vm.cache.add(var_id, value_ptr);
     }
 
     void NEW_VAR::emit(VM &vm) const {
@@ -499,6 +525,7 @@ namespace irgen {
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
             vm.symbol_stack.back().set_constant(var_id, false);
+            vm.cache.add(var_id, ref_val->value_ptr);
         }
         vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
@@ -513,8 +540,35 @@ namespace irgen {
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
             vm.symbol_stack.back().set_constant(var_id, true);
+            vm.cache.add(var_id, ref_val->value_ptr);
         }
         vm.main_module->set_attr(var_name, var);
+        vm.op_stack.push(var);
+    }
+
+    void NEW_INTERN_VAR::emit(VM &vm) const {
+        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
+        Value var(ref_val);
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
+        
+        if (!vm.symbol_stack.empty()) {
+            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set_constant(var_id, false);
+            vm.cache.add(var_id, ref_val->value_ptr);
+        }
+        vm.op_stack.push(var);
+    }
+
+    void NEW_INTERN_CONST::emit(VM &vm) const {
+        auto ref_val = std::make_shared<Ref>(std::make_shared<Value>());
+        Value var(ref_val);
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
+        
+        if (!vm.symbol_stack.empty()) {
+            vm.symbol_stack.back().set(var_id, ref_val->value_ptr);
+            vm.symbol_stack.back().set_constant(var_id, true);
+            vm.cache.add(var_id, ref_val->value_ptr);
+        }
         vm.op_stack.push(var);
     }
 
@@ -600,6 +654,47 @@ namespace irgen {
         vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
     }
 
+    Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
+        if (!owner_vm) {
+            throw RuntimeError("Function has no owner VM");
+        }
+        
+        VM& target_vm = *owner_vm;
+        
+        size_t old_pc = target_vm.pc;
+        
+        for (size_t i = args.size(); i > 0; i--) {
+            target_vm.op_stack.push(args[i-1]);
+        }
+        
+        bool pushed_traceback = !target_vm.traceback.empty();
+        if (pushed_traceback) {
+            target_vm.traceback.emplace_back(name);
+        }
+        target_vm.call_stack.push(Value(target_vm.code.size()));
+        
+        if (target_vm.label_table.contains(location)) {
+            target_vm.pc = target_vm.label_table[location];
+        } else {
+            throw RuntimeError("Function label not found: " + std::to_string(location));
+        }
+        
+        target_vm.run();
+        
+        if (pushed_traceback) {
+            target_vm.traceback.pop_back();
+        }
+        
+        target_vm.pc = old_pc;
+        
+        if (!target_vm.op_stack.empty()) {
+            Value result = target_vm.op_stack.popValue();
+            target_vm.op_stack.clear();
+            return result;
+        }
+        return Value();
+    }
+
     template <StringType string>
     ModuleObject::ModuleObject(string code) : is_user(true) {
         const auto codes = lm::irgen::Generator(parse(code)).gen();
@@ -607,6 +702,9 @@ namespace irgen {
         owner_vm->run();
         
         for (const auto& [name, value] : owner_vm->main_module->exports) {
+            if (value.isUserFunction()) {
+                value.asFunctionObject()->owner_vm = owner_vm;
+            }
             exports[name] = value;
         }
         

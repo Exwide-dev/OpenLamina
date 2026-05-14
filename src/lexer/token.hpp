@@ -55,6 +55,8 @@ namespace lexer {
             case KW_VEC: return "KW_VEC";
             case KW_CONST: return "KW_CONST";
             case KW_VAR: return "KW_VAR";
+            case KW_INTERN: return "KW_INTERN";
+            case KW_EXPORT: return "KW_EXPORT";
             case LBRACKET: return "LBRACKET";
             case RBRACKET: return "RBRACKET";
             case NUM_LITERAL: return "NUM_LITERAL";

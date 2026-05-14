@@ -2,6 +2,8 @@
 #include <vector>
 #include <string>
 #include <filesystem>
+#include <fstream>
+
 #include "lexer_generated.h"
 #include "parser.tab.hpp"
 #include "lexer/lex.hpp"
@@ -206,9 +208,161 @@ func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
     delete got_ast;
 }
 
+void test_mod_intern_export() {
+    std::cout << "\n=== Testing intern/export Variable Visibility ===\n";
+    
+    try {
+        std::cout << "\n1. Testing local variable declarations...\n";
+        const std::string local_test = R"(
+            intern secret = "secret_value"
+            export public_data = "public_value"
+            default_export = "default_value"
+            intern const PI = 3141592653
+            export const MAX_SIZE = 100
+            
+            print("Accessing internal var in same module:")
+            print(secret)
+            
+            print("\nAccessing exported var in same module:")
+            print(public_data)
+            
+            print("\nAccessing default export var in same module:")
+            print(default_export)
+            
+            print("\nAccessing internal const in same module:")
+            print(PI)
+            
+            print("\nAccessing exported const in same module:")
+            print(MAX_SIZE)
+        )";
+        
+        lmx::ProgramASTNode* local_ast = parse(local_test);
+        if (!local_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value local_result = lm::irgen::execute(local_ast);
+        delete local_ast;
+        std::cout << "\nLocal variable test passed!\n";
+        
+        std::cout << "\n2. Creating test modules...\n";
+        std::filesystem::path test_dir = std::filesystem::current_path() / "test_visibility";
+        if (!std::filesystem::exists(test_dir)) {
+            std::filesystem::create_directory(test_dir);
+        }
+        
+        std::ofstream intern_module(test_dir / "intern_module.lm");
+        intern_module << R"(
+            intern internal_var = "I'm internal"
+            export external_var = "I'm external"
+            auto_export = "I'm auto-exported"
+            
+            intern func internal_func(x) { return x * 2 }
+            export func external_func(x) { return x + 10 }
+        )";
+        intern_module.close();
+        
+        std::cout << "Test module created at: " << test_dir / "intern_module.lm" << "\n";
+        
+        std::cout << "\n3. Testing module import and access...\n";
+        const std::string import_test = R"(
+            import test_visibility.intern_module as mod
+            
+            print("Accessing exported var from module:")
+            print(mod.external_var)
+            
+            print("\nAccessing auto-export var from module:")
+            print(mod.auto_export)
+            
+            print("\nAccessing exported function from module:")
+            print(mod.external_func(5))
+        )";
+        
+        lmx::ProgramASTNode* import_ast = parse(import_test);
+        if (!import_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value import_result = lm::irgen::execute(import_ast);
+        delete import_ast;
+        std::cout << "\nExported access test passed!\n";
+        
+        std::cout << "\n4. Testing access to internal variable from another module (should fail)...\n";
+        const std::string access_internal_test = R"(
+            import test_visibility.intern_module as mod
+            print(mod.internal_var)
+        )";
+        
+        lmx::ProgramASTNode* internal_access_ast = parse(access_internal_test);
+        if (!internal_access_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        
+        try {
+            const ::irgen::Value internal_access_result = lm::irgen::execute(internal_access_ast);
+            std::cout << "ERROR: Should have failed to access internal var!\n";
+        } catch (const std::exception& e) {
+            std::cout << "Expected error (internal var access denied): " << e.what() << "\n";
+            std::cout << "Internal var protection test passed!\n";
+        }
+        delete internal_access_ast;
+        
+        std::cout << "\n5. Testing intern const and export const...\n";
+        const std::string const_test = R"(
+            intern const INTERNAL_CONST = 42
+            export const EXPORT_CONST = 100
+            
+            print("Internal const:")
+            print(INTERNAL_CONST)
+            
+            print("\nExport const:")
+            print(EXPORT_CONST)
+        )";
+        
+        lmx::ProgramASTNode* const_ast = parse(const_test);
+        if (!const_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value const_result = lm::irgen::execute(const_ast);
+        delete const_ast;
+        std::cout << "\nConst test passed!\n";
+        
+        std::cout << "\n6. Testing that internal function cannot be accessed externally...\n";
+        const std::string func_access_test = R"(
+            import test_visibility.intern_module as mod
+            print(mod.internal_func(5))
+        )";
+        
+        lmx::ProgramASTNode* func_access_ast = parse(func_access_test);
+        if (!func_access_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        
+        try {
+            const ::irgen::Value func_access_result = lm::irgen::execute(func_access_ast);
+            std::cout << "ERROR: Should have failed to access internal function!\n";
+        } catch (const std::exception& e) {
+            std::cout << "Expected error (internal func access denied): " << e.what() << "\n";
+            std::cout << "Internal function protection test passed!\n";
+        }
+        delete func_access_ast;
+        
+        std::filesystem::remove_all(test_dir);
+        std::cout << "\n=== intern/export Visibility Tests Completed ===\n";
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\nError in intern/export test: " << e.what() << std::endl;
+    }
+}
+
 void run_test() {
     std::cout << "Testing module system..." << std::endl;
     test_module_system();
+    std::cout << "Testing intern/export visibility..." << std::endl;
+    test_mod_intern_export();
     std::cout << "Testing fib speed..." << std::endl;
     test_fib_speed();
     std::cout << "\nPress Enter to continue to REPL...";
@@ -216,7 +370,7 @@ void run_test() {
 }
 
 int main(const int argc, char* argv[]) {
-    // run_test();
+    run_test();
     const auto [
         show_help,
         show_version,
