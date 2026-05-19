@@ -1,4 +1,7 @@
 #include "generator.hpp"
+
+#include <expected>
+
 #include "../tools/debug.hpp"
 #include "../tools/lang/builtins.hpp"
 
@@ -9,7 +12,7 @@
 #include "opcode.hpp"
 
 namespace lm::irgen {
-    static size_t label_counter = 0;
+    thread_local size_t label_counter = 0;
 
     struct LoopLabels {
         size_t start_label;
@@ -129,29 +132,29 @@ namespace lm::irgen {
                         code.emplace_back(::irgen::NEW_INTERN_VAR(var_decl_node->name));
                     }
                 } else {
+                    auto init_code = gen_code(var_decl_node->init, loop_stack);
+                    code.insert(code.end(), init_code.begin(), init_code.end());
                     if (var_decl_node->is_const) {
                         code.emplace_back(::irgen::NEW_CONST(var_decl_node->name));
                     } else {
                         code.emplace_back(::irgen::NEW_VAR(var_decl_node->name));
                     }
+                    code.emplace_back(::irgen::STORE());
                 }
-                auto init_code = gen_code(var_decl_node->init, loop_stack);
-                code.insert(code.end(), init_code.begin(), init_code.end());
-                code.emplace_back(::irgen::STORE());
             }
         } else if (node->kind == lmx::ASTNodeType::Assign) {
             const auto* assign_node = dynamic_cast<lmx::AssignNode*>(node);
             if (assign_node->var->getValueCategory() != lmx::ValueCategory::LVALUE) {
                 throw RuntimeError("Left-hand side of assignment must be an lvalue");
             }
+            auto value_code = gen_code(assign_node->value, loop_stack);
+            code.insert(code.end(), value_code.begin(), value_code.end());
             if (assign_node->var->kind == lmx::ASTNodeType::VarRef) {
-                code.emplace_back(::irgen::NEW_VAR(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
+                code.emplace_back(::irgen::LOAD(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
             } else {
                 auto var_code = gen_code(assign_node->var, loop_stack);
                 code.insert(code.end(), var_code.begin(), var_code.end());
             }
-            auto value_code = gen_code(assign_node->value, loop_stack);
-            code.insert(code.end(), value_code.begin(), value_code.end());
             code.emplace_back(::irgen::STORE());
         } else if (node->kind == lmx::ASTNodeType::FuncDecl) {
             const auto* func_decl_node = dynamic_cast<lmx::FuncDeclNode*>(node);
@@ -164,67 +167,72 @@ namespace lm::irgen {
             func_obj->location = func_label;
             func_obj->name = func_decl_node->name;
 
-            std::vector<::irgen::Opcode> func_body;
-
-            func_body.emplace_back(::irgen::GOTO(func_end_label));
-            func_body.emplace_back(::irgen::LABEL(func_label));
-            func_body.emplace_back(::irgen::ENTER_SCOPE());
+            code.emplace_back(::irgen::GOTO(func_end_label));
+            code.emplace_back(::irgen::LABEL(func_label));
+            code.emplace_back(::irgen::ENTER_SCOPE());
 
             for (const auto& param : func_decl_node->params) {
-                func_body.emplace_back(::irgen::STORE_ARG(param));
+                code.emplace_back(::irgen::STORE_ARG(param));
             }
 
             if (func_decl_node->body) {
                 auto body_code = gen_code(func_decl_node->body, loop_stack);
-                func_body.insert(func_body.end(), body_code.begin(), body_code.end());
+                code.insert(code.end(), body_code.begin(), body_code.end());
             }
 
-            func_body.emplace_back(::irgen::PUSH(::irgen::Value()));
-            func_body.emplace_back(::irgen::LEAVE_SCOPE());
-            func_body.emplace_back(::irgen::RET());
-            func_body.emplace_back(::irgen::LABEL(func_end_label));
+            code.emplace_back(::irgen::RET_THEN_LEAVE_SCOPE());
 
-            code.insert(code.end(), func_body.begin(), func_body.end());
+            code.emplace_back(::irgen::LABEL(func_end_label));
+
+            code.emplace_back(::irgen::PUSH(::irgen::Value(func_obj)));
+
+            for (const auto& decorator : func_decl_node->decos) {
+                auto deco_code = gen_code(decorator, loop_stack);
+                code.insert(code.end(), deco_code.begin(), deco_code.end());
+                code.emplace_back(::irgen::CALL(1));
+            }
 
             if (func_decl_node->visibility == lmx::Visibility::Internal) {
                 code.emplace_back(::irgen::NEW_INTERN_VAR(func_decl_node->name));
             } else {
                 code.emplace_back(::irgen::NEW_VAR(func_decl_node->name));
             }
-            code.emplace_back(::irgen::PUSH(::irgen::Value(func_obj)));
             code.emplace_back(::irgen::STORE());
         } else if (node->kind == lmx::ASTNodeType::DoFuncDecl) {
             const auto* do_func_node = dynamic_cast<lmx::DoFuncDeclNode*>(node);
+
             size_t func_label = label_counter++;
             size_t func_end_label = label_counter++;
 
             auto func_obj = std::make_shared<::irgen::FunctionObject>();
             func_obj->params = do_func_node->params;
             func_obj->location = func_label;
+            func_obj->name = "";
 
-            std::vector<::irgen::Opcode> func_body;
-
-            func_body.emplace_back(::irgen::GOTO(func_end_label));
-            func_body.emplace_back(::irgen::LABEL(func_label));
-            func_body.emplace_back(::irgen::ENTER_SCOPE());
+            code.emplace_back(::irgen::GOTO(func_end_label));
+            code.emplace_back(::irgen::LABEL(func_label));
+            code.emplace_back(::irgen::ENTER_SCOPE());
 
             for (const auto& param : do_func_node->params) {
-                func_body.emplace_back(::irgen::STORE_ARG(param));
+                code.emplace_back(::irgen::STORE_ARG(param));
             }
 
             if (do_func_node->body) {
                 auto body_code = gen_code(do_func_node->body, loop_stack);
-                func_body.insert(func_body.end(), body_code.begin(), body_code.end());
+                code.insert(code.end(), body_code.begin(), body_code.end());
             }
 
-            func_body.emplace_back(::irgen::PUSH(::irgen::Value()));
-            func_body.emplace_back(::irgen::LEAVE_SCOPE());
-            func_body.emplace_back(::irgen::RET());
-            func_body.emplace_back(::irgen::LABEL(func_end_label));
+            code.emplace_back(::irgen::RET());
 
-            code.insert(code.end(), func_body.begin(), func_body.end());
+            code.emplace_back(::irgen::LABEL(func_end_label));
 
             code.emplace_back(::irgen::PUSH(::irgen::Value(func_obj)));
+
+            for (const auto& decorator : do_func_node->decos) {
+                auto deco_code = gen_code(decorator, loop_stack);
+                code.insert(code.end(), deco_code.begin(), deco_code.end());
+                code.emplace_back(::irgen::CALL(1));
+            }
         } else if (node->kind == lmx::ASTNodeType::ExternFunc) {
             // TODO: 外部函数声明暂时不处理
         } else if (node->kind == lmx::ASTNodeType::ReturnStmt) {
@@ -235,8 +243,7 @@ namespace lm::irgen {
             } else {
                 code.emplace_back(::irgen::PUSH(::irgen::Value()));
             }
-            code.emplace_back(::irgen::LEAVE_SCOPE());
-            code.emplace_back(::irgen::RET());
+            code.emplace_back(::irgen::RET_THEN_LEAVE_SCOPE());
         } else if (node->kind == lmx::ASTNodeType::Loop) {
             const auto* loop_node = dynamic_cast<lmx::LoopNode*>(node);
 
@@ -410,6 +417,8 @@ namespace lm::irgen {
             std::cerr << "Error: Null program AST\n";
             return {};
         }
+
+        printAST(program);
         
         std::vector<::irgen::Opcode> code;
 

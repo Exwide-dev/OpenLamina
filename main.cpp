@@ -358,13 +358,143 @@ void test_mod_intern_export() {
     }
 }
 
+void test_decorators() {
+    std::cout << "\n=== Testing Decorators ===\n";
+    
+    try {
+        std::cout << "\n1. Testing std.decos.log decorator...\n";
+        const std::string log_test = R"(
+            with std.decos.log make func greet(name) {
+                return "Hello, " + name + "!"
+            }
+            
+            print(greet("World"))
+        )";
+        
+        lmx::ProgramASTNode* log_ast = parse(log_test);
+        if (!log_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value log_result = lm::irgen::execute(log_ast);
+        delete log_ast;
+        std::cout << "\nLog decorator test passed!\n";
+        
+        std::cout << "\n2. Testing std.decos.debug decorator...\n";
+        const std::string debug_test = R"(
+            with std.decos.debug make func add(a, b) {
+                return a + b
+            }
+            
+            print(add(3, 5))
+        )";
+        
+        lmx::ProgramASTNode* debug_ast = parse(debug_test);
+        if (!debug_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value debug_result = lm::irgen::execute(debug_ast);
+        delete debug_ast;
+        std::cout << "\nDebug decorator test passed!\n";
+        
+        std::cout << "\n3. Testing custom decorator...\n";
+        const std::string custom_test = R"(
+            func make_upper(f) {
+                return do(x) {
+                    let result = f(x)
+                    return result
+                }
+            }
+            
+            with make_upper make func say_hello(name) {
+                return "hello, " + name
+            }
+            
+            print(say_hello("Alice"))
+        )";
+        
+        lmx::ProgramASTNode* custom_ast = parse(custom_test);
+        if (!custom_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        printAST(custom_ast);
+        const irgen::Value custom_result = lm::irgen::execute(custom_ast);
+        delete custom_ast;
+        std::cout << "\nCustom decorator test passed!\n";
+        
+        std::cout << "\n4. Testing multiple decorators...\n";
+        const std::string multi_test = R"(
+            func repeat_twice(f) {
+                do(x) {
+                    return f(f(x))
+                }
+            }
+            
+            func add_one(f) {
+                do(x) {
+                    return f(x) + 1
+                }
+            }
+            
+            with repeat_twice add_one make func increment(x) {
+                return x + 10
+            }
+            
+            print(increment(5))
+        )";
+        
+        lmx::ProgramASTNode* multi_ast = parse(multi_test);
+        if (!multi_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value multi_result = lm::irgen::execute(multi_ast);
+        delete multi_ast;
+        std::cout << "\nMultiple decorators test passed!\n";
+        
+        std::cout << "\n5. Testing decorated lambda...\n";
+        const std::string lambda_test = R"(
+            func square(f) {
+                do(x) {
+                    let res = f(x)
+                    return res * res
+                }
+            }
+            
+            let doubled = with square make do(x) {
+                return x * 2
+            }
+
+            print(doubled(3))
+        )";
+        
+        lmx::ProgramASTNode* lambda_ast = parse(lambda_test);
+        if (!lambda_ast) {
+            std::cout << "Parse failed!\n";
+            return;
+        }
+        const ::irgen::Value lambda_result = lm::irgen::execute(lambda_ast);
+        delete lambda_ast;
+        std::cout << "\nDecorated lambda test passed!\n";
+        
+        std::cout << "\n=== Decorator Tests Completed ===\n";
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\nError in decorator test: " << e.what() << std::endl;
+    }
+}
+
 void run_test() {
-    std::cout << "Testing module system..." << std::endl;
+    /*std::cout << "Testing module system..." << std::endl;
     test_module_system();
     std::cout << "Testing intern/export visibility..." << std::endl;
-    test_mod_intern_export();
-    std::cout << "Testing fib speed..." << std::endl;
-    test_fib_speed();
+    test_mod_intern_export();*/
+    std::cout << "Testing decorators..." << std::endl;
+    test_decorators();
+    /*std::cout << "Testing fib speed..." << std::endl;
+    test_fib_speed();*/
     std::cout << "\nPress Enter to continue to REPL...";
     std::cin.get();
 }

@@ -148,11 +148,22 @@ namespace lang {
         std::cout << "  std.math.sin(x), std.math.cos(x), std.math.tan(x)\n";
         std::cout << "  std.math.sqrt(x), std.math.abs(x)\n";
         std::cout << "  std.concat(str1, str2)\n";
+        std::cout << "Decorators (std.decos.*):\n";
+        std::cout << "  memoize(func) - Cache function results\n";
+        std::cout << "  timer(func) - Measure execution time\n";
+        std::cout << "  debug(func) - Print call info and return value\n";
+        std::cout << "  log(func) - Log function calls\n";
+        std::cout << "  once(func) - Allow only one call\n";
+        std::cout << "  retry(func, n) - Retry n times on failure\n";
+        std::cout << "  validate(func, validator) - Validate args before call\n";
+        std::cout << "  catch(func, handler) - Catch and handle exceptions\n";
         std::cout << "\nSyntax examples:\n";
         std::cout << "  let x = 42\n";
         std::cout << "  let arr = vec[1, 2, 3]\n";
         std::cout << "  let obj = {\"key\": value}\n";
         std::cout << "  func add(a, b) { return a + b }\n";
+        std::cout << "  std.decos.debug func my_func(x) { return x * 2 }\n";
+        std::cout << "  std.decos.timer do(x) { return x + 1 }\n";
         return {};
     }
 
@@ -259,6 +270,307 @@ namespace lang {
         return irgen::ModuleObject(irgen::SymbolTable(dict_symbols));
     }();
 
+    Value deco_memoize(VM& vm, const std::vector<Value>& args) {
+        arg_must("memoize", 1);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("memoize requires a function");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func;
+        irgen::FunctionType builtin_func;
+        bool is_user = args[0].isUserFunction();
+        
+        if (is_user) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        
+        static std::unordered_map<std::string, Value> cache;
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user](VM& vm, const std::vector<Value>& call_args) -> Value {
+            std::string key;
+            for (const auto& arg : call_args) {
+                key += arg.toString() + ",";
+            }
+            
+            auto it = cache.find(key);
+            if (it != cache.end()) {
+                return it->second;
+            }
+            
+            Value result;
+            if (is_user) {
+                result = user_func->call(vm, call_args);
+            } else {
+                result = builtin_func(vm, call_args);
+            }
+            cache[key] = result;
+            return result;
+        }));
+    }
+
+    Value deco_timer(VM& vm, const std::vector<Value>& args) {
+        arg_must("timer", 1);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("timer requires a function");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func;
+        irgen::FunctionType builtin_func;
+        bool is_user = args[0].isUserFunction();
+        std::string func_name = is_user ? args[0].asFunctionObject()->name : "<builtin>";
+        
+        if (is_user) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, func_name](VM& vm, const std::vector<Value>& call_args) -> Value {
+            clock_t start = clock();
+            Value result = is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+            clock_t end = clock();
+            double elapsed = static_cast<double>(end - start) / CLOCKS_PER_SEC;
+            std::cout << "Function " << func_name << " took " << elapsed << " seconds\n";
+            return result;
+        }));
+    }
+
+    Value deco_debug(VM& vm, const std::vector<Value>& args) {
+        arg_must("debug", 1);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("debug requires a function");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func;
+        irgen::FunctionType builtin_func;
+        bool is_user = args[0].isUserFunction();
+        std::string func_name = is_user ? args[0].asFunctionObject()->name : "<builtin>";
+        
+        if (is_user) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, func_name](VM& vm, const std::vector<Value>& call_args) -> Value {
+            std::cout << "Calling " << func_name << "(";
+            for (size_t i = 0; i < call_args.size(); ++i) {
+                if (i > 0) std::cout << ", ";
+                std::cout << call_args[i].toString();
+            }
+            std::cout << ")\n";
+            
+            Value result = is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+            
+            std::cout << "Returned: " << result.toString() << "\n";
+            return result;
+        }));
+    }
+
+    Value deco_log(VM& vm, const std::vector<Value>& args) {
+        arg_must("log", 1);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("log requires a function");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func;
+        irgen::FunctionType builtin_func;
+        bool is_user = args[0].isUserFunction();
+        std::string func_name = is_user ? args[0].asFunctionObject()->name : "<builtin>";
+        
+        if (is_user) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, func_name](VM& vm, const std::vector<Value>& call_args) -> Value {
+            std::cout << "[LOG] Calling " << func_name << "\n";
+            Value result = is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+            std::cout << "[LOG] " << func_name << " completed\n";
+            return result;
+        }));
+    }
+
+    Value deco_once(VM& vm, const std::vector<Value>& args) {
+        arg_must("once", 1);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("once requires a function");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func;
+        irgen::FunctionType builtin_func;
+        bool is_user = args[0].isUserFunction();
+        std::string func_name = is_user ? args[0].asFunctionObject()->name : "<builtin>";
+        
+        if (is_user) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        
+        static std::unordered_set<std::string> called;
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, func_name](VM& vm, const std::vector<Value>& call_args) -> Value {
+            if (called.contains(func_name)) {
+                throw RuntimeError("Function " + func_name + " can only be called once");
+            }
+            called.insert(func_name);
+            return is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+        }));
+    }
+
+    Value deco_retry(VM& vm, const std::vector<Value>& args) {
+        arg_must("retry", 2);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("retry requires a function as first argument");
+        }
+        if (!args[1].isNumber()) {
+            throw RuntimeError("retry requires a number as second argument");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func;
+        irgen::FunctionType builtin_func;
+        bool is_user = args[0].isUserFunction();
+        int max_retries = static_cast<int>(args[1].asNumber().toInt64());
+        
+        if (is_user) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, max_retries](VM& vm, const std::vector<Value>& call_args) -> Value {
+            for (int i = 0; i < max_retries; ++i) {
+                try {
+                    return is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+                } catch (const std::exception& e) {
+                    if (i == max_retries - 1) {
+                        throw;
+                    }
+                }
+            }
+            throw RuntimeError("Retry failed after " + std::to_string(max_retries) + " attempts");
+        }));
+    }
+
+    Value deco_validate(VM& vm, const std::vector<Value>& args) {
+        arg_must("validate", 2);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("validate requires a function as first argument");
+        }
+        if (!args[1].isFunction()) {
+            throw RuntimeError("validate requires a validator function as second argument");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func, user_validator;
+        irgen::FunctionType builtin_func, builtin_validator;
+        bool is_user_func = args[0].isUserFunction();
+        bool is_user_validator = args[1].isUserFunction();
+        
+        if (is_user_func) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        if (is_user_validator) {
+            user_validator = args[1].asFunctionObject();
+            if (!user_validator->owner_vm) {
+                user_validator->owner_vm = &vm;
+            }
+        } else {
+            builtin_validator = args[1].asFunction();
+        }
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user_func, user_validator, builtin_validator, is_user_validator](VM& vm, const std::vector<Value>& call_args) -> Value {
+            Value result = is_user_validator ? user_validator->call(vm, call_args) : builtin_validator(vm, call_args);
+            if (!result.isBool() || !result.asBool()) {
+                throw RuntimeError("Validation failed");
+            }
+            return is_user_func ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+        }));
+    }
+
+    Value deco_catch(VM& vm, const std::vector<Value>& args) {
+        arg_must("catch", 2);
+        if (!args[0].isFunction()) {
+            throw RuntimeError("catch requires a function as first argument");
+        }
+        if (!args[1].isFunction()) {
+            throw RuntimeError("catch requires a handler function as second argument");
+        }
+        
+        std::shared_ptr<irgen::FunctionObject> user_func, user_handler;
+        irgen::FunctionType builtin_func, builtin_handler;
+        bool is_user_func = args[0].isUserFunction();
+        bool is_user_handler = args[1].isUserFunction();
+        
+        if (is_user_func) {
+            user_func = args[0].asFunctionObject();
+            if (!user_func->owner_vm) {
+                user_func->owner_vm = &vm;
+            }
+        } else {
+            builtin_func = args[0].asFunction();
+        }
+        if (is_user_handler) {
+            user_handler = args[1].asFunctionObject();
+            if (!user_handler->owner_vm) {
+                user_handler->owner_vm = &vm;
+            }
+        } else {
+            builtin_handler = args[1].asFunction();
+        }
+        
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user_func, user_handler, builtin_handler, is_user_handler](VM& vm, const std::vector<Value>& call_args) -> Value {
+            try {
+                return is_user_func ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
+            } catch (const std::exception& e) {
+                std::vector<Value> handler_args;
+                handler_args.push_back(Value(std::string(e.what())));
+                return is_user_handler ? user_handler->call(vm, handler_args) : builtin_handler(vm, handler_args);
+            }
+        }));
+    }
+
+    irgen::ModuleObject decos_mod = [] {
+        std::map<size_t, std::shared_ptr<irgen::Value>> decos_symbols;
+        
+        decos_symbols[irgen::g_string_pool.add("memoize")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_memoize)));
+        decos_symbols[irgen::g_string_pool.add("timer")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_timer)));
+        decos_symbols[irgen::g_string_pool.add("debug")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_debug)));
+        decos_symbols[irgen::g_string_pool.add("log")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_log)));
+        decos_symbols[irgen::g_string_pool.add("once")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_once)));
+        decos_symbols[irgen::g_string_pool.add("retry")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_retry)));
+        decos_symbols[irgen::g_string_pool.add("validate")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_validate)));
+        decos_symbols[irgen::g_string_pool.add("catch")] = std::make_shared<irgen::Value>(Value(irgen::FunctionType(deco_catch)));
+        
+        return irgen::ModuleObject(irgen::SymbolTable(decos_symbols));
+    }();
+
     irgen::ModuleObject standard_mod = [] {
         std::map<size_t, std::shared_ptr<irgen::Value>> std_symbols;
         
@@ -275,6 +587,7 @@ namespace lang {
         
         std_symbols[irgen::g_string_pool.add("math")] = std::make_shared<irgen::Value>(Value(std::make_shared<irgen::ModuleObject>(math_mod)));
         std_symbols[irgen::g_string_pool.add("dict")] = std::make_shared<irgen::Value>(Value(std::make_shared<irgen::ModuleObject>(dict_mod)));
+        std_symbols[irgen::g_string_pool.add("decos")] = std::make_shared<irgen::Value>(Value(std::make_shared<irgen::ModuleObject>(decos_mod)));
         
         return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
     }();

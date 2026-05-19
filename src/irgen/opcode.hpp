@@ -76,6 +76,7 @@ namespace irgen {
     class NEW_CONST;
     class NEW_INTERN_VAR;
     class NEW_INTERN_CONST;
+    class RET_THEN_LEAVE_SCOPE;
 
     template<typename T>
     class ArrMap {
@@ -332,8 +333,11 @@ namespace irgen {
         NEW_VAR,
         NEW_CONST,
         NEW_INTERN_VAR,
-        NEW_INTERN_CONST
+        NEW_INTERN_CONST,
+        RET_THEN_LEAVE_SCOPE
     >;
+    
+    class SymbolTable;
     
     struct FunctionObject {
         std::vector<std::string> params;
@@ -341,6 +345,7 @@ namespace irgen {
         size_t location;
         std::string name = "<anonymous>";
         VM* owner_vm = nullptr;
+        std::vector<SymbolTable> closure;
         
         Value call(VM& caller_vm, const std::vector<Value>& args);
     };
@@ -753,7 +758,7 @@ return std::get<CppType>(data); \
             if (self.type != Type::Function) {
                 throw RuntimeError("Value is not a function");
             }
-            if (std::holds_alternative<std::shared_ptr<FunctionObject>>(self.data)) {
+            if (self.data.index() == 4) {
                 return std::get<std::shared_ptr<FunctionObject>>(self.data);
             }
             throw RuntimeError("Value is not a user-defined function");
@@ -761,12 +766,14 @@ return std::get<CppType>(data); \
 
         [[nodiscard]] bool isUserFunction() const {
             const Value &self = deref();
-            return self.type == Type::Function and std::holds_alternative<std::shared_ptr<FunctionObject>>(self.data);
+            return self.type == Type::Function &&
+                   self.data.index() == 4;
         }
 
         [[nodiscard]] bool isBuiltinFunction() const {
             const Value &self = deref();
-            return self.type == Type::Function and std::holds_alternative<FunctionType>(self.data);
+            return self.type == Type::Function &&
+                   self.data.index() == 3;
         }
 
 #undef DEFINE_AS_METHOD
@@ -816,10 +823,26 @@ return std::get<CppType>(data); \
         }
 
         Value &deref() {
-            if (type == Type::Reference) {
-                return std::get<Ref>(data).value_ptr->deref();
+            auto current = this;
+            while (current->type == Type::Reference) {
+                current = std::get<Ref>(current->data).value_ptr.get();
             }
-            return *this;
+            return *current;
+        }
+
+        Value& safe_deref() {
+            std::unordered_set<Value*> visited;  // 用裸指针，避免 shared_ptr 拷贝
+            auto current = this;
+
+            while (current->type == Type::Reference) {
+                if (visited.contains(current)) {  // 先检查当前节点
+                    throw RuntimeError("Circular reference detected");
+                }
+                visited.insert(current);
+                current = std::get<Ref>(current->data).value_ptr.get();
+            }
+
+            return *current;
         }
 
         friend std::ostream &operator<<(std::ostream &os, const Value &value) {
@@ -833,14 +856,8 @@ return std::get<CppType>(data); \
     };
 
     inline Ref::Ref(std::shared_ptr<Value> ptr) : value_ptr(std::move(ptr)) {
-        std::unordered_set<std::shared_ptr<Value>> visited;
-
-        while (value_ptr->isReference()) {
-            if (visited.contains(value_ptr)) {
-                throw RuntimeError("Circular reference detected");
-            }
-            visited.insert(value_ptr);
-            value_ptr = value_ptr->asReference().value_ptr;
+        if (value_ptr->isReference()) {
+            value_ptr = std::make_shared<Value>(value_ptr->deref());
         }
     }
 
@@ -935,12 +952,12 @@ return std::get<CppType>(data); \
 
         [[nodiscard]] std::string toString() const {
             return "Stack:\n" + std::accumulate(
-                       data.rbegin(), data.rend(),
-                       std::string{},
-                       [i = data.size() - 1](std::string acc, const auto &elem) mutable {
-                           return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
-                       }
-                   );
+                data.rbegin(), data.rend(),
+                std::string{},
+                [i = data.size() - 1](std::string acc, const auto &elem) mutable {
+                    return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
+                }
+            );
         }
     };
 
@@ -1421,6 +1438,16 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    class RET_THEN_LEAVE_SCOPE {
+    public:
+        COMMON(RET_THEN_LEAVE_SCOPE)
+        std::vector<Value> operands;
+
+        RET_THEN_LEAVE_SCOPE() = default;
+
+        void emit(VM &vm) const;
+    };
+
     class StringPool {
         std::unordered_map<std::string, size_t> string_to_id;
         std::vector<std::string> id_to_string;
@@ -1479,6 +1506,7 @@ return std::get<CppType>(data); \
     public:
         Stack<Value> op_stack{}, call_stack{};
         std::vector<std::string> traceback{};
+        std::vector<FunctionObject> call_func_stack{};
         std::vector<Opcode> code{};
         std::vector<SymbolTable> symbol_stack{SymbolTable()};
         Cache cache{};

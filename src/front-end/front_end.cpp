@@ -1,5 +1,7 @@
 #include "front_end.hpp"
 #include "../tools/debug.hpp"
+#include "parser.tab.hpp"
+
 
 lmx::ProgramASTNode* result = nullptr;
 
@@ -15,5 +17,6 @@ lmx::ProgramASTNode* parse(const std::string &source) {
         return m_result;
     }
     LOG("\nfront-end Parsing failed!\n");
+    LOG("Error: " << detail_msg);
     return nullptr;
 }

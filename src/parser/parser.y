@@ -43,6 +43,7 @@
     lmx::ASTNode* ast_node;
     lmx::ExprNode* expr_node;
     std::vector<lmx::ASTNode*>* ast_list;
+    std::vector<lmx::ExprNode*>* expr_list;
     std::vector<lmx::UseItem>* use_item_list;
     lmx::UseItem* use_item;
     std::vector<std::string>* name_parts;
@@ -93,6 +94,8 @@
 %token <string_val> KW_VAR
 %token <string_val> KW_INTERN
 %token <string_val> KW_EXPORT
+%token <string_val> KW_WITH
+%token <string_val> KW_MAKE
 %token <string_val> LBRACKET
 %token <string_val> RBRACKET
 
@@ -101,6 +104,8 @@
 %type <ast_node> var_decl
 %type <ast_node> assign_stmt  // 新增：赋值语句
 %type <ast_node> func_decl  // 新增：函数声明
+%type <expr_list> decorators
+%type <expr_list> with_decorator_list
 %type <ast_node> return_stmt  // 新增：return 语句
 %type <ast_node> if_stmt
 %type <ast_node> loop_stmt
@@ -117,6 +122,7 @@
 %type <expr_node> factor
 %type <expr_node> number
 %type <expr_node> identifier
+%type <expr_node> do_expr
 %type <ast_list> stmt_list
 %type <ast_list> block_stmt_list
 %type <ast_list> param_list  // 新增：参数列表
@@ -214,6 +220,10 @@ stmt:
     }
     | block_stmt {
         LOG("Parsing stmt: block_stmt");
+        $$ = $1;
+    }
+    | do_expr {
+        LOG("Parsing stmt: do_expr");
         $$ = $1;
     }
     ;
@@ -315,10 +325,73 @@ arg_list:
     }
     ;
 
+decorators:
+    expr {
+        LOG("Creating decorators list with one decorator");
+        $$ = new std::vector<ExprNode*>();
+        $$->push_back($1);
+    }
+    | decorators expr {
+        LOG("Adding decorator to decorators list");
+        $1->push_back($2);
+        $$ = $1;
+    }
+    ;
+
+with_decorator_list:
+    KW_WITH decorators KW_MAKE {
+        LOG("Creating with_decorator_list");
+        $$ = $2;
+    }
+    ;
+
 // 新增：函数声明规则
 func_decl:
-    KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing func_decl: " + *$2);
+    with_decorator_list KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: with decorators func " + *$3);
+        std::vector<std::string> params;
+        for (auto& node : *$5) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        $$ = new FuncDeclNode(*$3, params, dynamic_cast<BlockStmtNode*>($7),
+                              Visibility::Exported, *$1);
+        LOG("func_decl parsed successfully");
+        delete $3;
+        delete $5;
+    }
+    | KW_INTERN with_decorator_list KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: intern with decorators func " + *$4);
+        std::vector<std::string> params;
+        for (auto& node : *$6) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8), Visibility::Internal, *$2);
+        LOG("func_decl (intern) parsed successfully");
+        delete $4;
+        delete $6;
+    }
+    | KW_EXPORT with_decorator_list KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: export with decorators func " + *$4);
+        std::vector<std::string> params;
+        for (auto& node : *$6) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8), Visibility::Exported, *$2);
+        LOG("func_decl (export) parsed successfully");
+        delete $4;
+        delete $6;
+    }
+    | KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: func " + *$2);
         std::vector<std::string> params;
         for (auto& node : *$4) {
             auto var_ref = dynamic_cast<VarRefNode*>(node);
@@ -326,38 +399,11 @@ func_decl:
                 params.push_back(var_ref->name);
             }
         }
-        $$ = new FuncDeclNode(*$2, params, dynamic_cast<BlockStmtNode*>($6));
-        LOG("func_decl parsed successfully");
+        $$ = new FuncDeclNode(*$2, params, dynamic_cast<BlockStmtNode*>($6),
+                              Visibility::Exported);
+        LOG("func_decl (no decorators) parsed successfully");
         delete $2;
         delete $4;
-    }
-    | KW_INTERN KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing func_decl: intern func " + *$3);
-        std::vector<std::string> params;
-        for (auto& node : *$5) {
-            auto var_ref = dynamic_cast<VarRefNode*>(node);
-            if (var_ref) {
-                params.push_back(var_ref->name);
-            }
-        }
-        $$ = new FuncDeclNode(*$3, params, dynamic_cast<BlockStmtNode*>($7), Visibility::Internal);
-        LOG("func_decl (intern) parsed successfully");
-        delete $3;
-        delete $5;
-    }
-    | KW_EXPORT KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing func_decl: export func " + *$3);
-        std::vector<std::string> params;
-        for (auto& node : *$5) {
-            auto var_ref = dynamic_cast<VarRefNode*>(node);
-            if (var_ref) {
-                params.push_back(var_ref->name);
-            }
-        }
-        $$ = new FuncDeclNode(*$3, params, dynamic_cast<BlockStmtNode*>($7), Visibility::Exported);
-        LOG("func_decl (export) parsed successfully");
-        delete $3;
-        delete $5;
     }
     ;
 
@@ -551,21 +597,13 @@ postfix_expr:
         $$ = new IndexAccessNode($1, $3);
         LOG("postfix_expr (index access) parsed successfully");
     }
-    | KW_DO LPAREN param_list RPAREN block_stmt {
-        /*KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-                  LOG("Parsing func_decl: " + *$2);
-                  std::vector<std::string> params;
-                  for (auto& node : *$4) {
-                      auto var_ref = dynamic_cast<VarRefNode*>(node);
-                      if (var_ref) {
-                          params.push_back(var_ref->name);
-                      }
-                  }
-                  $$ = new FuncDeclNode(*$2, params, dynamic_cast<BlockStmtNode*>($6));
-                  LOG("func_decl parsed successfully");
-                  delete $2;
-                  delete $4;
-              }*/
+    | do_expr {
+        $$ = $1;
+    }
+    ;
+
+do_expr:
+    KW_DO LPAREN param_list RPAREN block_stmt {
         LOG("Parsing postfix_expr: (do) function");
         std::vector<std::string> params;
         for (auto& node : *$3) {
@@ -578,7 +616,19 @@ postfix_expr:
         LOG("postfix_expr (anonymous function) parsed successfully");
         delete $3;
     }
-    ;
+    | with_decorator_list KW_DO LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing postfix_expr: with decorators (do) function");
+        std::vector<std::string> params;
+        for (auto& node : *$4) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        $$ = new DoFuncDeclNode(params, dynamic_cast<BlockStmtNode*>($6), *$1);
+        LOG("postfix_expr (decorated anonymous function) parsed successfully");
+        delete $4;
+    }
 
 // 新增：一元表达式规则
 unary_expr:

@@ -30,6 +30,7 @@ enum class ASTNodeType {
     Assign,
     FuncDecl,
     DoFuncDecl,
+    DecoratedFunc,
     ExternFunc,
     ReturnStmt,
     Loop,
@@ -67,6 +68,7 @@ struct ASTNode {
     std::vector<ASTNode*> children;
 
     explicit ASTNode(const ASTNodeType t) : kind(t) {}
+    ASTNode() = default;
     virtual ~ASTNode() {
         for (const auto child : children) {
             delete child;
@@ -310,16 +312,41 @@ struct AssignNode final : ASTNode {
     }
 };
 
+struct DecoratedFuncNode final : ASTNode {
+    std::vector<ExprNode*> decorators;
+    ASTNode* target;
+
+    DecoratedFuncNode(std::vector<ExprNode*> decs, ASTNode* t)
+        : ASTNode(ASTNodeType::DecoratedFunc), decorators(std::move(decs)), target(t) {}
+    ~DecoratedFuncNode() override {
+        for (const auto dec : decorators) {
+            delete dec;
+        }
+        delete target;
+    }
+};
+
 struct FuncDeclNode final : ASTNode {
     std::string name;
     std::vector<std::string> params;
     BlockStmtNode* body;
     std::vector<TypeNode*> args_type;
     TypeNode* ret_type{};
+    std::vector<ExprNode*> decos;
     Visibility visibility = Visibility::Exported;
 
-    FuncDeclNode(std::string n, std::vector<std::string> p, BlockStmtNode* b, Visibility v = Visibility::Exported)
-        : ASTNode(ASTNodeType::FuncDecl), name(std::move(n)), params(std::move(p)), body(b), visibility(v) {}
+    FuncDeclNode(
+        std::string n,
+        std::vector<std::string> p,
+        BlockStmtNode* b,
+        Visibility v = Visibility::Exported,
+        const std::vector<ExprNode*>& decos = {}
+    )   : ASTNode(ASTNodeType::FuncDecl),
+          name(std::move(n)),
+          params(std::move(p)),
+          body(b),
+          decos(decos),
+          visibility(v) {}
     ~FuncDeclNode() override {
         delete body;
         for (const auto type : args_type) {
@@ -334,9 +361,10 @@ struct DoFuncDeclNode : ExprNode {
     BlockStmtNode* body;
     std::vector<TypeNode*> args_type;
     TypeNode* ret_type{};
+    std::vector<ExprNode*> decos;
 
-    DoFuncDeclNode(std::vector<std::string> p, BlockStmtNode* b)
-        : ExprNode(ASTNodeType::DoFuncDecl), params(std::move(p)), body(b) {}
+    DoFuncDeclNode(std::vector<std::string> p, BlockStmtNode* b, const std::vector<ExprNode*>& decos={})
+        : ExprNode(ASTNodeType::DoFuncDecl), params(std::move(p)), body(b), decos(decos) {}
     ~DoFuncDeclNode() override {
         delete body;
         for (const auto type : args_type) {
@@ -352,12 +380,13 @@ struct ExternFuncNode : ASTNode {
     std::vector<TypeNode*> args_type;
     StringNode* lib_name;
     TypeNode* ret_type;
+    std::vector<ExprNode*> decos;
 
     ExternFuncNode(std::string n, std::vector<std::string> p,
                    std::vector<TypeNode*> a, StringNode* l,
-                   TypeNode* r)
+                   TypeNode* r, const std::vector<ExprNode*>& decos = {})
         : ASTNode(ASTNodeType::ExternFunc), name(std::move(n)), params(std::move(p)),
-          args_type(std::move(a)), lib_name(l), ret_type(r) {}
+          args_type(std::move(a)), lib_name(l), ret_type(r), decos(decos) {}
     ~ExternFuncNode() override {
         delete lib_name;
         for (auto type : args_type) {

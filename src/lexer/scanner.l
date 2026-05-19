@@ -88,6 +88,8 @@ using namespace lexer;
 "vec"          { addToken(KW_VEC, yytext); yylval.string_val = new std::string(yytext); return KW_VEC; }
 "intern"       { addToken(KW_INTERN, yytext); yylval.string_val = new std::string(yytext); return KW_INTERN; }
 "export"       { addToken(KW_EXPORT, yytext); yylval.string_val = new std::string(yytext); return KW_EXPORT; }
+"with"       { addToken(KW_WITH, yytext); yylval.string_val = new std::string(yytext); return KW_WITH; }
+"make"       { addToken(KW_MAKE, yytext); yylval.string_val = new std::string(yytext); return KW_MAKE; }
 
 [0-9][0-9_]*  {
     std::string num = yytext;

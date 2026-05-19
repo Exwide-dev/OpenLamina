@@ -110,7 +110,7 @@ namespace irgen {
                 std::visit([&](auto &op) -> void {
                     LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
                     op.emit(*this);
-                    LOG("VM " << op_stack.toString());
+                    // LOG("VM " << op_stack.toString());
                 }, code[pc]);
             }
             if (!op_stack.empty()) {
@@ -133,7 +133,29 @@ namespace irgen {
     }
 
     inline void PUSH::emit(VM &vm) const {
-        vm.op_stack.push(operands[0]);
+        const Value& val = operands[0];
+        if (val.getType() == Value::Type::Function) {
+            try {
+                auto func = val.asFunctionObject();
+                LOG("PUSH Function: name=" << func->name << ", location=" << func->location);
+                if (func->closure.empty()) {
+                    LOG("  Capturing closure from " << vm.symbol_stack.size() << " scopes");
+                    if (!vm.symbol_stack.empty()) {
+                        for (size_t i = 0; i < vm.symbol_stack.size(); i++) {
+                            func->closure.push_back(vm.symbol_stack[i]);
+                            LOG("    Captured scope " << i << ": " << vm.symbol_stack[i].toString());
+                        }
+                    } else {
+                        LOG("    No scopes available");
+                    }
+                } else {
+                    LOG("  Closure already captured with " << func->closure.size() << " scopes");
+                }
+            } catch (const RuntimeError& e) {
+                LOG("  Not a user-defined function");
+            }
+        }
+        vm.op_stack.push(val);
     }
 
     inline void ADD::emit(VM &vm) {
@@ -221,26 +243,24 @@ namespace irgen {
     std::string SymbolTable::toString() const {
         std::string k;
         for (const auto& [a, b] : *this) {
-            k.append(std::format("{} : {}({}), ", a, b->toString(), b->type_name()));
+            k.append(std::format("{} : {}({}), \n", g_string_pool.get_string(a), b->toString(), b->type_name()));
         }
-        return k.substr(0, k.size() - 2);
+        return k.substr(0, k.size() - 3);
     }
 
     inline void STORE::emit(VM &vm) const {
-        Value value = vm.op_stack.popValue();
         Value ref = vm.op_stack.popValue();
+        Value value = vm.op_stack.popValue();
 
         if (ref.isReference()) {
             bool has_value = false;
             bool is_const = false;
             const auto& ref_ptr = ref.asReference();
             if (ref_ptr.value_ptr && !vm.symbol_stack.empty()) {
-                // 在修改之前先检查常量状态
                 for (auto& symbol_table : vm.symbol_stack) {
                     for (const auto& [id, val] : symbol_table.symbols) {
                         if (val.get() == ref_ptr.value_ptr.get()) {
                             is_const = symbol_table.is_constant(id);
-                            // 直接检查类型，避免 deref() 的问题
                             has_value = val->getType() != Value::Type::None;
                             break;
                         }
@@ -248,12 +268,10 @@ namespace irgen {
                 }
             }
             
-            // 如果是常量且已有值，不允许修改
             if (is_const && has_value) {
                 throw RuntimeError("Cannot modify constant");
             }
             
-            // 执行赋值
             ref.set(value);
         }
 
@@ -262,11 +280,17 @@ namespace irgen {
 
     inline void LOAD::emit(VM &vm) const {
         const auto var_id = static_cast<size_t>(operands[0].asInt());
+        const std::string& var_name = g_string_pool.get_string(var_id);
+
+        LOG("LOAD: var_id=" << var_id << ", var_name=\"" << var_name << "\"");
+        LOG("LOAD: symbol_stack size=" << vm.symbol_stack.size());
 
         // 1. 先从 Cache 查找
+        LOG("Finding in Cache");
         const auto cached = vm.cache.get(var_id);
         if (cached.has_value()) {
             const auto& value_ptr = *cached;
+            LOG("Found in Cache");
             if (value_ptr->isReference()) {
                 vm.op_stack.push(*value_ptr);
             } else {
@@ -275,32 +299,40 @@ namespace irgen {
             return;
         }
 
-        // 2. Cache 未命中，从符号栈查找
         std::shared_ptr<Value> value_ptr;
-        const std::string& var_name = g_string_pool.get_string(var_id);
 
-        for (auto& symbol_table : std::ranges::reverse_view(vm.symbol_stack)) {
+        // 2. 从符号栈查找（包括闭包作用域）
+        LOG("Finding in Symbol Stack (including closures)");
+        for (size_t i = vm.symbol_stack.size(); i > 0; i--) {
+            const auto& symbol_table = vm.symbol_stack[i-1];
+            LOG("  Scope " << (vm.symbol_stack.size() - i) << ": " << symbol_table.toString());
             if (symbol_table.exists(var_id)) {
                 auto k = symbol_table.get(var_id);
                 if (k.has_value()) {
                     value_ptr = *k;
                     vm.cache.add(var_id, value_ptr);
+                    LOG("  Found in scope " << (vm.symbol_stack.size() - i));
                     break;
                 }
             }
         }
 
         // 3. 符号栈未找到，从模块查找
-        if (!value_ptr && vm.main_module) {
-            auto attr = vm.main_module->get_attr(var_name);
-            if (attr.has_value()) {
-                value_ptr = std::make_shared<Value>(*attr);
-                vm.cache.add(var_id, value_ptr);
+        if (!value_ptr) {
+            LOG("Finding in Module");
+            if (vm.main_module) {
+                auto attr = vm.main_module->get_attr(var_name);
+                if (attr.has_value()) {
+                    value_ptr = std::make_shared<Value>(*attr);
+                    vm.cache.add(var_id, value_ptr);
+                    LOG("Found in Module");
+                }
             }
         }
 
         // 4. 仍未找到，报错
         if (!value_ptr) {
+            LOG("Still not found");
             throw RuntimeError("Var not found: " + var_name);
         }
 
@@ -319,7 +351,9 @@ namespace irgen {
         if (not vm.label_table.contains(label_id)) {
             throw RuntimeError("Unknown label: " + std::to_string(label_id));
         }
-        vm.pc = vm.label_table[label_id];
+        size_t target_pc = vm.label_table[label_id];
+        LOG("GOTO: label_id=" << label_id << ", target_pc=" << target_pc << ", symbol_stack size=" << vm.symbol_stack.size());
+        vm.pc = target_pc;
     }
 
     inline void GOTOIF::emit(VM &vm) const {
@@ -329,22 +363,24 @@ namespace irgen {
     }
 
     inline void ENTER_SCOPE::emit(VM &vm) {
-        LOG("Enter scope");
+        LOG("ENTER_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
         vm.symbol_stack.emplace_back();
         vm.cache.enter_scope();
+        LOG("ENTER_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
     }
 
     inline void LEAVE_SCOPE::emit(VM &vm) {
-        LOG("Leave scope");
+        LOG("LEAVE_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.pop_back();
         }
         vm.cache.leave_scope();
+        LOG("LEAVE_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
     }
 
     inline void CALL::emit(VM &vm) const {
         Value func = vm.op_stack.popValue();
-        LOG(ITIS(,func,.toString()) << ", type: " << func.type_name());
+        LOG(ITIS(,func,.toString()) << ", true val type: " << func.deref().type_name());
 
         if (!func.isFunction()) {
             throw RuntimeError("Not a function");
@@ -352,6 +388,7 @@ namespace irgen {
 
         if (func.isUserFunction()) {
             auto func_obj = func.asFunctionObject();
+            vm.call_func_stack.emplace_back(*func_obj);
             auto arg_count = operands[0].asInt();
             std::vector<Value> args;
             args.reserve(arg_count);
@@ -369,6 +406,12 @@ namespace irgen {
 
                 for (auto it = args.rbegin(); it != args.rend(); ++it) {
                     vm.op_stack.push(*it);
+                }
+
+                LOG("CALL: Pushing " << func_obj->closure.size() << " closure scopes");
+                for (const auto& scope : func_obj->closure) {
+                    vm.symbol_stack.push_back(scope);
+                    LOG("  Pushed scope: " << scope.toString());
                 }
 
                 if (vm.label_table.contains(func_obj->location)) {
@@ -402,11 +445,27 @@ namespace irgen {
     }
 
     inline void RET::emit(VM &vm) {
+        LOG("RET: call_stack size=" << vm.call_stack.size() << ", call_func_stack size=" << vm.call_func_stack.size());
         if (!vm.call_stack.empty()) {
             auto return_addr = vm.call_stack.popValue().asInt();
+            LOG("RET: return_addr=" << return_addr << ", current pc=" << vm.pc);
             vm.pc = static_cast<size_t>(return_addr);
             if (!vm.traceback.empty()) {
                 vm.traceback.pop_back();
+            }
+            if (!vm.call_func_stack.empty()) {
+                auto& func = vm.call_func_stack.back();
+                LOG("RET: func name=" << func.name << ", location=" << func.location << ", closure size=" << func.closure.size());
+                LOG("RET: symbol_stack before pop=" << vm.symbol_stack.size());
+                for (size_t i = 0; i < func.closure.size(); i++) {
+                    if (!vm.symbol_stack.empty()) {
+                        vm.symbol_stack.pop_back();
+                    }
+                }
+                LOG("RET: symbol_stack after pop=" << vm.symbol_stack.size());
+                vm.call_func_stack.pop_back();
+            } else {
+                LOG("RET: call_func_stack is empty!");
             }
         } else {
             throw RuntimeError("RET when call stack is empty");
@@ -510,10 +569,11 @@ namespace irgen {
     inline void STORE_ARG::emit(VM &vm) const {
         const Value value = vm.op_stack.popValue();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
-        
-        auto value_ptr = std::make_shared<Value>(value);
+
+        const auto value_ptr = std::make_shared<Value>(value);
         vm.symbol_stack.back().set(var_id, value_ptr);
         vm.cache.add(var_id, value_ptr);
+        LOG("STORE_ARG Done, now " << ITIS(,vm.symbol_stack.back(),.toString()));
     }
 
     void NEW_VAR::emit(VM &vm) const {
@@ -568,6 +628,10 @@ namespace irgen {
         vm.op_stack.push(var);
     }
 
+    void RET_THEN_LEAVE_SCOPE::emit(VM &vm) const {
+        RET().emit(vm);
+        LEAVE_SCOPE().emit(vm);
+    }
 
     Value ModuleObject::import(const std::string& module_name) {
         auto existing = get_attr(module_name);
@@ -669,6 +733,10 @@ namespace irgen {
         }
         target_vm.call_stack.push(Value(target_vm.code.size()));
         
+        for (const auto& scope : closure) {
+            target_vm.symbol_stack.push_back(scope);
+        }
+        
         if (target_vm.label_table.contains(location)) {
             target_vm.pc = target_vm.label_table[location];
         } else {
@@ -676,6 +744,12 @@ namespace irgen {
         }
         
         target_vm.run();
+        
+        for (size_t i = 0; i < closure.size(); i++) {
+            if (!target_vm.symbol_stack.empty()) {
+                target_vm.symbol_stack.pop_back();
+            }
+        }
         
         if (pushed_traceback) {
             target_vm.traceback.pop_back();
