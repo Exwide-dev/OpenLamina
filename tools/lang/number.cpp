@@ -30,36 +30,7 @@ bool Number::BigNum::isZero() const {
     return true;
 }
 
-Number::BigNum::BigNum(int64_t val) {
-    lmmp_global_init();
-    if (val == 0) {
-        init_zero();
-        return;
-    }
-    is_negative = val < 0;
-    auto abs_val = static_cast<uint64_t>(is_negative ? -val : val);
-    size = abs_val > LIMB_MAX ? 2 : 1;
-    allocate(size);
-    if (size == 1) {
-        data[0] = abs_val;
-    } else {
-        data[0] = abs_val & LLIMB_MASK;
-        data[1] = abs_val >> 32;
-    }
-}
 
-Number::BigNum::BigNum(uint64_t val) {
-    lmmp_global_init();
-    is_negative = false;
-    size = val > LIMB_MAX ? 2 : 1;
-    allocate(size);
-    if (size == 1) {
-        data[0] = val;
-    } else {
-        data[0] = val & LLIMB_MASK;
-        data[1] = val >> 32;
-    }
-}
 
 Number::BigNum::BigNum(const std::string& str, int base) {
     lmmp_global_init();
@@ -292,21 +263,11 @@ Number::BigNum Number::div_big(const BigNum& a, const BigNum& b) {
     result.allocate(dividend.size - divisor.size + 1);
     
     std::unique_ptr<mp_limb_t[]> remainder(new mp_limb_t[divisor.size]);
-    lmmp_copy(remainder.get(), dividend.data.get(), divisor.size);
-    
-    mp_limb_t qh = lmmp_div_s_(result.data.get(), remainder.get(), dividend.size, divisor.data.get(), divisor.size);
+    lmmp_div_(result.data.get(), remainder.get(), dividend.data.get(), dividend.size, divisor.data.get(), divisor.size);
     
     result.size = dividend.size - divisor.size + 1;
     while (result.size > 1 && result.data[result.size - 1] == 0) {
         result.size--;
-    }
-    
-    if (qh != 0) {
-        std::unique_ptr<mp_limb_t[]> new_data(new mp_limb_t[result.size + 1]);
-        new_data[0] = qh;
-        lmmp_copy(new_data.get() + 1, result.data.get(), result.size);
-        result.data = std::move(new_data);
-        result.size++;
     }
     
     result.is_negative = a.is_negative != b.is_negative;
@@ -333,9 +294,9 @@ Number::BigNum Number::mod_big(const BigNum& a, const BigNum& b) {
     
     BigNum result;
     result.allocate(divisor.size);
-    lmmp_copy(result.data.get(), dividend.data.get(), divisor.size);
     
-    lmmp_div_s_(nullptr, result.data.get(), dividend.size, divisor.data.get(), divisor.size);
+    std::unique_ptr<mp_limb_t[]> quotient(new mp_limb_t[dividend.size - divisor.size + 1]);
+    lmmp_div_(quotient.get(), result.data.get(), dividend.data.get(), dividend.size, divisor.data.get(), divisor.size);
     
     result.size = divisor.size;
     while (result.size > 1 && result.data[result.size - 1] == 0) {
@@ -375,15 +336,6 @@ int Number::compare_big(const BigNum& a, const BigNum& b) {
 }
 
 Number::Number() : value(0LL) { lmmp_global_init(); }
-Number::Number(int64_t v) : value(v) { lmmp_global_init(); }
-Number::Number(uint64_t v) {
-    lmmp_global_init();
-    if (v <= INT64_MAX) {
-        value = static_cast<int64_t>(v);
-    } else {
-        value = BigNum(v);
-    }
-}
 
 Number::Number(const std::string& str, int base) {
     lmmp_global_init();
@@ -508,6 +460,7 @@ Number Number::operator/(const Number& other) const {
 }
 
 Number Number::operator%(const Number& other) const {
+    LOG("Exec modulo");
     if (other.isZero()) throw std::runtime_error("Modulo by zero");
     
     if (is_small() && other.is_small()) {

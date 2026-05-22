@@ -34,6 +34,8 @@ add_executable(
     tools/error.hpp
     tools/lang/builtins.cpp
     tools/lang/builtins.hpp
+    tools/lang/rational.cpp
+    tools/lang/rational.hpp
 
     src/irgen/generator.cpp
     src/irgen/generator.hpp

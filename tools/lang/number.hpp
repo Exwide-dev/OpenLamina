@@ -8,8 +8,12 @@
 #include <stdexcept>
 #include <cstring>
 #include <vector>
+#include <concepts>
 
 namespace lang::lammp {
+
+    template<typename T>
+    concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
 
 class Number {
     struct BigNum {
@@ -19,8 +23,43 @@ class Number {
         mp_size_t decimal_digits = 0;
 
         BigNum() = default;
-        BigNum(int64_t value);
-        BigNum(uint64_t value);
+        
+        template<std::integral T>
+        explicit(false) BigNum(T value) {
+            lmmp_global_init();
+            if constexpr (std::is_signed_v<T>) {
+                if (value == 0) {
+                    init_zero();
+                    return;
+                }
+                is_negative = value < 0;
+                auto abs_val = static_cast<uint64_t>(is_negative ? -value : value);
+                size = abs_val > LIMB_MAX ? 2 : 1;
+                allocate(size);
+                if (size == 1) {
+                    data[0] = abs_val;
+                } else {
+                    data[0] = abs_val & LLIMB_MASK;
+                    data[1] = abs_val >> 32;
+                }
+            } else {
+                if (value == 0) {
+                    init_zero();
+                    return;
+                }
+                is_negative = false;
+                auto abs_val = static_cast<uint64_t>(value);
+                size = abs_val > LIMB_MAX ? 2 : 1;
+                allocate(size);
+                if (size == 1) {
+                    data[0] = abs_val;
+                } else {
+                    data[0] = abs_val & LLIMB_MASK;
+                    data[1] = abs_val >> 32;
+                }
+            }
+        }
+        
         BigNum(const std::string& str, int base);
         BigNum(const BigNum& other);
         BigNum(BigNum&& other) noexcept;
@@ -91,8 +130,21 @@ class Number {
 public:
     Number();
 
-    explicit Number(int64_t value);
-    explicit Number(uint64_t value);
+    template<std::integral T>
+    explicit Number(T value) {
+        lmmp_global_init();
+        if constexpr (std::is_signed_v<T>) {
+            this->value = static_cast<int64_t>(value);
+        } else {
+            uint64_t v = static_cast<uint64_t>(value);
+            if (v <= INT64_MAX) {
+                this->value = static_cast<int64_t>(v);
+            } else {
+                this->value = BigNum(v);
+            }
+        }
+    }
+    
     explicit Number(const std::string& str, int base = 10);
     Number(const Number& other);
     Number(Number&& other) noexcept;

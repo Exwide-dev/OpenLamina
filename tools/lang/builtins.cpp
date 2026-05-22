@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "irgen/opcode.hpp"
+#include "rational.hpp"
 
 #define arg_must(funcname, num) \
     if ((args.empty() and num != 0) or args.size() != num) { \
@@ -23,6 +24,12 @@
     }
 
 namespace lang {
+    Value floatstring(VM& vm, const std::vector<Value>& args) {
+        arg_must("floatstring", 1);
+        const auto& k = args[0].asRational();
+        return Value(k.toDecimalString());
+    }
+
     Value print(VM& vm, const std::vector<Value>& args) {
         for (auto const& elem : args) {
             std::cout << elem << " ";
@@ -52,28 +59,28 @@ namespace lang {
     Value math_sin(VM&, const std::vector<Value>& args) {
         arg_must("sin", 1);
         auto num = args[0].asNumber();
-        long double val = static_cast<long double>(num.toInt64());
+        auto val = static_cast<long double>(num.toInt64());
         return Value(static_cast<int64_t>(std::sin(val)));
     }
 
     Value math_cos(VM&, const std::vector<Value>& args) {
         arg_must("cos", 1);
         auto num = args[0].asNumber();
-        long double val = static_cast<long double>(num.toInt64());
+        auto val = static_cast<long double>(num.toInt64());
         return Value(static_cast<int64_t>(std::cos(val)));
     }
 
     Value math_tan(VM&, const std::vector<Value>& args) {
         arg_must("tan", 1);
         const auto num = args[0].asNumber();
-        const long double val = static_cast<long double>(num.toInt64());
+        const auto val = static_cast<long double>(num.toInt64());
         return Value(static_cast<int64_t>(std::tan(val)));
     }
 
     Value math_sqrt(VM&, const std::vector<Value>& args) {
         arg_must("sqrt", 1);
         auto num = args[0].asNumber();
-        long double val = static_cast<long double>(num.toInt64());
+        auto val = static_cast<long double>(num.toInt64());
         return Value(static_cast<int64_t>(std::sqrt(val)));
     }
 
@@ -193,7 +200,7 @@ namespace lang {
             throw RuntimeError("keys requires a dictionary");
         }
         std::vector<std::shared_ptr<Value>> keys;
-        for (const auto& [key, value] : val.asDictionary()) {
+        for (const auto &key: val.asDictionary() | std::views::keys) {
             keys.push_back(key);
         }
         return Value(std::move(keys));
@@ -206,7 +213,7 @@ namespace lang {
             throw RuntimeError("values requires a dictionary");
         }
         std::vector<std::shared_ptr<Value>> values;
-        for (const auto& [key, value] : val.asDictionary()) {
+        for (const auto &value: val.asDictionary() | std::views::values) {
             values.push_back(value);
         }
         return Value(std::move(values));
@@ -449,7 +456,7 @@ namespace lang {
         std::shared_ptr<irgen::FunctionObject> user_func;
         irgen::FunctionType builtin_func;
         bool is_user = args[0].isUserFunction();
-        int max_retries = static_cast<int>(args[1].asNumber().toInt64());
+        [[maybe_unused]] int max_retries = static_cast<int>(args[1].asNumber().toInt64());
         
         if (is_user) {
             user_func = args[0].asFunctionObject();
@@ -464,7 +471,7 @@ namespace lang {
             for (int i = 0; i < max_retries; ++i) {
                 try {
                     return is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
-                } catch (const std::exception& e) {
+                } catch ([[maybe_unused]] const std::exception& e) {
                     if (i == max_retries - 1) {
                         throw;
                     }
@@ -550,7 +557,7 @@ namespace lang {
                 return is_user_func ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
             } catch (const std::exception& e) {
                 std::vector<Value> handler_args;
-                handler_args.push_back(Value(std::string(e.what())));
+                handler_args.emplace_back(std::string(e.what()));
                 return is_user_handler ? user_handler->call(vm, handler_args) : builtin_handler(vm, handler_args);
             }
         }));
@@ -591,6 +598,15 @@ namespace lang {
         
         return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
     }();
+
+    Value rational(VM&, const std::vector<Value>& args) {
+        arg_at_least("rational", 1);
+        if (args.size() == 1) {
+            return Value(lammp::Rational(args[0].asNumber()));
+        } else {
+            return Value(lammp::Rational(args[0].asNumber(), args[1].asNumber()));
+        }
+    }
 }
 
 #undef arg_must
@@ -601,8 +617,9 @@ void lang::init_builtins(irgen::SymbolTable& symbols) {
     symbols.set(irgen::g_string_pool.add("false"), Value(false));
     symbols.set(irgen::g_string_pool.add("input"), Value(irgen::FunctionType(input)));
     symbols.set(irgen::g_string_pool.add("print"), Value(irgen::FunctionType(print)));
+    symbols.set(irgen::g_string_pool.add("rational"), Value(irgen::FunctionType(rational)));
     symbols.set(irgen::g_string_pool.add("now"), Value(irgen::FunctionType(now)));
-    symbols.set(irgen::g_string_pool.add("floatstring"), Value(irgen::FunctionType(to_float)));
+    symbols.set(irgen::g_string_pool.add("floatstring"), Value(irgen::FunctionType(floatstring)));
     symbols.set(irgen::g_string_pool.add("len"), Value(irgen::FunctionType(len)));
     symbols.set(irgen::g_string_pool.add("type"), Value(irgen::FunctionType(type_of)));
     symbols.set(irgen::g_string_pool.add("str"), Value(irgen::FunctionType(str_of)));

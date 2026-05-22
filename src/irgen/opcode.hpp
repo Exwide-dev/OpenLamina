@@ -20,6 +20,7 @@
 #include "../tools/debug.hpp"
 #include "../tools/error.hpp"
 #include "../tools/lang/number.hpp"
+#include "../tools/lang/rational.hpp"
 #include "front-end/front_end.hpp"
 
 #define COMMON(ClassName) \
@@ -384,7 +385,8 @@ namespace irgen {
             Module,
             Vector,
             Dictionary,
-            Reference
+            Reference,
+            Rational
         };
 
     private:
@@ -398,7 +400,8 @@ namespace irgen {
             std::shared_ptr<ModuleObject>,
             std::vector<std::shared_ptr<Value>>,
             std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>,
-            Ref
+            Ref,
+            lang::lammp::Rational
         > data;
 
     public:
@@ -461,6 +464,14 @@ namespace irgen {
             : type(Type::Reference), data(std::move(ref)) {
         }
 
+        explicit Value(const lang::lammp::Rational &value)
+            : type(Type::Rational), data(value) {
+        }
+
+        explicit Value(lang::lammp::Rational &&value)
+            : type(Type::Rational), data(std::move(value)) {
+        }
+
         static Value makeRef(Value &&val) {
             return Value(Ref(std::make_shared<Value>(std::move(val))));
         }
@@ -510,6 +521,8 @@ namespace irgen {
                     return "Module";
                 case Type::Vector:
                     return "Vector";
+                case Type::Rational:
+                    return "Rational";
                 case Type::Dictionary:
                     return "Dictionary";
                 case Type::Reference:
@@ -536,6 +549,10 @@ return std::get<CppType>(data); \
             if (type == Type::Reference) {
                 return asReference().get().asNumber();
             }
+            if (type == Type::Rational) {
+                return const_cast<lang::lammp::Number &>(
+                    *new lang::lammp::Number(asRational().toNumber()));
+            }
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
@@ -546,10 +563,44 @@ return std::get<CppType>(data); \
             if (type == Type::Reference) {
                 return const_cast<lang::lammp::Number &>(asReference().get().asNumber());
             }
+            if (type == Type::Rational) {
+                return *new lang::lammp::Number(asRational().toNumber());
+            }
             if (type != Type::Number) {
                 throw RuntimeError("Value is not a number");
             }
             return std::get<lang::lammp::Number>(data);
+        }
+
+        [[nodiscard]] bool isRational() const {
+            return deref().type == Type::Rational;
+        }
+
+        [[nodiscard]] const lang::lammp::Rational &asRational() const {
+            if (type == Type::Reference) {
+                return asReference().get().asRational();
+            }
+            if (type == Type::Number) {
+                return const_cast<lang::lammp::Rational &>(
+                    *new lang::lammp::Rational(asNumber()));
+            }
+            if (type != Type::Rational) {
+                throw RuntimeError("Value is not a rational");
+            }
+            return std::get<lang::lammp::Rational>(data);
+        }
+
+        [[nodiscard]] lang::lammp::Rational &asRational() {
+            if (type == Type::Reference) {
+                return const_cast<lang::lammp::Rational &>(asReference().get().asRational());
+            }
+            if (type == Type::Number) {
+                return *new lang::lammp::Rational(asNumber());
+            }
+            if (type != Type::Rational) {
+                throw RuntimeError("Value is not a rational");
+            }
+            return std::get<lang::lammp::Rational>(data);
         }
 
         [[nodiscard]] ptrdiff_t asInt() const {
@@ -623,6 +674,10 @@ return std::get<CppType>(data); \
             if (a.type == Type::String && b.type == Type::String) {
                 return Value(a.asString() + b.asString());
             }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() + b.asRational());
+            }
             throw RuntimeError("Unsupported + operation");
         }
 
@@ -631,6 +686,10 @@ return std::get<CppType>(data); \
             const Value &b = other.deref();
             if (a.type == Type::Number && b.type == Type::Number) {
                 return Value(a.asNumber() - b.asNumber());
+            }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() - b.asRational());
             }
             throw RuntimeError("Unsupported - operation");
         }
@@ -641,14 +700,20 @@ return std::get<CppType>(data); \
             if (a.type == Type::Number && b.type == Type::Number) {
                 return Value(a.asNumber() * b.asNumber());
             }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() * b.asRational());
+            }
             throw RuntimeError("Unsupported * operation");
         }
 
         Value operator/(const Value &other) const {
             const Value &a = deref();
             const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() / b.asNumber());
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                LOG("exec div...");
+                return Value(a.asRational() / b.asRational());
             }
             throw RuntimeError("Unsupported / operation");
         }
@@ -657,6 +722,9 @@ return std::get<CppType>(data); \
             const Value &self = deref();
             if (self.type == Type::Number) {
                 return Value(-self.asNumber());
+            }
+            if (self.type == Type::Rational) {
+                return Value(-self.asRational());
             }
             throw RuntimeError("Unsupported unary - operation");
         }
@@ -693,6 +761,10 @@ return std::get<CppType>(data); \
             if (a.type == Type::Number && b.type == Type::Number) {
                 return Value(a.asNumber() < b.asNumber());
             }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() < b.asRational());
+            }
             throw RuntimeError("Unsupported < operation");
         }
 
@@ -701,6 +773,10 @@ return std::get<CppType>(data); \
             const Value &b = other.deref();
             if (a.type == Type::Number && b.type == Type::Number) {
                 return Value(a.asNumber() <= b.asNumber());
+            }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() <= b.asRational());
             }
             throw RuntimeError("Unsupported <= operation");
         }
@@ -711,6 +787,10 @@ return std::get<CppType>(data); \
             if (a.type == Type::Number && b.type == Type::Number) {
                 return Value(a.asNumber() > b.asNumber());
             }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() > b.asRational());
+            }
             throw RuntimeError("Unsupported > operation");
         }
 
@@ -719,6 +799,10 @@ return std::get<CppType>(data); \
             const Value &b = other.deref();
             if (a.type == Type::Number && b.type == Type::Number) {
                 return Value(a.asNumber() >= b.asNumber());
+            }
+            if ((a.type == Type::Rational || a.type == Type::Number) && 
+                (b.type == Type::Rational || b.type == Type::Number)) {
+                return Value(a.asRational() >= b.asRational());
             }
             throw RuntimeError("Unsupported >= operation");
         }

@@ -16,6 +16,7 @@ namespace irgen {
             case Type::Bool: return (asBool() ? "true" : "false");
             case Type::String: return "\"" + asString() + "\"";
             case Type::Function: return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
+            case Type::Rational: return asRational().toString();
             case Type::Vector: {
                 std::string result = "vec[";
                 const auto& elements = asVector();
