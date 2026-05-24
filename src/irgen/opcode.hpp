@@ -77,6 +77,7 @@ namespace irgen {
     class NEW_CONST;
     class NEW_INTERN_VAR;
     class NEW_INTERN_CONST;
+    class NEW_VAR_OR_LOAD;
     class RET_THEN_LEAVE_SCOPE;
 
     template<typename T>
@@ -335,6 +336,7 @@ namespace irgen {
         NEW_CONST,
         NEW_INTERN_VAR,
         NEW_INTERN_CONST,
+        NEW_VAR_OR_LOAD,
         RET_THEN_LEAVE_SCOPE
     >;
     
@@ -1516,6 +1518,18 @@ return std::get<CppType>(data); \
         std::vector<Value> operands;
 
         explicit NEW_INTERN_CONST(const std::string &name) {
+            operands.emplace_back(name);
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    class NEW_VAR_OR_LOAD {
+    public:
+        COMMON(NEW_VAR_OR_LOAD)
+        std::vector<Value> operands;
+
+        explicit NEW_VAR_OR_LOAD(const std::string &name) {
             operands.emplace_back(name);
         }
 

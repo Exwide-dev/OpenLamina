@@ -118,20 +118,26 @@ Contact OpenLamina-Developing for more information)",
         std::cout << welcome << std::endl;
 
         repl::REPL repl_instance;
+        bool needs_more_input = false;
+        
         while (true) {
             try {
-                std::cout << ">>> ";
-                if (!repl_instance.exec_input()) {
-                    continue;
-                }
-
-                if (!repl_instance.vm.op_stack.empty()) {
-                    auto top = repl_instance.vm.op_stack.top();
-                    if (!top.isNone()) {
-                        std::cout << top << std::endl;
+                std::cout << (needs_more_input ? "... " : ">>> ");
+                
+                repl::REPL::ExecResult result = repl_instance.exec_input();
+                
+                if (result.success && !result.needs_more_input) {
+                    if (!repl_instance.vm.op_stack.empty()) {
+                        auto top = repl_instance.vm.op_stack.top();
+                        if (!top.isNone()) {
+                            std::cout << top << std::endl;
+                        }
                     }
+                    repl_instance.vm.op_stack.clear();
                 }
-               repl_instance.vm.op_stack.clear();
+                
+                needs_more_input = result.needs_more_input;
+                
             } catch (const RuntimeError& e) {
                 std::cout << "RuntimeError: " << e.what() << std::endl;
                 repl_instance.vm.pc = repl_instance.vm.code.size();
@@ -142,8 +148,10 @@ Contact OpenLamina-Developing for more information)",
                     }
                     return result.substr(0, result.size() - 4);
                 }() << std::endl;
+                needs_more_input = false;
             } catch (const SyntaxError& e) {
                 std::cout << "SyntaxError: " << e.what() << std::endl;
+                needs_more_input = false;
             } catch (const std::exception& e) {
                 std::cerr << "Occured an exception: " << e.what()
                           << "\nExit." << std::endl;

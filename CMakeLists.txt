@@ -8,26 +8,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(BUILD_SHARED_LIBS ON)
 
-find_package(FLEX REQUIRED)
-find_package(BISON REQUIRED)
-
-# 词法和语法文件路径
-set(LEXER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/lexer/scanner.l")
-set(PARSER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/parser/parser.y")
-
-# 定义 Flex 和 Bison 的生成目标
-FLEX_TARGET(OpenLaminaScanner ${LEXER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/lexer_generated.cpp
-        COMPILE_FLAGS --nounistd)
-BISON_TARGET(OpenLaminaParser ${PARSER_SRC} ${CMAKE_CURRENT_BINARY_DIR}/parser.tab.cpp)
-
-# 声明 Flex 和 Bison 的依赖关系
-ADD_FLEX_BISON_DEPENDENCY(OpenLaminaScanner OpenLaminaParser)
-
 add_executable(
     OpenLamina
     main.cpp
-    ${FLEX_OpenLaminaScanner_OUTPUTS}
-    ${BISON_OpenLaminaParser_OUTPUTS}
     tools/debug.cpp
     tools/debug.hpp
     tools/error.cpp
@@ -39,15 +22,18 @@ add_executable(
 
     src/irgen/generator.cpp
     src/irgen/generator.hpp
-    src/lexer/lex.cpp
+    src/lexer/lexer.cpp
+    src/lexer/lexer.hpp
+    src/parser/parser.cpp
+    src/parser/parser.hpp
     src/front-end/front_end.cpp
     src/front-end/front_end.hpp
+    src/parser/ast.hpp
 
     src/irgen/opcode.cpp
     src/irgen/opcode.hpp
     src/repl/repl.cpp
     src/repl/repl.hpp
-    src/lexer/lexer_vars.hpp
     tools/lang/number.cpp
     tools/lang/number.hpp
     src/compiler/module_compiler.cpp
@@ -56,6 +42,9 @@ add_executable(
     src/compiler/module_manager.hpp
     tools/cli.cpp
     tools/cli.hpp
+    
+    test_complex.cpp
+    test_complex.hpp
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")

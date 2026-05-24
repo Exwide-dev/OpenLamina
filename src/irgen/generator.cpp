@@ -150,7 +150,7 @@ namespace lm::irgen {
             auto value_code = gen_code(assign_node->value, loop_stack);
             code.insert(code.end(), value_code.begin(), value_code.end());
             if (assign_node->var->kind == lmx::ASTNodeType::VarRef) {
-                code.emplace_back(::irgen::LOAD(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
+                code.emplace_back(::irgen::NEW_VAR_OR_LOAD(dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name));
             } else {
                 auto var_code = gen_code(assign_node->var, loop_stack);
                 code.insert(code.end(), var_code.begin(), var_code.end());

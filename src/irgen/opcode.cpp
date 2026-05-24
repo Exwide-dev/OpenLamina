@@ -629,6 +629,45 @@ namespace irgen {
         vm.op_stack.push(var);
     }
 
+    void NEW_VAR_OR_LOAD::emit(VM &vm) const {
+        const auto var_id = static_cast<size_t>(operands[0].asInt());
+        const std::string& var_name = g_string_pool.get_string(var_id);
+
+        LOG("NEW_VAR_OR_LOAD: var_id=" << var_id << ", var_name=\"" << var_name << "\"");
+
+        const auto cached = vm.cache.get(var_id);
+        if (cached.has_value()) {
+            const auto& value_ptr = *cached;
+            LOG("NEW_VAR_OR_LOAD: Found in Cache, pushing ref");
+            if (value_ptr->isReference()) {
+                vm.op_stack.push(*value_ptr);
+            } else {
+                vm.op_stack.push(Value::makeRef(value_ptr));
+            }
+            return;
+        }
+
+        if (!vm.symbol_stack.empty()) {
+            auto found = vm.symbol_stack.back().get(var_id);
+            if (found.has_value()) {
+                LOG("NEW_VAR_OR_LOAD: Found in symbol stack");
+                vm.op_stack.push(Value::makeRef(*found));
+                vm.cache.add(var_id, *found);
+                return;
+            }
+        }
+
+        LOG("NEW_VAR_OR_LOAD: Variable not found, creating new");
+        Value var = Value::makeEmptyRef();
+        if (!vm.symbol_stack.empty()) {
+            vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
+            vm.symbol_stack.back().set_constant(var_id, false);
+            vm.cache.add(var_id, var.getRefValuePtr());
+        }
+        vm.main_module->set_attr(var_name, var);
+        vm.op_stack.push(var);
+    }
+
     void RET_THEN_LEAVE_SCOPE::emit(VM &vm) const {
         RET().emit(vm);
         LEAVE_SCOPE().emit(vm);

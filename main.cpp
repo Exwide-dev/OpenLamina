@@ -16,7 +16,7 @@
 #include "tools/error.hpp"
 #include "parser/ast.hpp"
 #include "tools/cli.hpp"
-
+#include "test_complex.hpp"
 
 // 存储解析结果
 
@@ -169,7 +169,12 @@ void test_fib_speed() {
 
     const std::string input =
 R"(
-func fib(n) { if (n <= 1) { return n } return fib(n - 1) + fib(n - 2) }
+func fib(n) {
+    if (n <= 1) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
 )";
     lmx::ProgramASTNode* got_ast = parse(input);
 
@@ -364,7 +369,7 @@ void test_decorators() {
     try {
         std::cout << "\n1. Testing std.decos.log decorator...\n";
         const std::string log_test = R"(
-            with std.decos.log make func greet(name) {
+            std.decos.log func greet(name) {
                 return "Hello, " + name + "!"
             }
             
@@ -382,7 +387,7 @@ void test_decorators() {
         
         std::cout << "\n2. Testing std.decos.debug decorator...\n";
         const std::string debug_test = R"(
-            with std.decos.debug make func add(a, b) {
+            std.decos.debug func add(a, b) {
                 return a + b
             }
             
@@ -407,7 +412,7 @@ void test_decorators() {
                 }
             }
             
-            with make_upper make func say_hello(name) {
+            make_upper func say_hello(name) {
                 return "hello, " + name
             }
             
@@ -438,7 +443,7 @@ void test_decorators() {
                 }
             }
             
-            with repeat_twice add_one make func increment(x) {
+            repeat_twice add_one func increment(x) {
                 return x + 10
             }
             
@@ -463,7 +468,7 @@ void test_decorators() {
                 }
             }
             
-            let doubled = with square make do(x) {
+            let doubled = square do(x) {
                 return x * 2
             }
 
@@ -493,8 +498,12 @@ void run_test() {
     test_mod_intern_export();*/
     std::cout << "Testing decorators..." << std::endl;
     test_decorators();
-    /*std::cout << "Testing fib speed..." << std::endl;
-    test_fib_speed();*/
+    
+    std::cout << "\nRunning complex tests..." << std::endl;
+    run_complex_tests();
+    
+    std::cout << "Testing fib speed..." << std::endl;
+    test_fib_speed();
     std::cout << "\nPress Enter to continue to REPL...";
     std::cin.get();
 }

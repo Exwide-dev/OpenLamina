@@ -1,8 +1,8 @@
 %defines "parser.tab.hpp"
 %define parse.error detailed
 %output  "parser.tab.cpp"
+%define lr.type lalr
 
-// 必须在 %union 之前包含所需的类型声明
 %code requires {
     #include <vector>
     #include <string>
@@ -14,19 +14,15 @@
     #include <cstring>
     #include "../tools/debug.hpp"
     using namespace lmx;
+    
     bool has_err = false;
     std::string detail_msg;
-}
-
-%code {
     extern lmx::ASTNode* result;
-}
-
-%code {
     #include "lexer/lexer_vars.hpp"
     extern std::string lexer::details;
     extern int yylineno;
     extern char* yytext;
+    
     std::string error_msg() {
          std::string err_msg;
          err_msg += std::string("Error at line ") + std::to_string(yylineno)
@@ -98,15 +94,14 @@
 %token <string_val> KW_MAKE
 %token <string_val> LBRACKET
 %token <string_val> RBRACKET
+%token <string_val> NEWLINE
 
 %type <ast_node> program
 %type <ast_node> stmt
 %type <ast_node> var_decl
-%type <ast_node> assign_stmt  // 新增：赋值语句
-%type <ast_node> func_decl  // 新增：函数声明
-%type <expr_list> decorators
-%type <expr_list> with_decorator_list
-%type <ast_node> return_stmt  // 新增：return 语句
+%type <ast_node> assign_stmt
+%type <ast_node> func_decl
+%type <ast_node> return_stmt
 %type <ast_node> if_stmt
 %type <ast_node> loop_stmt
 %type <ast_node> while_stmt
@@ -114,41 +109,49 @@
 %type <ast_node> continue_stmt
 %type <ast_node> block_stmt
 %type <expr_node> expr
-%type <expr_node> comparison_expr  // 新增：比较表达式
+%type <expr_node> expr_without_func
+%type <expr_node> comparison_expr
+%type <expr_node> comparison_expr_without_func
 %type <expr_node> additive_expr
+%type <expr_node> additive_expr_without_func
 %type <expr_node> multiplicative_expr
-%type <expr_node> unary_expr  // 新增：一元表达式层
-%type <expr_node> postfix_expr  // 新增：后缀表达式（用于函数调用）
+%type <expr_node> multiplicative_expr_without_func
+%type <expr_node> unary_expr
+%type <expr_node> unary_expr_without_func
+%type <expr_node> postfix_expr
 %type <expr_node> factor
 %type <expr_node> number
 %type <expr_node> identifier
 %type <expr_node> do_expr
 %type <ast_list> stmt_list
 %type <ast_list> block_stmt_list
-%type <ast_list> param_list  // 新增：参数列表
-%type <ast_list> arg_list  // 新增：实参列表
-%type <ast_list> vec_element_list  // 向量元素列表
-%type <ast_list> dict_entry_list   // 字典条目列表
+%type <ast_list> param_list
+%type <ast_list> arg_list
+%type <ast_list> vec_element_list
+%type <ast_list> dict_entry_list
 %type <ast_node> import_stmt
 %type <ast_node> use_stmt
 %type <name_parts> qualified_name
 %type <use_item_list> use_list
 %type <use_item> use_item
 
-%left OPER_EQ OPER_NE  // 相等性比较优先级最低
-%left OPER_LT OPER_GT OPER_LE OPER_GE  // 比较运算符优先级
+%left OPER_EQ OPER_NE
+%left OPER_LT OPER_GT OPER_LE OPER_GE
 %left OPER_PLUS OPER_MINUS
 %left OPER_MUL OPER_DIV
-%right OPER_NOT  // 一元运算符：右结合，高优先级
-%precedence UMINUS  // 用于一元负号的虚拟优先级
-%precedence CALL  // 新增：函数调用优先级（最高）
+%right OPER_NOT
+%precedence UMINUS
+%precedence CALL
+%precedence NEWLINE
 
 %%
 
 program:
     stmt_list {
         LOG("Parsing program");
-        result = new ProgramASTNode(*$1);
+        auto program_node = new ProgramASTNode(*$1);
+        result = program_node;
+        collect_result(program_node);
         $$ = result;
         LOG("Program parsed successfully");
         delete $1;
@@ -167,6 +170,10 @@ stmt_list:
         }
         $$ = $1;
     }
+    | stmt_list NEWLINE {
+        LOG("Skipping NEWLINE in stmt_list");
+        $$ = $1;
+    }
     ;
 
 stmt:
@@ -174,7 +181,7 @@ stmt:
         LOG("Parsing stmt: var_decl");
         $$ = $1; 
     }
-    | expr { 
+    | expr_without_func { 
         LOG("Parsing stmt: expr");
         $$ = $1; 
     }
@@ -186,15 +193,15 @@ stmt:
         LOG("Parsing stmt: use_stmt");
         $$ = $1;
     }
-    | assign_stmt {  // 新增：赋值语句
+    | assign_stmt {
         LOG("Parsing stmt: assign_stmt");
         $$ = $1;
     }
-    | func_decl {  // 新增：函数声明
+    | func_decl {
         LOG("Parsing stmt: func_decl");
         $$ = $1;
     }
-    | return_stmt {  // 新增：return 语句
+    | return_stmt {
         LOG("Parsing stmt: return_stmt");
         $$ = $1;
     }
@@ -273,7 +280,6 @@ var_decl:
     }
     ;
 
-// 新增：赋值语句规则
 assign_stmt:
     expr ASSIGN expr {
         LOG("Parsing assign_stmt: ... = ...");
@@ -287,7 +293,6 @@ assign_stmt:
     }
     ;
 
-// 新增：参数列表规则
 param_list:
     /* empty */ {
         LOG("Creating empty param_list");
@@ -307,7 +312,6 @@ param_list:
     }
     ;
 
-// 新增：实参列表规则
 arg_list:
     /* empty */ {
         LOG("Creating empty arg_list");
@@ -325,30 +329,9 @@ arg_list:
     }
     ;
 
-decorators:
-    expr {
-        LOG("Creating decorators list with one decorator");
-        $$ = new std::vector<ExprNode*>();
-        $$->push_back($1);
-    }
-    | decorators expr {
-        LOG("Adding decorator to decorators list");
-        $1->push_back($2);
-        $$ = $1;
-    }
-    ;
-
-with_decorator_list:
-    KW_WITH decorators KW_MAKE {
-        LOG("Creating with_decorator_list");
-        $$ = $2;
-    }
-    ;
-
-// 新增：函数声明规则
 func_decl:
-    with_decorator_list KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing func_decl: with decorators func " + *$3);
+    expr_without_func KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: with one decorator func " + *$3);
         std::vector<std::string> params;
         for (auto& node : *$5) {
             auto var_ref = dynamic_cast<VarRefNode*>(node);
@@ -356,14 +339,17 @@ func_decl:
                 params.push_back(var_ref->name);
             }
         }
+        auto decors = new std::vector<ExprNode*>();
+        decors->push_back($1);
         $$ = new FuncDeclNode(*$3, params, dynamic_cast<BlockStmtNode*>($7),
-                              Visibility::Exported, *$1);
+                              Visibility::Exported, *decors);
         LOG("func_decl parsed successfully");
         delete $3;
         delete $5;
+        delete decors;
     }
-    | KW_INTERN with_decorator_list KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing func_decl: intern with decorators func " + *$4);
+    | expr_without_func expr_without_func KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: with two decorators func " + *$4);
         std::vector<std::string> params;
         for (auto& node : *$6) {
             auto var_ref = dynamic_cast<VarRefNode*>(node);
@@ -371,13 +357,55 @@ func_decl:
                 params.push_back(var_ref->name);
             }
         }
-        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8), Visibility::Internal, *$2);
+        auto decors = new std::vector<ExprNode*>();
+        decors->push_back($1);
+        decors->push_back($2);
+        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8),
+                              Visibility::Exported, *decors);
+        LOG("func_decl parsed successfully");
+        delete $4;
+        delete $6;
+        delete decors;
+    }
+    | expr_without_func expr_without_func expr_without_func KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: with three decorators func " + *$5);
+        std::vector<std::string> params;
+        for (auto& node : *$7) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        auto decors = new std::vector<ExprNode*>();
+        decors->push_back($1);
+        decors->push_back($2);
+        decors->push_back($3);
+        $$ = new FuncDeclNode(*$5, params, dynamic_cast<BlockStmtNode*>($9),
+                              Visibility::Exported, *decors);
+        LOG("func_decl parsed successfully");
+        delete $5;
+        delete $7;
+        delete decors;
+    }
+    | KW_INTERN expr_without_func KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: intern with decorator func " + *$4);
+        std::vector<std::string> params;
+        for (auto& node : *$6) {
+            auto var_ref = dynamic_cast<VarRefNode*>(node);
+            if (var_ref) {
+                params.push_back(var_ref->name);
+            }
+        }
+        auto decors = new std::vector<ExprNode*>();
+        decors->push_back($2);
+        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8), Visibility::Internal, *decors);
         LOG("func_decl (intern) parsed successfully");
         delete $4;
         delete $6;
+        delete decors;
     }
-    | KW_EXPORT with_decorator_list KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing func_decl: export with decorators func " + *$4);
+    | KW_EXPORT expr_without_func KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing func_decl: export with decorator func " + *$4);
         std::vector<std::string> params;
         for (auto& node : *$6) {
             auto var_ref = dynamic_cast<VarRefNode*>(node);
@@ -385,10 +413,13 @@ func_decl:
                 params.push_back(var_ref->name);
             }
         }
-        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8), Visibility::Exported, *$2);
+        auto decors = new std::vector<ExprNode*>();
+        decors->push_back($2);
+        $$ = new FuncDeclNode(*$4, params, dynamic_cast<BlockStmtNode*>($8), Visibility::Exported, *decors);
         LOG("func_decl (export) parsed successfully");
         delete $4;
         delete $6;
+        delete decors;
     }
     | KW_FUNC IDENTIFIER LPAREN param_list RPAREN block_stmt {
         LOG("Parsing func_decl: func " + *$2);
@@ -407,7 +438,6 @@ func_decl:
     }
     ;
 
-// 新增：return 语句规则
 return_stmt:
     KW_RETURN expr {
         LOG("Parsing return_stmt");
@@ -421,7 +451,6 @@ return_stmt:
     }
     ;
 
-// 块语句规则
 block_stmt_list:
     /* empty */ {
         LOG("Creating empty block_stmt_list");
@@ -432,6 +461,17 @@ block_stmt_list:
         if ($2 != nullptr) {
             $1->push_back($2);
         }
+        $$ = $1;
+    }
+    | stmt {
+        LOG("Adding single stmt to block_stmt_list");
+        $$ = new std::vector<ASTNode*>();
+        if ($1 != nullptr) {
+            $$->push_back($1);
+        }
+    }
+    | block_stmt_list NEWLINE {
+        LOG("Skipping NEWLINE in block_stmt_list");
         $$ = $1;
     }
     ;
@@ -445,7 +485,6 @@ block_stmt:
     }
     ;
 
-// if-else 语句规则
 if_stmt:
     KW_IF LPAREN expr RPAREN block_stmt {
         LOG("Parsing if_stmt (no else)");
@@ -459,7 +498,6 @@ if_stmt:
     }
     ;
 
-// loop 语句规则
 loop_stmt:
     KW_LOOP block_stmt {
         LOG("Parsing loop_stmt");
@@ -468,7 +506,6 @@ loop_stmt:
     }
     ;
 
-// while 语句规则
 while_stmt:
     KW_WHILE LPAREN expr RPAREN block_stmt {
         LOG("Parsing while_stmt");
@@ -477,7 +514,6 @@ while_stmt:
     }
     ;
 
-// break 语句规则
 break_stmt:
     KW_BREAK {
         LOG("Parsing break_stmt");
@@ -486,7 +522,6 @@ break_stmt:
     }
     ;
 
-// continue 语句规则
 continue_stmt:
     KW_CONTINUE {
         LOG("Parsing continue_stmt");
@@ -502,7 +537,101 @@ expr:
     }
     ;
 
-// 新增：比较表达式规则
+expr_without_func:
+    comparison_expr_without_func { 
+        LOG("Parsing expr_without_func");
+        $$ = $1; 
+    }
+    ;
+
+comparison_expr_without_func:
+    additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: base case");
+        $$ = $1;
+    }
+    | comparison_expr_without_func OPER_EQ additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: ==");
+        $$ = new BinaryNode($1, $3, "==");
+        LOG("comparison_expr_without_func (==) parsed successfully");
+    }
+    | comparison_expr_without_func OPER_NE additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: !=");
+        $$ = new BinaryNode($1, $3, "!=");
+        LOG("comparison_expr_without_func (!=) parsed successfully");
+    }
+    | comparison_expr_without_func OPER_LT additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: <");
+        $$ = new BinaryNode($1, $3, "<");
+        LOG("comparison_expr_without_func (<) parsed successfully");
+    }
+    | comparison_expr_without_func OPER_GT additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: >");
+        $$ = new BinaryNode($1, $3, ">");
+        LOG("comparison_expr_without_func (>) parsed successfully");
+    }
+    | comparison_expr_without_func OPER_LE additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: <=");
+        $$ = new BinaryNode($1, $3, "<=");
+        LOG("comparison_expr_without_func (<=) parsed successfully");
+    }
+    | comparison_expr_without_func OPER_GE additive_expr_without_func {
+        LOG("Parsing comparison_expr_without_func: >=");
+        $$ = new BinaryNode($1, $3, ">=");
+        LOG("comparison_expr_without_func (>=) parsed successfully");
+    }
+    ;
+
+additive_expr_without_func:
+    multiplicative_expr_without_func {
+        LOG("Parsing additive_expr_without_func: base case");
+        $$ = $1;
+    }
+    | additive_expr_without_func OPER_PLUS multiplicative_expr_without_func {
+        LOG("Parsing additive_expr_without_func: +");
+        $$ = new BinaryNode($1, $3, "+");
+        LOG("additive_expr_without_func (+) parsed successfully");
+    }
+    | additive_expr_without_func OPER_MINUS multiplicative_expr_without_func {
+        LOG("Parsing additive_expr_without_func: -");
+        $$ = new BinaryNode($1, $3, "-");
+        LOG("additive_expr_without_func (-) parsed successfully");
+    }
+    ;
+
+multiplicative_expr_without_func:
+    unary_expr_without_func {
+        LOG("Parsing multiplicative_expr_without_func: base case");
+        $$ = $1;
+    }
+    | multiplicative_expr_without_func OPER_MUL unary_expr_without_func {
+        LOG("Parsing multiplicative_expr_without_func: *");
+        $$ = new BinaryNode($1, $3, "*");
+        LOG("multiplicative_expr_without_func (*) parsed successfully");
+    }
+    | multiplicative_expr_without_func OPER_DIV unary_expr_without_func {
+        LOG("Parsing multiplicative_expr_without_func: /");
+        $$ = new BinaryNode($1, $3, "/");
+        LOG("multiplicative_expr_without_func (/) parsed successfully");
+    }
+    ;
+
+unary_expr_without_func:
+    factor {
+        LOG("Parsing unary_expr_without_func: base case");
+        $$ = $1;
+    }
+    | OPER_NOT unary_expr_without_func {
+        LOG("Parsing unary_expr_without_func: !");
+        $$ = new UnaryNode("!", $2);
+        LOG("unary_expr_without_func (!) parsed successfully");
+    }
+    | OPER_MINUS unary_expr_without_func %prec UMINUS {
+        LOG("Parsing unary_expr_without_func: - (unary)");
+        $$ = new UnaryNode("-", $2);
+        LOG("unary_expr_without_func (-) parsed successfully");
+    }
+    ;
+
 comparison_expr:
     additive_expr {
         LOG("Parsing comparison_expr: base case");
@@ -574,7 +703,6 @@ multiplicative_expr:
     }
     ;
 
-// 新增：后缀表达式（用于函数调用和成员访问）
 postfix_expr:
     unary_expr {
         LOG("Parsing postfix_expr: base case");
@@ -616,8 +744,8 @@ do_expr:
         LOG("postfix_expr (anonymous function) parsed successfully");
         delete $3;
     }
-    | with_decorator_list KW_DO LPAREN param_list RPAREN block_stmt {
-        LOG("Parsing postfix_expr: with decorators (do) function");
+    | expr_without_func KW_DO LPAREN param_list RPAREN block_stmt {
+        LOG("Parsing postfix_expr: with decorator (do) function");
         std::vector<std::string> params;
         for (auto& node : *$4) {
             auto var_ref = dynamic_cast<VarRefNode*>(node);
@@ -625,12 +753,14 @@ do_expr:
                 params.push_back(var_ref->name);
             }
         }
-        $$ = new DoFuncDeclNode(params, dynamic_cast<BlockStmtNode*>($6), *$1);
+        auto decors = new std::vector<ExprNode*>();
+        decors->push_back($1);
+        $$ = new DoFuncDeclNode(params, dynamic_cast<BlockStmtNode*>($6), *decors);
         LOG("postfix_expr (decorated anonymous function) parsed successfully");
         delete $4;
+        delete decors;
     }
 
-// 新增：一元表达式规则
 unary_expr:
     factor {
         LOG("Parsing unary_expr: base case");
@@ -821,4 +951,8 @@ use_item:
 void yyerror(const char* s) {
     has_err = true;
     detail_msg = s;
+    if (std::string(s).find("ambiguous") != std::string::npos) {
+        LOG("Printing ambiguous results");
+        print_ambiguous_results();
+    }
 }

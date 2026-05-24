@@ -1,22 +1,25 @@
 #include "front_end.hpp"
 #include "../tools/debug.hpp"
-#include "parser.tab.hpp"
+#include "../lexer/lexer.hpp"
+#include "../parser/parser.hpp"
+#include "../../tools/error.hpp"
 
-
-lmx::ProgramASTNode* result = nullptr;
+std::string detail_msg;
 
 lmx::ProgramASTNode* parse(const std::string &source) {
-    yy_scan_string(source.c_str());
     LOG("\nfront-end Parsing...\n");
-    const int parse_result = yyparse();
-
-    if (parse_result == 0) {
+    
+    try {
+        lmx::Lexer lexer(source);
+        lmx::Parser parser(lexer);
+        
+        lmx::ProgramASTNode* result = parser.parse();
         LOG("\nfront-end Parsing successful!\n");
-        lmx::ProgramASTNode* m_result = result;
-        result = nullptr;
-        return m_result;
+        return result;
+    } catch (const SyntaxError& e) {
+        detail_msg = e.what();
+        LOG("\nfront-end Parsing failed!\n");
+        LOG("Error: " << detail_msg);
+        return nullptr;
     }
-    LOG("\nfront-end Parsing failed!\n");
-    LOG("Error: " << detail_msg);
-    return nullptr;
 }
