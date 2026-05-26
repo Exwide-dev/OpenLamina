@@ -1,5 +1,6 @@
 #include "opcode.hpp"
 #include "../tools/lang/builtins.hpp"
+#include "../tools/debug.hpp"
 #include <cmath>
 #include <fstream>
 #include <filesystem>
@@ -105,15 +106,27 @@ namespace irgen {
     }
 
     void VM::run() {
+#ifdef ANALYSE
+        std::unordered_map<std::string, int> callmap {};
+#endif
         try {
             scan_labels();
             for (; pc < code.size(); pc++) {
                 std::visit([&](auto &op) -> void {
                     LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
                     op.emit(*this);
-                    // LOG("VM " << op_stack.toString());
+                    ++callmap[op.name()];
                 }, code[pc]);
             }
+
+#ifdef ANALYSE
+            for (const auto& [callkey, calls] : callmap) {
+                std::cerr <<
+                    std::format("{}: {}", callkey, calls)
+                << std::endl;
+            }
+#endif
+
             if (!op_stack.empty()) {
                 const Value top = op_stack.popValue();
                 op_stack.clear();
@@ -139,7 +152,8 @@ namespace irgen {
             try {
                 auto func = val.asFunctionObject();
                 LOG("PUSH Function: name=" << func->name << ", location=" << func->location);
-                if (func->closure.empty()) {
+                LOG("  needs_closure=" << func->needs_closure);
+                if (func->needs_closure && func->closure.empty()) {
                     LOG("  Capturing closure from " << vm.symbol_stack.size() << " scopes");
                     if (!vm.symbol_stack.empty()) {
                         for (size_t i = 0; i < vm.symbol_stack.size(); i++) {
@@ -149,6 +163,8 @@ namespace irgen {
                     } else {
                         LOG("    No scopes available");
                     }
+                } else if (!func->needs_closure) {
+                    LOG("  No closure needed, skipping capture");
                 } else {
                     LOG("  Closure already captured with " << func->closure.size() << " scopes");
                 }
@@ -366,6 +382,7 @@ namespace irgen {
     inline void ENTER_SCOPE::emit(VM &vm) {
         LOG("ENTER_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
         vm.symbol_stack.emplace_back();
+        vm.locals_stack.emplace_back();
         vm.cache.enter_scope();
         LOG("ENTER_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
     }
@@ -374,6 +391,9 @@ namespace irgen {
         LOG("LEAVE_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.pop_back();
+        }
+        if (!vm.locals_stack.empty()) {
+            vm.locals_stack.pop_back();
         }
         vm.cache.leave_scope();
         LOG("LEAVE_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
@@ -671,6 +691,44 @@ namespace irgen {
     void RET_THEN_LEAVE_SCOPE::emit(VM &vm) const {
         RET().emit(vm);
         LEAVE_SCOPE().emit(vm);
+    }
+
+    inline void LOAD_FAST::emit(VM &vm) const {
+        size_t slot_index = static_cast<size_t>(operands[0].asInt());
+        LOG("LOAD_FAST: slot_index=" << slot_index);
+        
+        if (vm.locals_stack.empty()) {
+            throw RuntimeError("LOAD_FAST: No locals scope available");
+        }
+        
+        auto& locals = vm.locals_stack.back();
+        if (slot_index >= locals.size()) {
+            throw RuntimeError("LOAD_FAST: slot index out of range: " + std::to_string(slot_index));
+        }
+        
+        Value value = locals[slot_index];
+        if (value.isReference()) {
+            vm.op_stack.push(value);
+        } else {
+            vm.op_stack.push(Value::makeRef(std::make_shared<Value>(value)));
+        }
+    }
+
+    inline void STORE_FAST::emit(VM &vm) const {
+        size_t slot_index = static_cast<size_t>(operands[0].asInt());
+        LOG("STORE_FAST: slot_index=" << slot_index);
+        
+        if (vm.locals_stack.empty()) {
+            throw RuntimeError("STORE_FAST: No locals scope available");
+        }
+        
+        Value value = vm.op_stack.popValue();
+        auto& locals = vm.locals_stack.back();
+        
+        if (slot_index >= locals.size()) {
+            locals.resize(slot_index + 1);
+        }
+        locals[slot_index] = value;
     }
 
     Value ModuleObject::import(const std::string& module_name) {

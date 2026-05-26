@@ -79,6 +79,8 @@ namespace irgen {
     class NEW_INTERN_CONST;
     class NEW_VAR_OR_LOAD;
     class RET_THEN_LEAVE_SCOPE;
+    class LOAD_FAST;
+    class STORE_FAST;
 
     template<typename T>
     class ArrMap {
@@ -319,6 +321,8 @@ namespace irgen {
         GTE,
         STORE,
         LOAD,
+        LOAD_FAST,
+        STORE_FAST,
         LABEL,
         GOTO,
         GOTOIF,
@@ -349,6 +353,7 @@ namespace irgen {
         std::string name = "<anonymous>";
         VM* owner_vm = nullptr;
         std::vector<SymbolTable> closure;
+        bool needs_closure = false;
         
         Value call(VM& caller_vm, const std::vector<Value>& args);
     };
@@ -1546,6 +1551,30 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    class LOAD_FAST {
+    public:
+        COMMON(LOAD_FAST)
+        std::vector<Value> operands;
+
+        explicit LOAD_FAST(size_t slot_index) {
+            operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    class STORE_FAST {
+    public:
+        COMMON(STORE_FAST)
+        std::vector<Value> operands;
+
+        explicit STORE_FAST(size_t slot_index) {
+            operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+        }
+
+        void emit(VM &vm) const;
+    };
+
     class StringPool {
         std::unordered_map<std::string, size_t> string_to_id;
         std::vector<std::string> id_to_string;
@@ -1607,6 +1636,7 @@ return std::get<CppType>(data); \
         std::vector<FunctionObject> call_func_stack{};
         std::vector<Opcode> code{};
         std::vector<SymbolTable> symbol_stack{SymbolTable()};
+        std::vector<std::vector<Value>> locals_stack;
         Cache cache{};
         std::unordered_map<size_t, size_t> label_table{};
         size_t pc = 0;

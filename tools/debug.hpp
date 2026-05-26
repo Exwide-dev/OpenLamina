@@ -2,6 +2,9 @@
 
 #include "../src/parser/ast.hpp"
 
+#define ANALYSE
+#undef ANALYSE
+
 #define DEBUG
 #undef DEBUG
 #ifdef DEBUG
