@@ -46,9 +46,10 @@ namespace cli {
                              std::istreambuf_iterator<char>());
             file.close();
 
-            lmx::ProgramASTNode* ast = parse(source);
+            lmx::ProgramASTNode* ast = parse(source, file_path);
             if (!ast) {
-                std::cerr << "Error: Parsing failed" << std::endl;
+                std::cerr << "\nParsing failed:" << std::endl;
+                std::cerr << detail_msg << std::endl;
                 return 1;
             }
 
@@ -139,7 +140,7 @@ Contact OpenLamina-Developing for more information)",
                 needs_more_input = result.needs_more_input;
                 
             } catch (const RuntimeError& e) {
-                std::cout << "RuntimeError: " << e.what() << std::endl;
+                std::cout << "\nRuntimeError: " << e.what() << std::endl;
                 repl_instance.vm.pc = repl_instance.vm.code.size();
                 std::cout << "Traceback: " << [&]{
                     std::string result;
@@ -150,7 +151,7 @@ Contact OpenLamina-Developing for more information)",
                 }() << std::endl;
                 needs_more_input = false;
             } catch (const SyntaxError& e) {
-                std::cout << "SyntaxError: " << e.what() << std::endl;
+                std::cout << "\nSyntaxError:" << detail_msg << std::endl;
                 needs_more_input = false;
             } catch (const std::exception& e) {
                 std::cerr << "Occured an exception: " << e.what()

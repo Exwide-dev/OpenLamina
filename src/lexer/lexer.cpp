@@ -1,23 +1,88 @@
 #include "lexer.hpp"
 #include <unordered_map>
+#include <sstream>
 
 namespace lmx {
 
-Lexer::Lexer(const std::string& source) 
-    : source(source), pos(0), line(1), column(1), 
-      current_token(TokenType::END, "", 1, 1) {}
+Lexer::Lexer(const std::string& fname) 
+    : filename(fname), full_source(""), pos(0), line(1), column(1) {}
+
+void Lexer::add_input(const std::string& source) {
+    full_source = source;
+    std::istringstream iss(source);
+    std::string line_str;
+    source_lines.clear();
+    while (std::getline(iss, line_str)) {
+        source_lines.push_back(line_str);
+    }
+    pos = 0;
+    line = 1;
+    column = 1;
+}
+
+std::string Lexer::getTokenTypeName(TokenType type) {
+    switch (type) {
+        case TokenType::END: return "END";
+        case TokenType::IDENTIFIER: return "IDENTIFIER";
+        case TokenType::NUM_LITERAL: return "NUM_LITERAL";
+        case TokenType::STRING_LITERAL: return "STRING_LITERAL";
+        case TokenType::KW_LET: return "let";
+        case TokenType::KW_FUNC: return "func";
+        case TokenType::KW_DO: return "do";
+        case TokenType::KW_RETURN: return "return";
+        case TokenType::KW_IF: return "if";
+        case TokenType::KW_ELSE: return "else";
+        case TokenType::KW_LOOP: return "loop";
+        case TokenType::KW_WHILE: return "while";
+        case TokenType::KW_BREAK: return "break";
+        case TokenType::KW_CONTINUE: return "continue";
+        case TokenType::KW_IMPORT: return "import";
+        case TokenType::KW_USE: return "use";
+        case TokenType::KW_AS: return "as";
+        case TokenType::KW_VEC: return "vec";
+        case TokenType::KW_CONST: return "const";
+        case TokenType::KW_VAR: return "var";
+        case TokenType::KW_INTERN: return "intern";
+        case TokenType::KW_EXPORT: return "export";
+        case TokenType::KW_WITH: return "with";
+        case TokenType::KW_MAKE: return "make";
+        case TokenType::OPER_PLUS: return "+";
+        case TokenType::OPER_MINUS: return "-";
+        case TokenType::OPER_MUL: return "*";
+        case TokenType::OPER_DIV: return "/";
+        case TokenType::OPER_NOT: return "!";
+        case TokenType::OPER_EQ: return "==";
+        case TokenType::OPER_NE: return "!=";
+        case TokenType::OPER_LT: return "<";
+        case TokenType::OPER_GT: return ">";
+        case TokenType::OPER_LE: return "<=";
+        case TokenType::OPER_GE: return ">=";
+        case TokenType::OPER_COMMA: return ",";
+        case TokenType::OPER_DOT: return ".";
+        case TokenType::OPER_COLON: return ":";
+        case TokenType::ASSIGN: return "=";
+        case TokenType::LPAREN: return "(";
+        case TokenType::RPAREN: return ")";
+        case TokenType::LBRACE: return "{";
+        case TokenType::RBRACE: return "}";
+        case TokenType::LBRACKET: return "[";
+        case TokenType::RBRACKET: return "]";
+        case TokenType::NEWLINE: return "NEWLINE";
+        default: return "UNKNOWN";
+    }
+}
 
 bool Lexer::isAtEnd() const {
-    return pos >= source.size();
+    return pos >= full_source.size();
 }
 
 char Lexer::peekChar() const {
     if (isAtEnd()) return '\0';
-    return source[pos];
+    return full_source[pos];
 }
 
 char Lexer::consumeChar() {
-    char c = source[pos++];
+    char c = full_source[pos++];
     if (c == '\n') {
         line++;
         column = 1;
@@ -101,7 +166,6 @@ Token Lexer::parseString() {
                 consumeChar();
             }
         } else if (peekChar() == '\n') {
-            details = "Lexer SyntaxError at line " + std::to_string(line) + ": unclosed string literal";
             return Token(TokenType::END, value, start_line, start_col);
         } else {
             value += consumeChar();
@@ -109,7 +173,6 @@ Token Lexer::parseString() {
     }
     
     if (isAtEnd()) {
-        details = "Lexer SyntaxError at line " + std::to_string(line) + ": unclosed string literal at end of file";
         return Token(TokenType::END, value, start_line, start_col);
     }
     
@@ -166,62 +229,39 @@ Token Lexer::parseOperator() {
         case ']': consumeChar(); return Token(TokenType::RBRACKET, "]", start_line, start_col);
         case '\n': consumeChar(); return Token(TokenType::NEWLINE, "\n", start_line, start_col);
         default: 
-            details = "Lexer SyntaxError at line " + std::to_string(line) + ": unknown character '" + c + "'";
             consumeChar();
             return Token(TokenType::END, std::string(1, c), start_line, start_col);
     }
 }
 
-Token Lexer::nextToken() {
-    while (!isAtEnd() && isWhitespace(peekChar())) {
-        consumeChar();
+std::vector<Token> Lexer::tokenize() {
+    std::vector<Token> tokens;
+    
+    while (!isAtEnd()) {
+        while (!isAtEnd() && isWhitespace(peekChar())) {
+            consumeChar();
+        }
+        
+        if (isAtEnd()) {
+            break;
+        }
+        
+        char c = peekChar();
+        
+        if (isLetter(c)) {
+            tokens.push_back(parseIdentifier());
+        } else if (isDigit(c)) {
+            tokens.push_back(parseNumber());
+        } else if (c == '"') {
+            tokens.push_back(parseString());
+        } else {
+            tokens.push_back(parseOperator());
+        }
     }
     
-    if (isAtEnd()) {
-        return Token(TokenType::END, "", line, column);
-    }
+    tokens.push_back(Token(TokenType::END, "", line, column));
     
-    char c = peekChar();
-    
-    if (isLetter(c)) {
-        return parseIdentifier();
-    } else if (isDigit(c)) {
-        return parseNumber();
-    } else if (c == '"') {
-        return parseString();
-    } else {
-        return parseOperator();
-    }
-}
-
-Token Lexer::peek() const {
-    return current_token;
-}
-
-void Lexer::consume() {
-    current_token = nextToken();
-}
-
-Token Lexer::peekNext() {
-    size_t saved_pos = pos;
-    int saved_line = line;
-    int saved_col = column;
-    
-    while (!isAtEnd() && peekChar() == '\n') {
-        consumeChar();
-    }
-    
-    while (!isAtEnd() && isWhitespace(peekChar())) {
-        consumeChar();
-    }
-    
-    Token result = nextToken();
-    
-    pos = saved_pos;
-    line = saved_line;
-    column = saved_col;
-    
-    return result;
+    return tokens;
 }
 
 } // namespace lmx

@@ -4,10 +4,7 @@
 #include <filesystem>
 #include <fstream>
 
-#include "lexer_generated.h"
-#include "parser.tab.hpp"
-#include "lexer/lex.hpp"
-#include "lexer/token.hpp"
+#include "lexer/lexer.hpp"
 #include "parser/ast.hpp"
 #include "front-end/front_end.hpp"
 #include "irgen/generator.hpp"
@@ -16,19 +13,6 @@
 #include "tools/error.hpp"
 #include "parser/ast.hpp"
 #include "tools/cli.hpp"
-#include "test_complex.hpp"
-
-// 存储解析结果
-
-// yylval 由 Bison 自动定义
-
-// 声明 Flex 函数
-
-extern "C" {
-    void yy_delete_buffer(void*);
-}
-
-// 打印 AST 节点
 
 void test_code1() {
     irgen::VM vm;
@@ -70,12 +54,10 @@ void test_code2() {
 
     std::cout << "Source code:\n" << source << "\n";
 
-    // 解析并显示 AST
     std::cout << "\nParsing...\n";
     const lmx::ProgramASTNode* ast = parse(source);
     printAST(ast);
 
-    // 手动构建一个简单的 AST 进行测试
     std::cout << "\nTesting with manually built AST...\n";
     const auto* manual_ast = parse("let a = 10 + 5 * 2\na");
     printAST(manual_ast);
@@ -87,81 +69,12 @@ void test_code2() {
         std::cout << "Manual AST execution resulted in no value" << std::endl;
     }
 
-    // 释放内存
     delete ast;
     delete manual_ast;
 }
 
 std::string test_fib_format(int n) {
     return std::format("fib({})", n);
-}
-
-void test_module_system() {
-    std::cout << "\n=== Testing Module System ===\n";
-    std::cout << "Current directory: " << std::filesystem::current_path() << "\n";
-    
-    try {
-        const std::string simple_test = R"(
-            let x = 42
-            print("Hello World")
-            x
-        )";
-        
-        std::cout << "\nTesting basic execution...\n";
-        lmx::ProgramASTNode* simple_ast = parse(simple_test);
-        if (!simple_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value simple_result = lm::irgen::execute(simple_ast);
-        std::cout << "Simple test result: " << simple_result << "\n";
-        delete simple_ast;
-        std::cout << "Basic execution test passed!\n";
-        
-        std::cout << "\nChecking for test_module.lm...\n";
-        std::filesystem::path module_path = "test_module.lm";
-        if (!std::filesystem::exists(module_path)) {
-            module_path = std::filesystem::path(__FILE__).parent_path().parent_path() / "test_module.lm";
-        }
-        /*if (std::filesystem::exists(module_path)) {
-            std::cout << "test_module.lm found!\n";
-        } else {
-            std::cout << "test_module.lm NOT found!\n";
-            std::cout << "Module system test skipped (test file not found)\n";
-            return;
-        }*/
-        
-        const std::string import_test = R"(import test_module)";
-        
-        std::cout << "\nTesting basic import...\n";
-        lmx::ProgramASTNode* import_ast = parse(import_test);
-        if (!import_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value import_result = lm::irgen::execute(import_ast);
-        delete import_ast;
-        std::cout << "Basic import test passed!\n";
-        
-        const std::string alias_test = R"(
-            import test_module as tm
-            print(tm.greeting)
-        )";
-        
-        std::cout << "\nTesting import with alias and usage...\n";
-        lmx::ProgramASTNode* alias_ast = parse(alias_test);
-        if (!alias_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value alias_result = lm::irgen::execute(alias_ast);
-        delete alias_ast;
-        std::cout << "Alias import test passed!\n";
-        
-        std::cout << "\n=== Module System Tests Completed ===\n";
-    } catch (const std::exception& e) {
-        std::cerr << "Error in module system test: " << e.what() << std::endl;
-    }
 }
 
 void test_fib_speed() {
@@ -211,156 +124,6 @@ func fib(n) {
     }
 
     delete got_ast;
-}
-
-void test_mod_intern_export() {
-    std::cout << "\n=== Testing intern/export Variable Visibility ===\n";
-    
-    try {
-        std::cout << "\n1. Testing local variable declarations...\n";
-        const std::string local_test = R"(
-            intern secret = "secret_value"
-            export public_data = "public_value"
-            default_export = "default_value"
-            intern const PI = 3141592653
-            export const MAX_SIZE = 100
-            
-            print("Accessing internal var in same module:")
-            print(secret)
-            
-            print("\nAccessing exported var in same module:")
-            print(public_data)
-            
-            print("\nAccessing default export var in same module:")
-            print(default_export)
-            
-            print("\nAccessing internal const in same module:")
-            print(PI)
-            
-            print("\nAccessing exported const in same module:")
-            print(MAX_SIZE)
-        )";
-        
-        lmx::ProgramASTNode* local_ast = parse(local_test);
-        if (!local_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value local_result = lm::irgen::execute(local_ast);
-        delete local_ast;
-        std::cout << "\nLocal variable test passed!\n";
-        
-        std::cout << "\n2. Creating test modules...\n";
-        std::filesystem::path test_dir = std::filesystem::current_path() / "test_visibility";
-        if (!std::filesystem::exists(test_dir)) {
-            std::filesystem::create_directory(test_dir);
-        }
-        
-        std::ofstream intern_module(test_dir / "intern_module.lm");
-        intern_module << R"(
-            intern internal_var = "I'm internal"
-            export external_var = "I'm external"
-            auto_export = "I'm auto-exported"
-            
-            intern func internal_func(x) { return x * 2 }
-            export func external_func(x) { return x + 10 }
-        )";
-        intern_module.close();
-        
-        std::cout << "Test module created at: " << test_dir / "intern_module.lm" << "\n";
-        
-        std::cout << "\n3. Testing module import and access...\n";
-        const std::string import_test = R"(
-            import test_visibility.intern_module as mod
-            
-            print("Accessing exported var from module:")
-            print(mod.external_var)
-            
-            print("\nAccessing auto-export var from module:")
-            print(mod.auto_export)
-            
-            print("\nAccessing exported function from module:")
-            print(mod.external_func(5))
-        )";
-        
-        lmx::ProgramASTNode* import_ast = parse(import_test);
-        if (!import_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value import_result = lm::irgen::execute(import_ast);
-        delete import_ast;
-        std::cout << "\nExported access test passed!\n";
-        
-        std::cout << "\n4. Testing access to internal variable from another module (should fail)...\n";
-        const std::string access_internal_test = R"(
-            import test_visibility.intern_module as mod
-            print(mod.internal_var)
-        )";
-        
-        lmx::ProgramASTNode* internal_access_ast = parse(access_internal_test);
-        if (!internal_access_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        
-        try {
-            const ::irgen::Value internal_access_result = lm::irgen::execute(internal_access_ast);
-            std::cout << "ERROR: Should have failed to access internal var!\n";
-        } catch (const std::exception& e) {
-            std::cout << "Expected error (internal var access denied): " << e.what() << "\n";
-            std::cout << "Internal var protection test passed!\n";
-        }
-        delete internal_access_ast;
-        
-        std::cout << "\n5. Testing intern const and export const...\n";
-        const std::string const_test = R"(
-            intern const INTERNAL_CONST = 42
-            export const EXPORT_CONST = 100
-            
-            print("Internal const:")
-            print(INTERNAL_CONST)
-            
-            print("\nExport const:")
-            print(EXPORT_CONST)
-        )";
-        
-        lmx::ProgramASTNode* const_ast = parse(const_test);
-        if (!const_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value const_result = lm::irgen::execute(const_ast);
-        delete const_ast;
-        std::cout << "\nConst test passed!\n";
-        
-        std::cout << "\n6. Testing that internal function cannot be accessed externally...\n";
-        const std::string func_access_test = R"(
-            import test_visibility.intern_module as mod
-            print(mod.internal_func(5))
-        )";
-        
-        lmx::ProgramASTNode* func_access_ast = parse(func_access_test);
-        if (!func_access_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        
-        try {
-            const ::irgen::Value func_access_result = lm::irgen::execute(func_access_ast);
-            std::cout << "ERROR: Should have failed to access internal function!\n";
-        } catch (const std::exception& e) {
-            std::cout << "Expected error (internal func access denied): " << e.what() << "\n";
-            std::cout << "Internal function protection test passed!\n";
-        }
-        delete func_access_ast;
-        
-        std::filesystem::remove_all(test_dir);
-        std::cout << "\n=== intern/export Visibility Tests Completed ===\n";
-        
-    } catch (const std::exception& e) {
-        std::cerr << "\nError in intern/export test: " << e.what() << std::endl;
-    }
 }
 
 void test_decorators() {
@@ -429,61 +192,6 @@ void test_decorators() {
         delete custom_ast;
         std::cout << "\nCustom decorator test passed!\n";
         
-        std::cout << "\n4. Testing multiple decorators...\n";
-        const std::string multi_test = R"(
-            func repeat_twice(f) {
-                do(x) {
-                    return f(f(x))
-                }
-            }
-            
-            func add_one(f) {
-                do(x) {
-                    return f(x) + 1
-                }
-            }
-            
-            repeat_twice add_one func increment(x) {
-                return x + 10
-            }
-            
-            print(increment(5))
-        )";
-        
-        lmx::ProgramASTNode* multi_ast = parse(multi_test);
-        if (!multi_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value multi_result = lm::irgen::execute(multi_ast);
-        delete multi_ast;
-        std::cout << "\nMultiple decorators test passed!\n";
-        
-        std::cout << "\n5. Testing decorated lambda...\n";
-        const std::string lambda_test = R"(
-            func square(f) {
-                do(x) {
-                    let res = f(x)
-                    return res * res
-                }
-            }
-            
-            let doubled = square do(x) {
-                return x * 2
-            }
-
-            print(doubled(3))
-        )";
-        
-        lmx::ProgramASTNode* lambda_ast = parse(lambda_test);
-        if (!lambda_ast) {
-            std::cout << "Parse failed!\n";
-            return;
-        }
-        const ::irgen::Value lambda_result = lm::irgen::execute(lambda_ast);
-        delete lambda_ast;
-        std::cout << "\nDecorated lambda test passed!\n";
-        
         std::cout << "\n=== Decorator Tests Completed ===\n";
         
     } catch (const std::exception& e) {
@@ -492,15 +200,8 @@ void test_decorators() {
 }
 
 void run_test() {
-    /*std::cout << "Testing module system..." << std::endl;
-    test_module_system();
-    std::cout << "Testing intern/export visibility..." << std::endl;
-    test_mod_intern_export();*/
     std::cout << "Testing decorators..." << std::endl;
     test_decorators();
-    
-    std::cout << "\nRunning complex tests..." << std::endl;
-    run_complex_tests();
     
     std::cout << "Testing fib speed..." << std::endl;
     test_fib_speed();

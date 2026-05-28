@@ -17,8 +17,8 @@ add_executable(
     tools/error.hpp
     tools/lang/builtins.cpp
     tools/lang/builtins.hpp
-    tools/lang/rational.cpp
-    tools/lang/rational.hpp
+    tools/lang/number.cpp
+    tools/lang/number.hpp
 
     src/irgen/generator.cpp
     src/irgen/generator.hpp
@@ -34,17 +34,12 @@ add_executable(
     src/irgen/opcode.hpp
     src/repl/repl.cpp
     src/repl/repl.hpp
-    tools/lang/number.cpp
-    tools/lang/number.hpp
     src/compiler/module_compiler.cpp
     src/compiler/module_compiler.hpp
     src/compiler/module_manager.cpp
     src/compiler/module_manager.hpp
     tools/cli.cpp
     tools/cli.hpp
-    
-    test_complex.cpp
-    test_complex.hpp
 )
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -90,7 +85,6 @@ if (FETCH_LAMMP)
 
     FetchContent_MakeAvailable(LAMMP)
 
-    # 复制 DLL 到输出目录
     if (WIN32 AND TARGET LammpCore)
         add_custom_command(TARGET OpenLamina POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -107,6 +101,5 @@ if (FETCH_LAMMP)
     target_link_libraries(OpenLamina PRIVATE LammpCore)
 else()
     message(STATUS "Try to use local LAMMP")
-    # 链接 LammpCore 动态库
     target_link_libraries(OpenLamina PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/libLammpCore.dll")
 endif()

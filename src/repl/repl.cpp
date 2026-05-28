@@ -131,7 +131,7 @@ repl::REPL::ExecResult repl::REPL::exec_input(const std::function<std::string()>
 
     if (input.empty()) return {false, false};
     
-    lmx::ProgramASTNode* got_ast = parse(input);
+    lmx::ProgramASTNode* got_ast = parse(input, "<repl>");
 
     if (!got_ast) {
         throw SyntaxError(get_complete_err_msg());

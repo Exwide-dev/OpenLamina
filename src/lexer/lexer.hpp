@@ -3,7 +3,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <memory>
 #include <cctype>
 
 namespace lmx {
@@ -14,7 +13,6 @@ enum class TokenType {
     NUM_LITERAL,
     STRING_LITERAL,
     
-    // Keywords
     KW_LET,
     KW_FUNC,
     KW_DO,
@@ -36,7 +34,6 @@ enum class TokenType {
     KW_WITH,
     KW_MAKE,
     
-    // Operators
     OPER_PLUS,
     OPER_MINUS,
     OPER_MUL,
@@ -53,7 +50,6 @@ enum class TokenType {
     OPER_COLON,
     ASSIGN,
     
-    // Punctuation
     LPAREN,
     RPAREN,
     LBRACE,
@@ -75,24 +71,24 @@ struct Token {
 
 class Lexer {
 public:
-    explicit Lexer(const std::string& source);
+    explicit Lexer(const std::string& filename = "");
     
-    Token nextToken();
-    [[nodiscard]] Token peek() const;
-    Token peekNext();
-    void consume();
+    void add_input(const std::string& source);
+    std::vector<Token> tokenize();
     
-    [[nodiscard]] int getLine() const { return line; }
-    [[nodiscard]] int getColumn() const { return column; }
-    [[nodiscard]] std::string getDetails() const { return details; }
-    
+    [[nodiscard]] const std::string& get_filename() const { return filename; }
+    [[nodiscard]] const std::vector<std::string>& get_source_lines() const { return source_lines; }
+
 private:
-    std::string source;
-    size_t pos;
-    int line;
-    int column;
-    std::string details;
-    Token current_token;
+    std::string filename;
+    std::string full_source;
+    std::vector<std::string> source_lines;
+    
+    size_t pos = 0;
+    int line = 1;
+    int column = 1;
+    
+    static std::string getTokenTypeName(TokenType type);
     
     [[nodiscard]] char peekChar() const;
     char consumeChar();
