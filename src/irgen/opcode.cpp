@@ -1,6 +1,8 @@
 #include "opcode.hpp"
 #include "../tools/lang/builtins.hpp"
 #include "../tools/debug.hpp"
+#include "../compiler/module_manager.hpp"
+#include "../compiler/module_compiler.hpp"
 #include <cmath>
 #include <fstream>
 #include <filesystem>
@@ -268,8 +270,8 @@ namespace irgen {
     }
 
     inline void STORE::emit(VM &vm) const {
-        Value ref = vm.op_stack.popValue();
         Value value = vm.op_stack.popValue();
+        Value ref = vm.op_stack.popValue();
 
         if (ref.isReference()) {
             bool has_value = false;
@@ -602,28 +604,24 @@ namespace irgen {
     void NEW_VAR::emit(VM &vm) const {
         Value var = Value::makeEmptyRef();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
-        const auto var_name = g_string_pool.get_string(var_id);
         
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
             vm.symbol_stack.back().set_constant(var_id, false);
             vm.cache.add(var_id, var.getRefValuePtr());
         }
-        vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
     }
 
     void NEW_CONST::emit(VM &vm) const {
         Value var = Value::makeEmptyRef();
         const auto var_id = static_cast<size_t>(operands[0].asInt());
-        const auto var_name = g_string_pool.get_string(var_id);
         
         if (!vm.symbol_stack.empty()) {
             vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
             vm.symbol_stack.back().set_constant(var_id, true);
             vm.cache.add(var_id, var.getRefValuePtr());
         }
-        vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
     }
 
@@ -686,7 +684,6 @@ namespace irgen {
             vm.symbol_stack.back().set_constant(var_id, false);
             vm.cache.add(var_id, var.getRefValuePtr());
         }
-        vm.main_module->set_attr(var_name, var);
         vm.op_stack.push(var);
     }
 
@@ -737,6 +734,33 @@ namespace irgen {
         auto existing = get_attr(module_name);
         if (existing.has_value()) {
             return *existing;
+        }
+
+        if (owner_vm && owner_vm->module_manager) {
+            auto compiler_module = owner_vm->module_manager->import_module(
+                lm::compiler::ModulePath(module_name));
+            
+            if (compiler_module) {
+                auto irgen_module = std::make_shared<ModuleObject>(
+                    compiler_module->name, owner_vm);
+                irgen_module->full_name = compiler_module->full_name;
+                
+                for (const auto& [name, value] : compiler_module->variables) {
+                    irgen_module->exports[name] = value;
+                }
+                for (const auto& [name, func] : compiler_module->functions) {
+                    irgen_module->exports[name] = Value(func);
+                }
+                for (const auto& [name, child] : compiler_module->children) {
+                    auto child_irgen = std::make_shared<ModuleObject>(
+                        child->name, owner_vm);
+                    child_irgen->full_name = child->full_name;
+                    irgen_module->submodules[name] = child_irgen;
+                }
+                
+                set_attr(module_name, Value(irgen_module));
+                return Value(irgen_module);
+            }
         }
 
         std::vector<std::string> path_components;

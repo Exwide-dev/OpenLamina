@@ -37,6 +37,10 @@ return s; \
 return std::format("{} {}", name(), stringArgs()); \
 }
 
+namespace lm::compiler {
+    class ModuleManager;
+}
+
 namespace irgen {
     class ModuleObject;
     class Value;
@@ -82,6 +86,10 @@ namespace irgen {
     class LOAD_FAST;
     class STORE_FAST;
 
+    /**
+     * @brief 数组映射模板类，使用索引访问的稀疏数组
+     * @tparam T 值类型
+     */
     template<typename T>
     class ArrMap {
         std::vector<T> data;
@@ -346,25 +354,48 @@ namespace irgen {
     
     class SymbolTable;
     
+    /**
+     * @brief 函数对象，存储用户定义函数的信息
+     */
     struct FunctionObject {
-        std::vector<std::string> params;
-        std::vector<Opcode> body;
-        size_t location;
-        std::string name = "<anonymous>";
-        VM* owner_vm = nullptr;
-        std::vector<SymbolTable> closure;
-        bool needs_closure = false;
+        std::vector<std::string> params;           ///< 函数参数列表
+        std::vector<Opcode> body;                  ///< 函数体的IR指令序列
+        size_t location;                            ///< 函数在源码中的位置
+        std::string name = "<anonymous>";          ///< 函数名称
+        VM* owner_vm = nullptr;                    ///< 所属虚拟机
+        std::vector<SymbolTable> closure;          ///< 闭包捕获的变量
+        bool needs_closure = false;                ///< 是否需要闭包
         
+        /**
+         * @brief 调用函数
+         * @param caller_vm 调用者虚拟机
+         * @param args 参数列表
+         * @return 返回值
+         */
         Value call(VM& caller_vm, const std::vector<Value>& args);
     };
 
+    /**
+     * @brief 函数类型，内置函数的签名
+     */
     using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
 
+    /**
+     * @brief 引用类型，用于值的间接引用
+     */
     struct Ref {
-        std::shared_ptr<Value> value_ptr;
+        std::shared_ptr<Value> value_ptr;          ///< 指向实际值的智能指针
 
+        /**
+         * @brief 构造函数
+         * @param ptr 值的智能指针
+         */
         explicit Ref(std::shared_ptr<Value> ptr);
 
+        /**
+         * @brief 获取引用指向的值
+         * @return 值的引用
+         */
         Value &get() {
             if (!value_ptr) {
                 throw RuntimeError("Null reference");
@@ -372,6 +403,10 @@ namespace irgen {
             return *value_ptr;
         }
 
+        /**
+         * @brief 获取引用指向的值（const版本）
+         * @return 值的const引用
+         */
         [[nodiscard]] const Value &get() const {
             if (!value_ptr) {
                 throw RuntimeError("Null reference");
@@ -380,24 +415,29 @@ namespace irgen {
         }
     };
 
-    // Value 类型，支持多种类型的值
+    /**
+     * @brief 统一值类型，支持多种数据类型的存储和操作
+     */
     class Value {
     public:
+        /**
+         * @brief 值的类型枚举
+         */
         enum class Type {
-            None,
-            Number,
-            Bool,
-            String,
-            Function,
-            Module,
-            Vector,
-            Dictionary,
-            Reference,
-            Rational
+            None,           ///< 空值
+            Number,         ///< 任意精度整数
+            Bool,           ///< 布尔值
+            String,         ///< 字符串
+            Function,       ///< 函数（内置或用户定义）
+            Module,         ///< 模块
+            Vector,         ///< 向量/列表
+            Dictionary,     ///< 字典/映射
+            Reference,      ///< 引用
+            Rational        ///< 有理数
         };
 
     private:
-        Type type;
+        Type type;                                   ///< 当前值的类型
         std::variant<
             lang::lammp::Number,
             bool,
@@ -409,54 +449,92 @@ namespace irgen {
             std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>,
             Ref,
             lang::lammp::Rational
-        > data;
+        > data;                                      ///< 存储实际值的变体
 
     public:
+        /**
+         * @brief 默认构造函数，创建空值
+         */
         Value() : type(Type::None) {
         }
 
+        /**
+         * @brief 从Number类型构造
+         */
         explicit Value(const lang::lammp::Number &value)
             : type(Type::Number), data(value) {
         }
 
+        /**
+         * @brief 从Number类型移动构造
+         */
         explicit Value(lang::lammp::Number &&value)
             : type(Type::Number), data(std::move(value)) {
         }
 
+        /**
+         * @brief 从整数类型构造
+         * @tparam T 整数类型
+         */
         template<IntegerType T>
         explicit Value(T value)
             : type(Type::Number), data(lang::lammp::Number(static_cast<int64_t>(value))) {
         }
 
+        /**
+         * @brief 从字符串类型构造
+         * @tparam T 字符串类型
+         */
         template<StringType T>
         explicit Value(T value)
             : type(Type::String), data(static_cast<std::string>(std::move(value))) {
         }
 
+        /**
+         * @brief 从内置函数类型构造
+         */
         explicit Value(FunctionType value)
             : type(Type::Function), data(value) {
         }
 
+        /**
+         * @brief 从用户定义函数对象构造
+         */
         explicit Value(std::shared_ptr<FunctionObject> value)
             : type(Type::Function), data(value) {
         }
 
+        /**
+         * @brief 从布尔值构造
+         */
         explicit Value(bool value)
             : type(Type::Bool), data(value) {
         }
 
+        /**
+         * @brief 从模块对象构造
+         */
         explicit Value(std::shared_ptr<ModuleObject> value)
             : type(Type::Module), data(value) {
         }
 
+        /**
+         * @brief 从向量构造
+         */
         explicit Value(std::vector<std::shared_ptr<Value>> value)
             : type(Type::Vector), data(std::move(value)) {
         }
 
+        /**
+         * @brief 从字典构造
+         */
         explicit Value(std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> value)
             : type(Type::Dictionary), data(std::move(value)) {
         }
 
+        /**
+         * @brief 从初始化列表构造向量
+         */
         Value(const std::initializer_list<Value> init)
             : type(Type::Vector) {
             std::vector<std::shared_ptr<Value>> vec;
@@ -467,34 +545,61 @@ namespace irgen {
             data = std::move(vec);
         }
 
+        /**
+         * @brief 从引用构造
+         */
         explicit Value(Ref ref)
             : type(Type::Reference), data(std::move(ref)) {
         }
 
+        /**
+         * @brief 从有理数构造
+         */
         explicit Value(const lang::lammp::Rational &value)
             : type(Type::Rational), data(value) {
         }
 
+        /**
+         * @brief 从有理数移动构造
+         */
         explicit Value(lang::lammp::Rational &&value)
             : type(Type::Rational), data(std::move(value)) {
         }
 
+        /**
+         * @brief 创建指向值的引用（移动语义）
+         */
         static Value makeRef(Value &&val) {
             return Value(Ref(std::make_shared<Value>(std::move(val))));
         }
 
+        /**
+         * @brief 创建指向值的引用（复制语义）
+         */
         static Value makeRef(const Value &val) {
             return Value(Ref(std::make_shared<Value>(val)));
         }
 
+        /**
+         * @brief 从智能指针创建引用
+         */
         static Value makeRef(std::shared_ptr<Value> val_ptr) {
             return Value(Ref(std::move(val_ptr)));
         }
 
+        /**
+         * @brief 创建空引用
+         */
         static Value makeEmptyRef() {
             return Value(Ref(std::make_shared<Value>()));
         }
 
+        /**
+         * @brief 函数调用操作符
+         * @param vm 虚拟机实例
+         * @param args 参数列表
+         * @return 返回值
+         */
         Value operator()(VM &vm, const std::vector<Value> &args) const {
             if (type != Type::Function) {
                 throw RuntimeError("Value is not a function");
@@ -505,6 +610,10 @@ namespace irgen {
             throw RuntimeError("User-defined functions should be called via CALL instruction");
         }
 
+        /**
+         * @brief 获取值的类型（解引用后）
+         * @return 值类型
+         */
         [[nodiscard]] Type getType() const {
             if (type == Type::Reference) {
                 return asReference().get().getType();
@@ -512,6 +621,10 @@ namespace irgen {
             return type;
         }
 
+        /**
+         * @brief 获取类型名称字符串
+         * @return 类型名称
+         */
         [[nodiscard]] std::string type_name() const {
             switch (type) {
                 case Type::None:
@@ -539,6 +652,10 @@ namespace irgen {
             }
         }
 
+        /**
+         * @brief 转换为字符串表示
+         * @return 字符串表示
+         */
         [[nodiscard]] std::string toString() const;
 
 #define DEFINE_AS_METHOD(FieldName, EnumValue, CppType, ErrorMsg) \
@@ -953,33 +1070,79 @@ return std::get<CppType>(data); \
     }
 
 
+    /**
+     * @brief 符号表，用于管理变量的存储和访问
+     */
     class SymbolTable {
     public:
-        ArrMap<std::shared_ptr<Value>> symbols;
-        ArrMap<bool> constants;
+        ArrMap<std::shared_ptr<Value>> symbols;    ///< 符号值映射
+        ArrMap<bool> constants;                    ///< 常量标记映射
 
+        /**
+         * @brief 默认构造函数
+         */
         SymbolTable() = default;
 
+        /**
+         * @brief 从map构造符号表
+         */
         explicit SymbolTable(const std::map<size_t, std::shared_ptr<Value>> &symbols)
             : symbols(symbols) {
         }
 
+        /**
+         * @brief 从map移动构造符号表
+         */
         explicit SymbolTable(std::map<size_t, std::shared_ptr<Value>> &&symbols)
             : symbols(symbols) {
         }
 
+        /**
+         * @brief 设置符号值
+         * @param id 符号ID
+         * @param value 值
+         */
         void set(size_t id, const Value &value);
 
+        /**
+         * @brief 设置符号值（智能指针版本）
+         * @param id 符号ID
+         * @param value 值的智能指针
+         */
         void set(size_t id, const std::shared_ptr<Value> &value);
 
+        /**
+         * @brief 设置符号是否为常量
+         * @param id 符号ID
+         * @param is_constant 是否为常量
+         */
         void set_constant(size_t id, bool is_constant);
 
+        /**
+         * @brief 检查符号是否为常量
+         * @param id 符号ID
+         * @return 是否为常量
+         */
         [[nodiscard]] bool is_constant(size_t id) const noexcept;
 
+        /**
+         * @brief 转换为字符串表示
+         * @return 字符串表示
+         */
         [[nodiscard]] std::string toString() const;
 
+        /**
+         * @brief 获取符号值
+         * @param id 符号ID
+         * @return 值的智能指针（如果存在）
+         */
         [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const noexcept;
 
+        /**
+         * @brief 检查符号是否存在
+         * @param id 符号ID
+         * @return 是否存在
+         */
         [[nodiscard]] bool exists(const size_t id) const {
             return symbols.contains(id);
         }
@@ -989,49 +1152,88 @@ return std::get<CppType>(data); \
         [[nodiscard]] bool empty() const { return symbols.empty(); }
     };
 
+    /**
+     * @brief 栈模板类
+     * @tparam Stackable 栈元素类型
+     * @tparam reserve 预分配空间大小
+     */
     template<typename Stackable, size_t reserve = 256>
     class Stack {
-        std::vector<Stackable> data;
+        std::vector<Stackable> data;               ///< 存储栈元素的向量
 
     public:
+        /**
+         * @brief 默认构造函数
+         */
         Stack() {
             data.reserve(reserve);
         }
 
+        /**
+         * @brief 从向量构造
+         */
         explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
             data.reserve(reserve);
         }
 
+        /**
+         * @brief 压入元素
+         */
         void push(const Stackable &value) {
             data.push_back(value);
         }
 
+        /**
+         * @brief 移动压入元素
+         */
         void push(Stackable &&value) {
             data.push_back(std::move(value));
         }
 
+        /**
+         * @brief 弹出元素（不返回）
+         */
         void pop() {
             data.pop_back();
         }
 
+        /**
+         * @brief 弹出并返回元素
+         * @return 弹出的元素
+         */
         [[nodiscard]] Stackable popValue() {
             Stackable value = data.back();
             data.pop_back();
             return value;
         }
 
+        /**
+         * @brief 获取栈顶元素
+         * @return 栈顶元素引用
+         */
         [[nodiscard]] const Stackable &top() const {
             return data.back();
         }
 
+        /**
+         * @brief 获取栈大小
+         * @return 元素数量
+         */
         [[nodiscard]] size_t size() const {
             return data.size();
         }
 
+        /**
+         * @brief 检查栈是否为空
+         * @return 是否为空
+         */
         [[nodiscard]] bool empty() const {
             return data.empty();
         }
 
+        /**
+         * @brief 清空栈
+         */
         void clear() {
             data.clear();
         }
@@ -1041,6 +1243,10 @@ return std::get<CppType>(data); \
         [[nodiscard]] auto begin() const { return data.begin(); }
         [[nodiscard]] auto end() const { return data.end(); }
 
+        /**
+         * @brief 转换为字符串表示
+         * @return 字符串表示
+         */
         [[nodiscard]] std::string toString() const {
             return "Stack:\n" + std::accumulate(
                 data.rbegin(), data.rend(),
@@ -1052,14 +1258,26 @@ return std::get<CppType>(data); \
         }
     };
 
+    /**
+     * @brief 寄存器类，用于存储临时值
+     */
     class Register {
     public:
-        std::vector<Value> data;
+        std::vector<Value> data;                   ///< 寄存器数据
 
+        /**
+         * @brief 构造函数
+         * @param data 初始数据
+         */
         explicit Register(std::vector<Value> const &data = std::vector<Value>())
             : data(data) {
         }
 
+        /**
+         * @brief 索引访问
+         * @param index 索引
+         * @return 值
+         */
         Value operator[](const size_t index) {
             if (index >= data.size()) {
                 std::stringstream ss;
@@ -1070,13 +1288,20 @@ return std::get<CppType>(data); \
         }
     };
 
+    /**
+     * @brief 缓存类，用于加速变量访问
+     * 使用固定大小的槽位实现，支持作用域管理
+     */
     class Cache {
-        static constexpr size_t SLOT_COUNT = 16;
+        static constexpr size_t SLOT_COUNT = 16;   ///< 槽位数量
 
+        /**
+         * @brief 作用域内的缓存槽
+         */
         struct Scope {
-            std::array<std::pair<size_t, std::shared_ptr<Value>>, SLOT_COUNT> slots;
-            std::unordered_map<size_t, size_t> id_to_index;
-            size_t next_slot = 0;
+            std::array<std::pair<size_t, std::shared_ptr<Value>>, SLOT_COUNT> slots;  ///< 槽数组
+            std::unordered_map<size_t, size_t> id_to_index;                           ///< ID到索引的映射
+            size_t next_slot = 0;                                                     ///< 下一个可用槽位
 
             Scope() {
                 for (auto &id: slots | std::views::keys) {
@@ -1085,13 +1310,21 @@ return std::get<CppType>(data); \
             }
         };
 
-        std::vector<Scope> scopes;
+        std::vector<Scope> scopes;                 ///< 作用域栈
 
     public:
+        /**
+         * @brief 默认构造函数，创建初始作用域
+         */
         Cache() {
             scopes.emplace_back();
         }
 
+        /**
+         * @brief 添加或更新缓存项
+         * @param id 符号ID
+         * @param val 值的智能指针
+         */
         void add(size_t id, const std::shared_ptr<Value> &val) {
             auto &scope = scopes.back();
             auto it = scope.id_to_index.find(id);
@@ -1110,6 +1343,11 @@ return std::get<CppType>(data); \
             scope.next_slot = (idx + 1) % SLOT_COUNT;
         }
 
+        /**
+         * @brief 获取缓存项
+         * @param id 符号ID
+         * @return 值的智能指针（如果存在）
+         */
         [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const {
             const auto &scope = scopes.back();
             const auto it = scope.id_to_index.find(id);
@@ -1119,19 +1357,33 @@ return std::get<CppType>(data); \
             return std::nullopt;
         }
 
+        /**
+         * @brief 检查缓存是否包含指定ID
+         * @param id 符号ID
+         * @return 是否包含
+         */
         [[nodiscard]] bool contains(size_t id) const {
             const auto &scope = scopes.back();
             return scope.id_to_index.contains(id);
         }
 
+        /**
+         * @brief 进入新作用域
+         */
         void enter_scope() {
             scopes.emplace_back();
         }
 
+        /**
+         * @brief 离开当前作用域
+         */
         void leave_scope() {
             scopes.pop_back();
         }
 
+        /**
+         * @brief 清空所有缓存
+         */
         void clear() {
             scopes.clear();
             scopes.emplace_back();
@@ -1575,14 +1827,25 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * @brief 字符串池，用于字符串的唯一化存储
+     */
     class StringPool {
-        std::unordered_map<std::string, size_t> string_to_id;
-        std::vector<std::string> id_to_string;
-        size_t counter = 0;
+        std::unordered_map<std::string, size_t> string_to_id;  ///< 字符串到ID的映射
+        std::vector<std::string> id_to_string;                  ///< ID到字符串的映射
+        size_t counter = 0;                                     ///< 下一个可用ID
 
     public:
+        /**
+         * @brief 默认构造函数
+         */
         StringPool() = default;
 
+        /**
+         * @brief 添加字符串到池中
+         * @param name 字符串
+         * @return 字符串的ID
+         */
         size_t add(const std::string &name) {
             const auto it = string_to_id.find(name);
             if (it != string_to_id.end()) {
@@ -1593,10 +1856,20 @@ return std::get<CppType>(data); \
             return counter++;
         }
 
+        /**
+         * @brief 检查字符串是否存在
+         * @param name 字符串
+         * @return 是否存在
+         */
         bool exists(const std::string &name) const {
             return string_to_id.contains(name);
         }
 
+        /**
+         * @brief 获取字符串的ID
+         * @param name 字符串
+         * @return ID
+         */
         size_t get_id(const std::string &name) const {
             const auto it = string_to_id.find(name);
             if (it == string_to_id.end()) {
@@ -1605,6 +1878,11 @@ return std::get<CppType>(data); \
             return it->second;
         }
 
+        /**
+         * @brief 根据ID获取字符串
+         * @param id ID
+         * @return 字符串
+         */
         const std::string &get_string(size_t id) const {
             if (id >= id_to_string.size()) {
                 throw RuntimeError("String ID out of range: " + std::to_string(id));
@@ -1612,14 +1890,25 @@ return std::get<CppType>(data); \
             return id_to_string[id];
         }
 
+        /**
+         * @brief 获取池大小
+         * @return 字符串数量
+         */
         size_t size() const {
             return id_to_string.size();
         }
 
+        /**
+         * @brief 检查池是否为空
+         * @return 是否为空
+         */
         bool empty() const {
             return id_to_string.empty();
         }
 
+        /**
+         * @brief 清空池
+         */
         void clear() {
             string_to_id.clear();
             id_to_string.clear();
@@ -1627,28 +1916,46 @@ return std::get<CppType>(data); \
         }
     };
 
-    inline StringPool g_string_pool{};
+    inline StringPool g_string_pool{};                      ///< 全局字符串池
 
+    /**
+     * @brief 虚拟机类，执行IR指令
+     */
     class VM {
     public:
-        Stack<Value> op_stack{}, call_stack{};
-        std::vector<std::string> traceback{};
-        std::vector<FunctionObject> call_func_stack{};
-        std::vector<Opcode> code{};
-        std::vector<SymbolTable> symbol_stack{SymbolTable()};
-        std::vector<std::vector<Value>> locals_stack;
-        Cache cache{};
-        std::unordered_map<size_t, size_t> label_table{};
-        size_t pc = 0;
-        size_t label_counter = 0;
-        std::shared_ptr<ModuleObject> main_module;
+        Stack<Value> op_stack{};                            ///< 操作数栈
+        Stack<Value> call_stack{};                          ///< 调用栈
+        std::vector<std::string> traceback{};               ///< 调用栈跟踪
+        std::vector<FunctionObject> call_func_stack{};      ///< 函数调用栈
+        std::vector<Opcode> code{};                         ///< IR指令序列
+        std::vector<SymbolTable> symbol_stack{SymbolTable()};///< 符号表栈
+        std::vector<std::vector<Value>> locals_stack;       ///< 局部变量栈
+        Cache cache{};                                      ///< 变量缓存
+        std::unordered_map<size_t, size_t> label_table{};   ///< 标签位置表
+        size_t pc = 0;                                      ///< 程序计数器
+        size_t label_counter = 0;                           ///< 标签计数器
+        std::shared_ptr<ModuleObject> main_module;          ///< 主模块
+        lm::compiler::ModuleManager* module_manager = nullptr; ///< 模块管理器指针
 
+        /**
+         * @brief 初始化内置函数
+         */
         void init_builtins();
 
+        /**
+         * @brief 默认构造函数
+         */
         VM();
 
+        /**
+         * @brief 从IR指令序列构造
+         * @param c IR指令序列
+         */
         explicit VM(std::vector<Opcode> c);
 
+        /**
+         * @brief 扫描标签并建立标签位置映射
+         */
         void scan_labels() {
             for (size_t i = pc; i < code.size(); i++) {
                 std::visit([&]<typename VT>(VT &op) -> void {
@@ -1659,26 +1966,51 @@ return std::get<CppType>(data); \
             }
         }
 
+        /**
+         * @brief 执行IR指令序列
+         */
         void run();
 
+        /**
+         * @brief 获取符号值
+         * @param name 符号名称
+         * @return 值（如果存在）
+         */
         std::optional<Value> get_symbol(const std::string &name) const;
 
+        /**
+         * @brief 设置符号值
+         * @param name 符号名称
+         * @param value 值
+         */
         void set_symbol(const std::string &name, const Value &value);
     };
 
+    /**
+     * @brief 模块对象，存储模块的导出和子模块
+     */
     class ModuleObject : public std::enable_shared_from_this<ModuleObject> {
-        bool is_user;
+        bool is_user;                                        ///< 是否为用户模块
 
     public:
-        std::string name;
-        std::string full_name;
-        std::unordered_map<std::string, Value> exports;
-        std::unordered_map<std::string, std::shared_ptr<ModuleObject>> submodules;
-        VM *owner_vm = nullptr;
+        std::string name;                                    ///< 模块名称
+        std::string full_name;                               ///< 完整模块路径名
+        std::unordered_map<std::string, Value> exports;      ///< 导出的符号
+        std::unordered_map<std::string, std::shared_ptr<ModuleObject>> submodules;  ///< 子模块
+        VM *owner_vm = nullptr;                             ///< 所属虚拟机
 
+        /**
+         * @brief 从代码字符串构造模块
+         * @tparam string 字符串类型
+         * @param code 代码字符串
+         */
         template<StringType string>
         explicit ModuleObject(string code);
 
+        /**
+         * @brief 从符号表构造模块（内置模块）
+         * @param symbols 符号表
+         */
         explicit(false) ModuleObject(const SymbolTable &symbols) : is_user(false) {
             for (const auto &[id, val]: symbols.symbols) {
                 exports[g_string_pool.get_string(id)] = *val;
@@ -1689,6 +2021,10 @@ return std::get<CppType>(data); \
             }
         }
 
+        /**
+         * @brief 从符号表栈构造模块（用户模块）
+         * @param symbol_stack 符号表栈
+         */
         explicit ModuleObject(const std::vector<SymbolTable> &symbol_stack) : is_user(true) {
             for (const auto &table: symbol_stack) {
                 for (const auto &[id, val]: table.symbols) {
@@ -1701,6 +2037,11 @@ return std::get<CppType>(data); \
             }
         }
 
+        /**
+         * @brief 构造空模块
+         * @param n 模块名称
+         * @param vm 所属虚拟机
+         */
         explicit ModuleObject(std::string n, VM *vm)
             : is_user(true), name(std::move(n)), full_name(name), owner_vm(vm) {
             LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
@@ -1709,7 +2050,11 @@ return std::get<CppType>(data); \
             }
         }
 
-
+        /**
+         * @brief 获取模块属性
+         * @param attrname 属性名称
+         * @return 属性值（如果存在）
+         */
         std::optional<Value> get_attr(const std::string &attrname) const {
             LOG("Finding " + attrname);
 
@@ -1732,6 +2077,11 @@ return std::get<CppType>(data); \
             return std::nullopt;
         }
 
+        /**
+         * @brief 设置模块属性
+         * @param attrname 属性名称
+         * @param value 属性值
+         */
         void set_attr(const std::string &attrname, const Value &value) {
             if (value.getType() == Value::Type::Module) {
                 auto mod = value.asModule();
@@ -1741,6 +2091,11 @@ return std::get<CppType>(data); \
             exports[attrname] = value;
         }
 
+        /**
+         * @brief 导入子模块
+         * @param module_name 模块名称
+         * @return 模块值
+         */
         Value import(const std::string &module_name);
     };
 }
