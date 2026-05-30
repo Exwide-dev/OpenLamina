@@ -115,7 +115,9 @@ namespace irgen {
                 std::visit([&](auto &op) -> void {
                     LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
                     op.emit(*this);
+#ifdef ANALYSE
                     ++callmap[op.name()];
+#endif
                 }, code[pc]);
             }
 

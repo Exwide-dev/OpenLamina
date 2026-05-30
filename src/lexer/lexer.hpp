@@ -3,6 +3,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <regex>
 #include <cctype>
 
 namespace lmx {
@@ -56,7 +57,8 @@ enum class TokenType {
     RBRACE,
     LBRACKET,
     RBRACKET,
-    NEWLINE
+    NEWLINE,
+    MISMATCH
 };
 
 struct Token {
@@ -69,35 +71,59 @@ struct Token {
         : type(t), value(std::move(v)), line(l), column(c) {}
 };
 
+struct TokenPattern {
+    std::regex regex;
+    TokenType type;
+    
+    TokenPattern(const std::string& pattern, TokenType t) : regex(pattern), type(t) {}
+};
+
+struct LexError {
+    std::string message;
+    int line;
+    int column;
+    
+    LexError(std::string msg, int ln, int col)
+        : message(std::move(msg)), line(ln), column(col) {}
+};
+
 class Lexer {
 public:
-    explicit Lexer(const std::string& filename = "");
+    explicit Lexer(std::string filename = "");
     
     void add_input(const std::string& source);
     std::vector<Token> tokenize();
+    std::vector<Token> lex_rest();
     
     [[nodiscard]] const std::string& get_filename() const { return filename; }
     [[nodiscard]] const std::vector<std::string>& get_source_lines() const { return source_lines; }
+    [[nodiscard]] bool has_errors() const { return !errors.empty(); }
+    [[nodiscard]] const std::vector<LexError>& get_errors() const { return errors; }
+    
+    void clear_errors() { errors.clear(); }
 
 private:
     std::string filename;
     std::string full_source;
     std::vector<std::string> source_lines;
+    std::vector<LexError> errors;
     
     size_t pos = 0;
     int line = 1;
     int column = 1;
     
     static std::string getTokenTypeName(TokenType type);
+    static std::vector<TokenPattern> initPatterns();
     
     [[nodiscard]] char peekChar() const;
     char consumeChar();
     [[nodiscard]] bool isAtEnd() const;
     
-    Token parseIdentifier();
-    Token parseNumber();
+    Token parseIdentifierOrKeyword();
     Token parseString();
-    Token parseOperator();
+    Token parseNewline();
+    Token tryMatchPatterns();
+    void add_error(const std::string& message);
     
     [[nodiscard]] bool isDigit(const char c) const {
         const auto uc = static_cast<unsigned char>(c);
@@ -110,9 +136,6 @@ private:
     [[nodiscard]] bool isWhitespace(const char c) const {
         const auto uc = static_cast<unsigned char>(c);
         return (uc == ' ' || uc == '\t' || uc == '\r'); 
-    }
-    [[nodiscard]] bool isNewline(const char c) const {
-        return c == '\n';
     }
 };
 

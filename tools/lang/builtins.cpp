@@ -296,16 +296,16 @@ namespace lang {
             builtin_func = args[0].asFunction();
         }
         
-        static std::unordered_map<std::string, Value> cache;
+        auto cache = std::make_shared<std::unordered_map<std::string, Value>>();
         
-        return Value(irgen::FunctionType([user_func, builtin_func, is_user](VM& vm, const std::vector<Value>& call_args) -> Value {
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, cache](VM& vm, const std::vector<Value>& call_args) -> Value {
             std::string key;
             for (const auto& arg : call_args) {
                 key += arg.toString() + ",";
             }
             
-            auto it = cache.find(key);
-            if (it != cache.end()) {
+            auto it = cache->find(key);
+            if (it != cache->end()) {
                 return it->second;
             }
             
@@ -315,7 +315,7 @@ namespace lang {
             } else {
                 result = builtin_func(vm, call_args);
             }
-            cache[key] = result;
+            (*cache)[key] = result;
             return result;
         }));
     }
@@ -433,13 +433,13 @@ namespace lang {
             builtin_func = args[0].asFunction();
         }
         
-        static std::unordered_set<std::string> called;
+        auto called = std::make_shared<std::unordered_set<std::string>>();
         
-        return Value(irgen::FunctionType([user_func, builtin_func, is_user, func_name](VM& vm, const std::vector<Value>& call_args) -> Value {
-            if (called.contains(func_name)) {
+        return Value(irgen::FunctionType([user_func, builtin_func, is_user, func_name, called](VM& vm, const std::vector<Value>& call_args) -> Value {
+            if (called->contains(func_name)) {
                 throw RuntimeError("Function " + func_name + " can only be called once");
             }
-            called.insert(func_name);
+            called->insert(func_name);
             return is_user ? user_func->call(vm, call_args) : builtin_func(vm, call_args);
         }));
     }

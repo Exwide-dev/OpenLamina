@@ -6,7 +6,7 @@
 #undef ANALYSE
 
 #define DEBUG
-#undef DEBUG
+//#undef DEBUG
 #ifdef DEBUG
 
 #define ITIS(...) \

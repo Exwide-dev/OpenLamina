@@ -1,26 +1,32 @@
 #include "lexer.hpp"
-#include <unordered_map>
+
+#include <iostream>
+#include <utility>
 #include <sstream>
+#include <unordered_map>
+
+#include "../../tools/error.hpp"
+#include "../../tools/debug.hpp"
 
 namespace lmx {
 
-Lexer::Lexer(const std::string& fname) 
-    : filename(fname), full_source(""), pos(0), line(1), column(1) {}
-
-void Lexer::add_input(const std::string& source) {
-    full_source = source;
-    std::istringstream iss(source);
-    std::string line_str;
-    source_lines.clear();
-    while (std::getline(iss, line_str)) {
-        source_lines.push_back(line_str);
-    }
+Lexer::Lexer(std::string filename)
+    : filename(std::move(filename)) {
     pos = 0;
     line = 1;
     column = 1;
 }
 
-std::string Lexer::getTokenTypeName(TokenType type) {
+void Lexer::add_input(const std::string& source) {
+    full_source.append(source);
+    std::istringstream iss(source);
+    std::string line_str;
+    while (std::getline(iss, line_str)) {
+        source_lines.push_back(line_str);
+    }
+}
+
+std::string Lexer::getTokenTypeName(const TokenType type) {
     switch (type) {
         case TokenType::END: return "END";
         case TokenType::IDENTIFIER: return "IDENTIFIER";
@@ -68,8 +74,35 @@ std::string Lexer::getTokenTypeName(TokenType type) {
         case TokenType::LBRACKET: return "[";
         case TokenType::RBRACKET: return "]";
         case TokenType::NEWLINE: return "NEWLINE";
+        case TokenType::MISMATCH: return "MISMATCH";
         default: return "UNKNOWN";
     }
+}
+
+std::vector<TokenPattern> Lexer::initPatterns() {
+    return {
+        {R"(==)", TokenType::OPER_EQ},
+        {R"(!=)", TokenType::OPER_NE},
+        {R"(<=)", TokenType::OPER_LE},
+        {R"(>=)", TokenType::OPER_GE},
+        {R"(\+)", TokenType::OPER_PLUS},
+        {R"(-)", TokenType::OPER_MINUS},
+        {R"(\*)", TokenType::OPER_MUL},
+        {R"(/)", TokenType::OPER_DIV},
+        {R"(!)", TokenType::OPER_NOT},
+        {R"(<)", TokenType::OPER_LT},
+        {R"(>)", TokenType::OPER_GT},
+        {R"(,)", TokenType::OPER_COMMA},
+        {R"(\.)", TokenType::OPER_DOT},
+        {R"(:)", TokenType::OPER_COLON},
+        {R"(=)", TokenType::ASSIGN},
+        {R"(\()", TokenType::LPAREN},
+        {R"(\))", TokenType::RPAREN},
+        {R"(\{)", TokenType::LBRACE},
+        {R"(\})", TokenType::RBRACE},
+        {R"(\[)", TokenType::LBRACKET},
+        {R"(\])", TokenType::RBRACKET},
+    };
 }
 
 bool Lexer::isAtEnd() const {
@@ -92,16 +125,60 @@ char Lexer::consumeChar() {
     return c;
 }
 
-Token Lexer::parseIdentifier() {
+Token Lexer::parseString() {
     std::string value;
+    const int start_line = line;
+    const int start_col = column;
+    
+    consumeChar();
+    
+    while (!isAtEnd() && peekChar() != '"') {
+        if (peekChar() == '\\') {
+            consumeChar();
+            if (!isAtEnd()) {
+                switch (peekChar()) {
+                    case 'n': value += '\n'; break;
+                    case 't': value += '\t'; break;
+                    case 'r': value += '\r'; break;
+                    case '"': value += '"'; break;
+                    case '\\': value += '\\'; break;
+                    default: value += peekChar(); break;
+                }
+                consumeChar();
+            }
+        } else if (peekChar() == '\n') {
+            return {TokenType::MISMATCH, value, start_line, start_col};
+        } else {
+            value += consumeChar();
+        }
+    }
+    
+    if (isAtEnd()) {
+        std::cerr << "End!" << std::endl;
+        return {TokenType::MISMATCH, value, start_line, start_col};
+    }
+    
+    consumeChar();
+    return {TokenType::STRING_LITERAL, value, start_line, start_col};
+}
+
+Token Lexer::parseNewline() {
     int start_line = line;
     int start_col = column;
+    consumeChar();
+    return Token(TokenType::NEWLINE, "\n", start_line, start_col);
+}
+
+Token Lexer::parseIdentifierOrKeyword() {
+    const int start_line = line;
+    const int start_col = column;
+    std::string value;
     
     while (!isAtEnd() && (isLetter(peekChar()) || isDigit(peekChar()))) {
         value += consumeChar();
     }
     
-    static std::unordered_map<std::string, TokenType> keywords = {
+    static const std::unordered_map<std::string, TokenType> keywords = {
         {"let", TokenType::KW_LET},
         {"func", TokenType::KW_FUNC},
         {"do", TokenType::KW_DO},
@@ -121,117 +198,52 @@ Token Lexer::parseIdentifier() {
         {"intern", TokenType::KW_INTERN},
         {"export", TokenType::KW_EXPORT},
         {"with", TokenType::KW_WITH},
-        {"make", TokenType::KW_MAKE}
+        {"make", TokenType::KW_MAKE},
     };
-    
-    auto it = keywords.find(value);
+
+    const auto it = keywords.find(value);
     if (it != keywords.end()) {
-        return Token(it->second, value, start_line, start_col);
+        return {it->second, value, start_line, start_col};
     }
     
-    return Token(TokenType::IDENTIFIER, value, start_line, start_col);
+    return {TokenType::IDENTIFIER, value, start_line, start_col};
 }
 
-Token Lexer::parseNumber() {
-    std::string value;
-    int start_line = line;
-    int start_col = column;
+Token Lexer::tryMatchPatterns() {
+    const int start_line = line;
+    const int start_col = column;
     
-    while (!isAtEnd() && isDigit(peekChar())) {
-        value += consumeChar();
-    }
+    std::vector<TokenPattern> patterns = initPatterns();
+    std::smatch match;
     
-    return Token(TokenType::NUM_LITERAL, value, start_line, start_col);
-}
-
-Token Lexer::parseString() {
-    std::string value;
-    int start_line = line;
-    int start_col = column;
-    
-    consumeChar();
-    
-    while (!isAtEnd() && peekChar() != '"') {
-        if (peekChar() == '\\') {
-            consumeChar();
-            if (!isAtEnd()) {
-                switch (peekChar()) {
-                    case 'n': value += '\n'; break;
-                    case 't': value += '\t'; break;
-                    case 'r': value += '\r'; break;
-                    case '"': value += '"'; break;
-                    case '\\': value += '\\'; break;
-                    default: value += peekChar(); break;
+    for (const auto& pattern : patterns) {
+        std::string remaining(full_source.substr(pos));
+        if (std::regex_search(remaining, match, pattern.regex)) {
+            if (match.position() == 0) {
+                const std::string matched = match.str();
+                for (size_t i = 0; i < matched.length(); ++i) {
+                    consumeChar();
                 }
-                consumeChar();
+                return {pattern.type, matched, start_line, start_col};
             }
-        } else if (peekChar() == '\n') {
-            return Token(TokenType::END, value, start_line, start_col);
-        } else {
-            value += consumeChar();
         }
     }
     
-    if (isAtEnd()) {
-        return Token(TokenType::END, value, start_line, start_col);
+    if (isLetter(peekChar())) {
+        return parseIdentifierOrKeyword();
     }
     
-    consumeChar();
-    return Token(TokenType::STRING_LITERAL, value, start_line, start_col);
-}
-
-Token Lexer::parseOperator() {
-    char c = peekChar();
-    int start_line = line;
-    int start_col = column;
-    
-    switch (c) {
-        case '+': consumeChar(); return Token(TokenType::OPER_PLUS, "+", start_line, start_col);
-        case '-': consumeChar(); return Token(TokenType::OPER_MINUS, "-", start_line, start_col);
-        case '*': consumeChar(); return Token(TokenType::OPER_MUL, "*", start_line, start_col);
-        case '/': consumeChar(); return Token(TokenType::OPER_DIV, "/", start_line, start_col);
-        case '!': 
-            consumeChar();
-            if (peekChar() == '=') {
-                consumeChar();
-                return Token(TokenType::OPER_NE, "!=", start_line, start_col);
-            }
-            return Token(TokenType::OPER_NOT, "!", start_line, start_col);
-        case '=': 
-            consumeChar();
-            if (peekChar() == '=') {
-                consumeChar();
-                return Token(TokenType::OPER_EQ, "==", start_line, start_col);
-            }
-            return Token(TokenType::ASSIGN, "=", start_line, start_col);
-        case '<': 
-            consumeChar();
-            if (peekChar() == '=') {
-                consumeChar();
-                return Token(TokenType::OPER_LE, "<=", start_line, start_col);
-            }
-            return Token(TokenType::OPER_LT, "<", start_line, start_col);
-        case '>': 
-            consumeChar();
-            if (peekChar() == '=') {
-                consumeChar();
-                return Token(TokenType::OPER_GE, ">=", start_line, start_col);
-            }
-            return Token(TokenType::OPER_GT, ">", start_line, start_col);
-        case ',': consumeChar(); return Token(TokenType::OPER_COMMA, ",", start_line, start_col);
-        case '.': consumeChar(); return Token(TokenType::OPER_DOT, ".", start_line, start_col);
-        case ':': consumeChar(); return Token(TokenType::OPER_COLON, ":", start_line, start_col);
-        case '(': consumeChar(); return Token(TokenType::LPAREN, "(", start_line, start_col);
-        case ')': consumeChar(); return Token(TokenType::RPAREN, ")", start_line, start_col);
-        case '{': consumeChar(); return Token(TokenType::LBRACE, "{", start_line, start_col);
-        case '}': consumeChar(); return Token(TokenType::RBRACE, "}", start_line, start_col);
-        case '[': consumeChar(); return Token(TokenType::LBRACKET, "[", start_line, start_col);
-        case ']': consumeChar(); return Token(TokenType::RBRACKET, "]", start_line, start_col);
-        case '\n': consumeChar(); return Token(TokenType::NEWLINE, "\n", start_line, start_col);
-        default: 
-            consumeChar();
-            return Token(TokenType::END, std::string(1, c), start_line, start_col);
+    if (isDigit(peekChar())) {
+        LOG("Find num");
+        std::string value;
+        while (!isAtEnd() && isDigit(peekChar())) {
+            value += consumeChar();
+        }
+        return {TokenType::NUM_LITERAL, value, start_line, start_col};
     }
+    
+    const char c = consumeChar();
+    return {TokenType::MISMATCH, std::string(1, c), start_line, start_col};
 }
 
 std::vector<Token> Lexer::tokenize() {
@@ -248,20 +260,68 @@ std::vector<Token> Lexer::tokenize() {
         
         char c = peekChar();
         
-        if (isLetter(c)) {
-            tokens.push_back(parseIdentifier());
-        } else if (isDigit(c)) {
-            tokens.push_back(parseNumber());
-        } else if (c == '"') {
+        if (c == '"') {
             tokens.push_back(parseString());
+        } else if (c == '\n') {
+            tokens.push_back(parseNewline());
         } else {
-            tokens.push_back(parseOperator());
+            tokens.push_back(tryMatchPatterns());
         }
     }
     
-    tokens.push_back(Token(TokenType::END, "", line, column));
+    tokens.emplace_back(TokenType::END, "", line, column);
     
     return tokens;
 }
 
-} // namespace lmx
+void Lexer::add_error(const std::string& message) {
+    errors.emplace_back(message, line, column);
+}
+
+std::vector<Token> Lexer::lex_rest() {
+    std::vector<Token> tokens;
+    
+    while (!isAtEnd()) {
+        while (!isAtEnd() && isWhitespace(peekChar())) {
+            consumeChar();
+        }
+        
+        if (isAtEnd()) {
+            break;
+        }
+        
+        char c = peekChar();
+        
+        if (c == '"') {
+            Token tok = parseString();
+            tokens.push_back(tok);
+            if (tok.type == TokenType::MISMATCH) {
+                add_error("Unclosed string literal");
+            }
+        } else if (c == '\n') {
+            tokens.push_back(parseNewline());
+        } else {
+            Token tok = tryMatchPatterns();
+            tokens.push_back(tok);
+            if (tok.type == TokenType::MISMATCH) {
+                add_error("Invalid token: '" + tok.value + "'");
+            }
+        }
+    }
+    
+    tokens.emplace_back(TokenType::END, "", line, column);
+    
+    if (!errors.empty()) {
+        std::string error_msg;
+        for (const auto& err : errors) {
+            if (!error_msg.empty()) error_msg += "\n";
+            error_msg += "Lexer error at line " + std::to_string(err.line) + 
+                         ", column " + std::to_string(err.column) + ": " + err.message;
+        }
+        throw SyntaxError(error_msg);
+    }
+    
+    return tokens;
+}
+
+}

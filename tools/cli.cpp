@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <ranges>
 
 namespace cli {
 
@@ -64,102 +65,126 @@ namespace cli {
         }
     }
 
-    int run_repl() {
-        std::string welcome = []() -> std::string {
-            auto get_compiler = []() -> std::string {
+namespace {
+    constexpr std::string RED_BOLD = "\033[1;31m";
+    constexpr std::string GREEN = "\033[0;32m";
+    constexpr std::string YELLOW = "\033[0;33m";
+    constexpr std::string BLUE = "\033[0;34m";
+    constexpr std::string MAGENTA = "\033[0;35m";
+    constexpr std::string CYAN = "\033[0;36m";
+    constexpr std::string RESET = "\033[0m";
+
+    std::string format_traceback(const std::vector<std::string>& traceback) {
+        if (traceback.empty()) return "";
+        
+        std::string result = "\n" + YELLOW + "Traceback (most recent call last):" + RESET + "\n";
+        int indent = 0;
+        for (const auto & it : std::ranges::reverse_view(traceback)) {
+            result += "  " + std::string(indent, ' ') + "-> " + BLUE + it + RESET + "\n";
+            indent += 2;
+        }
+        return result;
+    }
+}
+
+int run_repl() {
+    const std::string welcome = []() -> std::string {
+        auto get_compiler = []() -> std::string {
 #define OPENLAMINA_BUILD_DATE __DATE__
 #define OPENLAMINA_BUILD_TIME __TIME__
 #if defined(__clang__)
-                return "Clang " + std::to_string(__clang_major__) + "." + std::to_string(__clang_minor__);
+            return "Clang " + std::to_string(__clang_major__) + "." + std::to_string(__clang_minor__);
 #elif defined(__GNUC__)
-                return "GCC " + std::to_string(__GNUC__) + "." + std::to_string(__GNUC_MINOR__);
+            return "GCC " + std::to_string(__GNUC__) + "." + std::to_string(__GNUC_MINOR__);
 #elif defined(_MSC_VER)
-                return "MSVC " + std::to_string(_MSC_VER);
+            return "MSVC " + std::to_string(_MSC_VER);
 #else
-                return "Unknown compiler";
+            return "Unknown compiler";
 #endif
-            };
+        };
 
-            auto get_arch = []() -> std::string {
+        auto get_arch = []() -> std::string {
 #if defined(__x86_64__) || defined(_M_X64)
-                return "x86_64";
+            return "x86_64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
-                return "ARM64";
+            return "ARM64";
 #else
-                return "Unknown";
+            return "Unknown";
 #endif
-            };
+        };
 
-            std::string hash_part =
-        #ifdef OPENLAMINA_BUILD_HASH
-                std::string(" ") + OPENLAMINA_BUILD_HASH;
+        std::string hash_part =
+    #ifdef OPENLAMINA_BUILD_HASH
+            std::string(" ") + OPENLAMINA_BUILD_HASH;
 #else
-                    "";
+                "";
 #endif
 
-            return std::format(
-                R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {} {}, C++ standard {}
-Powered by Flex and Bison
+        return std::format(
+            R"(OpenLamina REPL v{}.{}.{}, built by {} ({}), {} {} {}, C++ standard {}
 Contact OpenLamina-Developing for more information)",
-                OPENLAMINA_VERSION_MAJOR,
-                OPENLAMINA_VERSION_MINOR,
-                OPENLAMINA_VERSION_PATCH,
-                get_compiler(),
-                get_arch(),
-                OPENLAMINA_BUILD_DATE,
-                OPENLAMINA_BUILD_TIME,
-                hash_part,
-                __cplusplus
-            );
+            OPENLAMINA_VERSION_MAJOR,
+            OPENLAMINA_VERSION_MINOR,
+            OPENLAMINA_VERSION_PATCH,
+            get_compiler(),
+            get_arch(),
+            OPENLAMINA_BUILD_DATE,
+            OPENLAMINA_BUILD_TIME,
+            hash_part,
+            __cplusplus
+        );
 #undef OPENLAMINA_BUILD_HASH
 #undef OPENLAMINA_BUILD_DATE
 #undef OPENLAMINA_BUILD_TIME
-        }();
+    }();
 
-        std::cout << welcome << std::endl;
+    std::cout << welcome << std::endl;
+    std::cout << std::endl;
 
-        repl::REPL repl_instance;
-        bool needs_more_input = false;
-        
-        while (true) {
-            try {
-                std::cout << (needs_more_input ? "... " : ">>> ");
-                
-                repl::REPL::ExecResult result = repl_instance.exec_input();
-                
-                if (result.success && !result.needs_more_input) {
-                    if (!repl_instance.vm.op_stack.empty()) {
-                        auto top = repl_instance.vm.op_stack.top();
-                        if (!top.isNone()) {
-                            std::cout << top << std::endl;
-                        }
+    repl::REPL repl_instance;
+    bool needs_more_input = false;
+    int line_number = 1;
+
+    while (true) {
+        try {
+            std::cout << CYAN << (needs_more_input ? "... " : ">>> ") << RESET;
+
+            const auto [success, if_need_more] = repl_instance.exec_input();
+            
+            if (success && !if_need_more) {
+                if (!repl_instance.vm.op_stack.empty()) {
+                    if (auto top = repl_instance.vm.op_stack.top(); !top.isNone()) {
+                        std::cout << top << std::endl;
                     }
-                    repl_instance.vm.op_stack.clear();
                 }
-                
-                needs_more_input = result.needs_more_input;
-                
-            } catch (const RuntimeError& e) {
-                std::cout << "\nRuntimeError: " << e.what() << std::endl;
-                repl_instance.vm.pc = repl_instance.vm.code.size();
-                std::cout << "Traceback: " << [&]{
-                    std::string result;
-                    for (const auto& call: repl_instance.vm.traceback) {
-                        result.append(call + " -> ");
-                    }
-                    return result.substr(0, result.size() - 4);
-                }() << std::endl;
-                needs_more_input = false;
-            } catch (const SyntaxError& e) {
-                std::cout << "\nSyntaxError:" << detail_msg << std::endl;
-                needs_more_input = false;
-            } catch (const std::exception& e) {
-                std::cerr << "Occured an exception: " << e.what()
-                          << "\nExit." << std::endl;
-                throw;
+                repl_instance.vm.op_stack.clear();
+                line_number++;
             }
+            
+            needs_more_input = if_need_more;
+            
+        } catch (const RuntimeError& e) {
+            std::cout << "\n" << RED_BOLD << "Error: " << RESET << e.what() << "\n";
+            std::cout << format_traceback(repl_instance.vm.traceback);
+
+            repl_instance.vm.pc = repl_instance.vm.code.size();
+            repl_instance.vm.traceback.clear();
+            needs_more_input = false;
+            line_number++;
+        } catch (const SyntaxError& e) {
+            std::cout << "\n" << RED_BOLD << "SyntaxError:" << RESET << "\n";
+            std::cout << e.what() << "\n";
+
+            needs_more_input = false;
+            line_number++;
+        } catch (...) {
+            std::cout << "\n" << RED_BOLD << "Error: " << RESET << "An unknown exception occurred.\n";
+            std::cout << "\n" << YELLOW << "This is an unexpected error. Please report this bug." << RESET;
+            std::cout << "\nExiting REPL...\n";
+            throw;
         }
     }
+}
 
     void show_help() {
         std::cout << 
