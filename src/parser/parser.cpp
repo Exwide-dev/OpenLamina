@@ -311,6 +311,10 @@ ASTNode* Parser::parseStatement() {
         return parseWhileStmt();
     }
 
+    if (current == TokenType::KW_FOR) {
+        return parseForLoopStmt();
+    }
+
     if (current == TokenType::KW_BREAK) {
         return parseBreakStmt();
     }
@@ -485,6 +489,49 @@ ASTNode* Parser::parseWhileStmt() {
     consume(TokenType::RBRACE);
     
     return new WhileStmtNode(condition, new BlockStmtNode(body));
+}
+
+ASTNode* Parser::parseForLoopStmt() {
+    LOG("Parsing for_loop_stmt");
+    consume(TokenType::KW_FOR);
+    consume(TokenType::LPAREN);
+    
+    std::vector<ForLoopNode::IterationItem*> items;
+    
+    while (!check(TokenType::RPAREN)) {
+        while (match(TokenType::NEWLINE)) {
+        }
+        if (check(TokenType::RPAREN)) {
+            break;
+        }
+
+        std::string var_name = current_token().value;
+        consume(TokenType::IDENTIFIER);
+        consume(TokenType::KW_IN);
+        ExprNode* iterable = parseExpression();
+        
+        items.push_back(new ForLoopNode::IterationItem(var_name, iterable));
+        
+        while (match(TokenType::NEWLINE)) {
+        }
+        if (check(TokenType::RPAREN)) {
+            break;
+        }
+        if (!match(TokenType::OPER_COMMA)) {
+            if (!check(TokenType::IDENTIFIER)) {
+                break;
+            }
+        }
+    }
+    
+    consume(TokenType::RPAREN);
+    consume(TokenType::LBRACE);
+    push_context(ParserContext::FunctionBody);
+    auto body = parseBlockStatementList();
+    pop_context();
+    consume(TokenType::RBRACE);
+    
+    return new ForLoopNode(items, new BlockStmtNode(body));
 }
 
 ASTNode* Parser::parseBreakStmt() {

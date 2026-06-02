@@ -59,6 +59,7 @@ enum class ASTNodeType {
     WhileStmt,      ///< while 循环
     Break,          ///< break 语句
     Continue,       ///< continue 语句
+    ForLoop,        ///< for 循环
     IfStmt,         ///< if 语句
     Module,         ///< 模块
     Binary,         ///< 二元表达式
@@ -840,6 +841,43 @@ struct LoopNode final : ASTNode {
      */
     ~LoopNode() override {
         delete condition;
+        delete body;
+    }
+};
+
+/**
+ * @struct ForLoopNode
+ * @brief for 循环节点，支持多变量迭代
+ */
+struct ForLoopNode final : ASTNode {
+    struct IterationItem {
+        std::string var_name; ///< 迭代变量名
+        ExprNode* iterable;   ///< 可迭代对象表达式
+        
+        IterationItem(std::string name, ExprNode* iter)
+            : var_name(std::move(name)), iterable(iter) {}
+        
+        ~IterationItem() { delete iterable; }
+    };
+    
+    std::vector<IterationItem*> items; ///< 迭代项列表
+    BlockStmtNode* body;               ///< 循环体
+    
+    /**
+     * @brief 构造函数
+     * @param its 迭代项列表
+     * @param b 循环体
+     */
+    ForLoopNode(std::vector<IterationItem*> its, BlockStmtNode* b)
+        : ASTNode(ASTNodeType::ForLoop), items(std::move(its)), body(b) {}
+    
+    /**
+     * @brief 析构函数
+     */
+    ~ForLoopNode() override {
+        for (auto item : items) {
+            delete item;
+        }
         delete body;
     }
 };

@@ -216,6 +216,12 @@ private:
     ASTNode* parseWhileStmt();
     
     /**
+     * @brief 解析 for 循环语句
+     * @return for 循环语句节点
+     */
+    ASTNode* parseForLoopStmt();
+    
+    /**
      * @brief 解析 break 语句
      * @return break 语句节点
      */

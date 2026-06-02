@@ -153,8 +153,10 @@ Contact OpenLamina-Developing for more information)",
             
             if (success && !if_need_more) {
                 if (!repl_instance.vm.op_stack.empty()) {
-                    if (auto top = repl_instance.vm.op_stack.top(); !top.isNone()) {
-                        std::cout << top << std::endl;
+                    const auto& top = repl_instance.vm.op_stack.top();
+                    const auto& shown = top.deref();
+                    if (!shown.isNone()) {
+                        std::cout << shown << std::endl;
                     }
                 }
                 repl_instance.vm.op_stack.clear();

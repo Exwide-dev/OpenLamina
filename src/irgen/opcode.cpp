@@ -208,6 +208,11 @@ namespace irgen {
         vm.op_stack.push(-value.deref());
     }
 
+    inline void DEREF::emit(VM &vm) {
+        const Value ref = vm.op_stack.popValue();
+        vm.op_stack.push(Value(ref.deref()));
+    }
+
     inline void NOT::emit(VM &vm) {
         auto value = vm.op_stack.popValue();
         vm.op_stack.push(!value.deref());
@@ -270,13 +275,14 @@ namespace irgen {
     }
 
     inline void STORE::emit(VM &vm) const {
-        Value value = vm.op_stack.popValue();
-        Value ref = vm.op_stack.popValue();
+        // 栈顶为引用槽（NEW_VAR / NEW_VAR_OR_LOAD 压入），次栈顶为待写入的值
+        Value ref_slot = vm.op_stack.popValue();
+        Value data = vm.op_stack.popValue();
 
-        if (ref.isReference()) {
+        if (ref_slot.isReference()) {
             bool has_value = false;
             bool is_const = false;
-            const auto& ref_ptr = ref.asReference();
+            const auto& ref_ptr = ref_slot.asReference();
             if (ref_ptr.value_ptr && !vm.symbol_stack.empty()) {
                 for (auto& symbol_table : vm.symbol_stack) {
                     for (const auto& [id, val] : symbol_table.symbols) {
@@ -288,12 +294,12 @@ namespace irgen {
                     }
                 }
             }
-            
+
             if (is_const && has_value) {
                 throw RuntimeError("Cannot modify constant");
             }
-            
-            ref.set(value);
+
+            ref_slot.set(data);
         }
 
         LOG("Done, now symbol: " << vm.symbol_stack.back().toString());
@@ -906,5 +912,63 @@ namespace irgen {
             submodules[name] = submod;
         }
     }
+}
+
+bool irgen::IteratorObject::next(irgen::Value& out) {
+    irgen::Value& iterable_ref = iterable->deref();
+    
+    if (iterable_ref.isVector()) {
+        auto& vec = iterable_ref.asVector();
+        if (index < vec.size()) {
+            out = irgen::Value::makeRef(vec[index++]);
+            return true;
+        }
+    } else if (iterable_ref.isString()) {
+        const std::string& str = iterable_ref.asString();
+        if (index < str.size()) {
+            out = irgen::Value(std::string(1, str[index++]));
+            return true;
+        }
+    } else if (iterable_ref.isDictionary()) {
+        auto& dict = iterable_ref.asDictionary();
+        size_t i = 0;
+        for (const auto& [key, value] : dict) {
+            if (i == index) {
+                out = irgen::Value::makeRef(key);
+                index++;
+                return true;
+            }
+            i++;
+        }
+    }
+    
+    return false;
+}
+
+inline void irgen::ITER_NEW::emit(irgen::VM &vm) const {
+    irgen::Value iterable = vm.op_stack.popValue();
+    auto iter_obj = std::make_shared<irgen::IteratorObject>(std::make_shared<irgen::Value>(std::move(iterable)));
+    vm.op_stack.push(irgen::Value(iter_obj));
+}
+
+inline void irgen::ITER_NEXT::emit(irgen::VM &vm) const {
+    irgen::Value iter_val = vm.op_stack.popValue();
+    irgen::Value& iter_deref = iter_val.deref();
+    
+    if (iter_deref.getType() != irgen::Value::Type::Iterator) {
+        throw RuntimeError("ITER_NEXT requires an iterator object");
+    }
+    
+    auto iter = iter_deref.asIterator();
+    irgen::Value result;
+    bool has_next = iter->next(result);
+    
+    vm.op_stack.push(iter_val);
+    vm.op_stack.push(result);
+    vm.op_stack.push(irgen::Value(has_next));
+}
+
+inline void irgen::ITER_END::emit(irgen::VM &vm) const {
+    vm.op_stack.popValue();
 }
 

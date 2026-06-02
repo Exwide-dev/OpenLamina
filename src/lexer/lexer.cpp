@@ -52,6 +52,8 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_EXPORT: return "export";
         case TokenType::KW_WITH: return "with";
         case TokenType::KW_MAKE: return "make";
+        case TokenType::KW_FOR: return "for";
+        case TokenType::KW_IN: return "in";
         case TokenType::OPER_PLUS: return "+";
         case TokenType::OPER_MINUS: return "-";
         case TokenType::OPER_MUL: return "*";
@@ -199,6 +201,8 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"export", TokenType::KW_EXPORT},
         {"with", TokenType::KW_WITH},
         {"make", TokenType::KW_MAKE},
+        {"for", TokenType::KW_FOR},
+        {"in", TokenType::KW_IN},
     };
 
     const auto it = keywords.find(value);

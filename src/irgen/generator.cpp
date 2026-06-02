@@ -8,8 +8,37 @@
 #include <format>
 #include <ranges>
 #include <stack>
+#include <unordered_set>
 
 #include "opcode.hpp"
+
+namespace {
+
+void collectVarRefs(const lmx::ASTNode* node, std::unordered_set<std::string>& out) {
+    if (!node) {
+        return;
+    }
+    if (node->kind == lmx::ASTNodeType::VarRef) {
+        out.insert(dynamic_cast<const lmx::VarRefNode*>(node)->name);
+    }
+    for (const auto* child : node->children) {
+        collectVarRefs(child, out);
+    }
+}
+
+bool iterableDependsOnPriorVars(const lmx::ExprNode* iterable,
+                                const std::vector<std::string>& prior_vars) {
+    std::unordered_set<std::string> refs;
+    collectVarRefs(iterable, refs);
+    for (const auto& name : prior_vars) {
+        if (refs.contains(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
 
 namespace lm::irgen {
     thread_local size_t label_counter = 0;
@@ -136,6 +165,8 @@ namespace lm::irgen {
             } else {
                 code.emplace_back(::irgen::LOAD(var_name));
             }
+            // 读取变量值：LOAD 压入引用槽，DEREF 解引用为实际值（赋值走 AssignNode，不经此处）
+            code.emplace_back(::irgen::DEREF());
         } else if (node->kind == lmx::ASTNodeType::FuncCallExpr) {
             const auto* func_call_node = dynamic_cast<lmx::FuncCallExprNode*>(node);
             for (auto arg : std::ranges::reverse_view(func_call_node->args)) {
@@ -397,6 +428,72 @@ namespace lm::irgen {
 
             code.emplace_back(::irgen::GOTO(loop_start_label));
             code.emplace_back(::irgen::LABEL(loop_end_label));
+
+            loop_stack.pop();
+        } else if (node->kind == lmx::ASTNodeType::ForLoop) {
+            const auto* for_node = dynamic_cast<lmx::ForLoopNode*>(node);
+            const size_t item_count = for_node->items.size();
+
+            size_t loop_start_label = label_counter++;
+            size_t loop_end_label = label_counter++;
+
+            loop_stack.emplace(loop_start_label, loop_end_label);
+
+            std::vector<std::string> prior_var_names;
+            std::vector<std::string> iter_slot_names(item_count);
+            std::vector<bool> iter_is_dependent(item_count);
+
+            for (size_t i = 0; i < item_count; ++i) {
+                const auto& item = for_node->items[i];
+                const bool dependent = iterableDependsOnPriorVars(item->iterable, prior_var_names);
+                iter_is_dependent[i] = dependent;
+                prior_var_names.push_back(item->var_name);
+
+                if (!dependent) {
+                    iter_slot_names[i] = std::format("__for_iter_{}", label_counter++);
+                    auto iterable_code = gen_code(item->iterable, loop_stack, local_scope_stack, func_context_stack);
+                    code.insert(code.end(), iterable_code.begin(), iterable_code.end());
+                    code.emplace_back(::irgen::ITER_NEW());
+                    code.emplace_back(::irgen::NEW_INTERN_VAR(iter_slot_names[i]));
+                    code.emplace_back(::irgen::STORE());
+                }
+            }
+
+            code.emplace_back(::irgen::LABEL(loop_start_label));
+
+            for (size_t i = 0; i < item_count; ++i) {
+                const auto& item = for_node->items[i];
+
+                if (iter_is_dependent[i]) {
+                    auto iterable_code = gen_code(item->iterable, loop_stack, local_scope_stack, func_context_stack);
+                    code.insert(code.end(), iterable_code.begin(), iterable_code.end());
+                    code.emplace_back(::irgen::ITER_NEW());
+                } else {
+                    code.emplace_back(::irgen::LOAD(iter_slot_names[i]));
+                }
+
+                code.emplace_back(::irgen::ITER_NEXT());
+                code.emplace_back(::irgen::NOT());
+                code.emplace_back(::irgen::GOTOIF(loop_end_label));
+                code.emplace_back(::irgen::NEW_VAR(item->var_name));
+                code.emplace_back(::irgen::STORE());
+                code.emplace_back(::irgen::ITER_END());
+            }
+
+            if (for_node->body) {
+                auto body_code = gen_code(for_node->body, loop_stack, local_scope_stack, func_context_stack);
+                code.insert(code.end(), body_code.begin(), body_code.end());
+            }
+
+            code.emplace_back(::irgen::GOTO(loop_start_label));
+            code.emplace_back(::irgen::LABEL(loop_end_label));
+
+            for (size_t i = 0; i < item_count; ++i) {
+                if (!iter_is_dependent[i]) {
+                    code.emplace_back(::irgen::LOAD(iter_slot_names[i]));
+                    code.emplace_back(::irgen::ITER_END());
+                }
+            }
 
             loop_stack.pop();
         } else if (node->kind == lmx::ASTNodeType::Break) {

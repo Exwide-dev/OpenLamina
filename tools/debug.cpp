@@ -94,6 +94,17 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             printAST(loop->body, indent + 2);
             break;
         }
+        case lmx::ASTNodeType::ForLoop: {
+            const auto loop = dynamic_cast<lmx::ForLoopNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "ForLoop\n";
+            for (const auto* item : loop->items) {
+                std::cout << indent_str << "  " << item->var_name << " in:\n";
+                printAST(item->iterable, indent + 2);
+            }
+            std::cout << indent_str << "  Body:\n";
+            printAST(loop->body, indent + 2);
+            break;
+        }
         case lmx::ASTNodeType::Break: {
             std::cout << indent_str << "Break\n";
             break;

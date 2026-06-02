@@ -45,6 +45,7 @@ namespace irgen {
     class ModuleObject;
     class Value;
     class VM;
+    struct IteratorObject;
 
     class PUSH;
     class ADD;
@@ -52,6 +53,7 @@ namespace irgen {
     class SUB;
     class DIV;
     class NEG;
+    class DEREF;
     class NOT;
     class AND;
     class OR;
@@ -85,6 +87,9 @@ namespace irgen {
     class RET_THEN_LEAVE_SCOPE;
     class LOAD_FAST;
     class STORE_FAST;
+    class ITER_NEW;
+    class ITER_NEXT;
+    class ITER_END;
 
     /**
      * @brief 数组映射模板类，使用索引访问的稀疏数组
@@ -318,6 +323,7 @@ namespace irgen {
         SUB,
         DIV,
         NEG,
+        DEREF,
         NOT,
         AND,
         OR,
@@ -349,7 +355,10 @@ namespace irgen {
         NEW_INTERN_VAR,
         NEW_INTERN_CONST,
         NEW_VAR_OR_LOAD,
-        RET_THEN_LEAVE_SCOPE
+        RET_THEN_LEAVE_SCOPE,
+        ITER_NEW,
+        ITER_NEXT,
+        ITER_END
     >;
     
     class SymbolTable;
@@ -416,6 +425,26 @@ namespace irgen {
     };
 
     /**
+     * @brief 迭代器对象，支持遍历可迭代对象
+     */
+    struct IteratorObject {
+        std::shared_ptr<Value> iterable;             ///< 被迭代的对象（使用指针避免循环依赖）
+        size_t index = 0;                           ///< 当前迭代位置
+        
+        /**
+         * @brief 构造函数
+         * @param obj 要迭代的对象
+         */
+        explicit IteratorObject(std::shared_ptr<Value> obj) : iterable(std::move(obj)) {}
+        
+        /**
+         * @brief 获取下一个元素
+         * @return 是否还有下一个元素
+         */
+        bool next(Value& out);
+    };
+
+    /**
      * @brief 统一值类型，支持多种数据类型的存储和操作
      */
     class Value {
@@ -433,7 +462,8 @@ namespace irgen {
             Vector,         ///< 向量/列表
             Dictionary,     ///< 字典/映射
             Reference,      ///< 引用
-            Rational        ///< 有理数
+            Rational,       ///< 有理数
+            Iterator        ///< 迭代器
         };
 
     private:
@@ -448,7 +478,8 @@ namespace irgen {
             std::vector<std::shared_ptr<Value>>,
             std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>,
             Ref,
-            lang::lammp::Rational
+            lang::lammp::Rational,
+            std::shared_ptr<IteratorObject>
         > data;                                      ///< 存储实际值的变体
 
     public:
@@ -456,6 +487,18 @@ namespace irgen {
          * @brief 默认构造函数，创建空值
          */
         Value() : type(Type::None) {
+        }
+
+        /**
+         * @brief 复制构造函数
+         */
+        Value(const Value& other) : type(other.type), data(other.data) {
+        }
+
+        /**
+         * @brief 移动构造函数
+         */
+        Value(Value&& other) noexcept : type(other.type), data(std::move(other.data)) {
         }
 
         /**
@@ -491,6 +534,20 @@ namespace irgen {
         }
 
         /**
+         * @brief 从std::string构造
+         */
+        explicit Value(const std::string& value)
+            : type(Type::String), data(value) {
+        }
+
+        /**
+         * @brief 从std::string移动构造
+         */
+        explicit Value(std::string&& value)
+            : type(Type::String), data(std::move(value)) {
+        }
+
+        /**
          * @brief 从内置函数类型构造
          */
         explicit Value(FunctionType value)
@@ -519,6 +576,13 @@ namespace irgen {
         }
 
         /**
+         * @brief 从迭代器对象构造
+         */
+        explicit Value(std::shared_ptr<IteratorObject> value)
+            : type(Type::Iterator), data(value) {
+        }
+
+        /**
          * @brief 从向量构造
          */
         explicit Value(std::vector<std::shared_ptr<Value>> value)
@@ -543,6 +607,28 @@ namespace irgen {
                 vec.push_back(std::make_shared<Value>(val));
             }
             data = std::move(vec);
+        }
+
+        /**
+         * @brief 复制赋值运算符
+         */
+        Value& operator=(const Value& other) {
+            if (this != &other) {
+                type = other.type;
+                data = other.data;
+            }
+            return *this;
+        }
+
+        /**
+         * @brief 移动赋值运算符
+         */
+        Value& operator=(Value&& other) noexcept {
+            if (this != &other) {
+                type = other.type;
+                data = std::move(other.data);
+            }
+            return *this;
         }
 
         /**
@@ -735,6 +821,7 @@ return std::get<CppType>(data); \
         DEFINE_AS_METHOD(String, String, std::string, "a string")
         DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
         DEFINE_AS_METHOD(Module, Module, std::shared_ptr<ModuleObject>, "a module")
+        DEFINE_AS_METHOD(Iterator, Iterator, std::shared_ptr<IteratorObject>, "an iterator")
 
         [[nodiscard]] const std::vector<std::shared_ptr<Value>> &asVector() const {
             const Value &self = deref();
@@ -1061,6 +1148,36 @@ return std::get<CppType>(data); \
         bool isNumber() const {
             return deref().type == Type::Number;
         };
+    };
+
+    class ITER_NEW {
+    public:
+        COMMON(ITER_NEW)
+        std::vector<Value> operands;
+
+        ITER_NEW() = default;
+
+        void emit(VM &vm) const;
+    };
+
+    class ITER_NEXT {
+    public:
+        COMMON(ITER_NEXT)
+        std::vector<Value> operands;
+
+        ITER_NEXT() = default;
+
+        void emit(VM &vm) const;
+    };
+
+    class ITER_END {
+    public:
+        COMMON(ITER_END)
+        std::vector<Value> operands;
+
+        ITER_END() = default;
+
+        void emit(VM &vm) const;
     };
 
     inline Ref::Ref(std::shared_ptr<Value> ptr) : value_ptr(std::move(ptr)) {
@@ -1449,6 +1566,16 @@ return std::get<CppType>(data); \
         std::vector<Value> operands;
 
         NEG() = default;
+
+        void emit(VM &vm);
+    };
+
+    class DEREF {
+    public:
+        COMMON(DEREF)
+        std::vector<Value> operands;
+
+        DEREF() = default;
 
         void emit(VM &vm);
     };

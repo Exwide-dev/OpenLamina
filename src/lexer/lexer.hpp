@@ -38,6 +38,8 @@ enum class TokenType {
     KW_EXPORT,       ///< export 关键字
     KW_WITH,         ///< with 关键字
     KW_MAKE,         ///< make 关键字
+    KW_FOR,          ///< for 关键字
+    KW_IN,            ///< in 关键字
     
     OPER_PLUS,       ///< 加法运算符 +
     OPER_MINUS,      ///< 减法运算符 -
