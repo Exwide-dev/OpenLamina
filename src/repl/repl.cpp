@@ -1,13 +1,7 @@
 #include "repl.hpp"
-#include "../front-end/front_end.hpp"
+#include "../lexer/utf8.hpp"
 #include "irgen/generator.hpp"
 #include "../tools/error.hpp"
-
-extern std::string detail_msg;
-
-std::string get_complete_err_msg() {
-    return detail_msg;
-}
 
 void repl::REPL::reset_state() {
     brace_stack = {};
@@ -46,15 +40,15 @@ void repl::REPL::update_state(const std::string& line) {
         }
 
         std::string token;
-        if (std::isalpha(c)) {
+        if (lmx::utf8::identifier_start_at(line, i)) {
             size_t j = i;
-            while (j < line.size() && (std::isalnum(line[j]) || line[j] == '_')) {
-                token += line[j];
-                j++;
+            while (j < line.size() && lmx::utf8::identifier_continue_at(line, j)) {
+                j += lmx::utf8::codepoint_length(line, j);
             }
+            token = line.substr(i, j - i);
             i = j - 1;
         } else {
-            token = std::string(1, c);
+            token = line.substr(i, lmx::utf8::codepoint_length(line, i));
         }
 
         if (token == "(") {
@@ -130,13 +124,13 @@ repl::REPL::ExecResult repl::REPL::exec_input(const std::function<std::string()>
     reset_state();
 
     if (input.empty()) return {false, false};
-    
-    lmx::ProgramASTNode* got_ast = parse(input, "<repl>");
 
-    if (!got_ast) {
-        throw SyntaxError(get_complete_err_msg());
+    std::vector<lmx::ASTNode*> stmts = parse_session.parse_chunk(input);
+    if (stmts.empty()) {
+        return {true, false};
     }
 
+    auto* got_ast = new lmx::ProgramASTNode(std::move(stmts));
     auto code = lm::irgen::Generator(got_ast).gen();
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();

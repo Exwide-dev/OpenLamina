@@ -188,9 +188,28 @@ private:
     std::vector<std::string> source_lines; ///< 源代码行列表
     std::vector<LexError> errors;   ///< 错误列表
     
-    size_t pos = 0;    ///< 当前解析位置
+    size_t pos = 0;    ///< 当前解析位置（字节）
     int line = 1;      ///< 当前行号
-    int column = 1;    ///< 当前列号
+    int column = 1;    ///< 当前列号（按 Unicode 码点计）
+    
+    /**
+     * @brief 词法分析器快照，用于预测/最长匹配时的状态回退
+     */
+    struct LexerState {
+        size_t pos = 0;
+        int line = 1;
+        int column = 1;
+    };
+    
+    [[nodiscard]] LexerState save_state() const {
+        return {pos, line, column};
+    }
+    
+    void restore_state(const LexerState& state) {
+        pos = state.pos;
+        line = state.line;
+        column = state.column;
+    }
     
     /**
      * @brief 获取 token 类型的名称字符串
@@ -206,16 +225,35 @@ private:
     static std::vector<TokenPattern> initPatterns();
     
     /**
-     * @brief 查看当前字符（不消费）
-     * @return 当前字符
+     * @brief 查看当前字节（不消费）
      */
     [[nodiscard]] char peekChar() const;
     
     /**
-     * @brief 消费当前字符并返回
-     * @return 当前字符
+     * @brief 消费当前字节
      */
     char consumeChar();
+    
+    /**
+     * @brief 消费一个 UTF-8 码点（无效序列时退化为单字节）
+     * @return 消费的字节数
+     */
+    size_t consumeCodepoint();
+    
+    /**
+     * @brief 当前位置是否为标识符起始
+     */
+    [[nodiscard]] bool identifierStartsHere() const;
+    
+    /**
+     * @brief 当前位置是否为标识符继续字符
+     */
+    [[nodiscard]] bool identifierContinuesHere() const;
+    
+    /**
+     * @brief 跳过 UTF-8 BOM（若存在）
+     */
+    void skipBom();
     
     /**
      * @brief 检查是否到达输入末尾
@@ -261,16 +299,6 @@ private:
     [[nodiscard]] bool isDigit(const char c) const {
         const auto uc = static_cast<unsigned char>(c);
         return uc >= '0' && uc <= '9'; 
-    }
-    
-    /**
-     * @brief 判断是否为字母字符
-     * @param c 字符
-     * @return 如果是字母返回 true
-     */
-    [[nodiscard]] bool isLetter(const char c) const {
-        const auto uc = static_cast<unsigned char>(c);
-        return (uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z') || uc == '_'; 
     }
     
     /**

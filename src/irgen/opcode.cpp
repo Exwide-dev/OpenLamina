@@ -1,9 +1,6 @@
 #include "opcode.hpp"
 #include "../tools/lang/builtins.hpp"
 #include "../tools/debug.hpp"
-#include "../compiler/module_manager.hpp"
-#include "../compiler/module_compiler.hpp"
-#include <cmath>
 #include <fstream>
 #include <filesystem>
 #include <ranges>
@@ -172,7 +169,7 @@ namespace irgen {
                 } else {
                     LOG("  Closure already captured with " << func->closure.size() << " scopes");
                 }
-            } catch (const RuntimeError& e) {
+            } catch ([[maybe_unused]] const RuntimeError& e) {
                 LOG("  Not a user-defined function");
             }
         }
@@ -435,8 +432,8 @@ namespace irgen {
                 vm.traceback.emplace_back(func_obj->name);
                 vm.call_stack.push(Value(vm.pc));
 
-                for (auto it = args.rbegin(); it != args.rend(); ++it) {
-                    vm.op_stack.push(*it);
+                for (auto & arg : std::ranges::reverse_view(args)) {
+                    vm.op_stack.push(arg);
                 }
 
                 LOG("CALL: Pushing " << func_obj->closure.size() << " closure scopes");
@@ -503,8 +500,8 @@ namespace irgen {
         }
     }
 
-    inline void FINDMOD::emit(VM &vm) {
-        const std::string module_name = g_string_pool.get_string(operands[0].asInt());
+    inline void FINDMOD::emit(VM &vm) const {
+        const std::string& module_name = g_string_pool.get_string(operands[0].asInt());
 
         if (module_name.empty()) {
             throw RuntimeError("Empty module name");
@@ -516,7 +513,7 @@ namespace irgen {
 
 
     inline void GETATTR::emit(VM &vm) const {
-        const std::string attr_name = g_string_pool.get_string(operands[0].asInt());
+        const std::string& attr_name = g_string_pool.get_string(operands[0].asInt());
 
         Value obj = vm.op_stack.popValue();
         const Value& module_val = obj.deref();
@@ -537,7 +534,7 @@ namespace irgen {
     }
 
     inline void VEC_NEW::emit(VM &vm) const {
-        size_t element_count = static_cast<size_t>(operands[0].asInt());
+        const auto element_count = static_cast<size_t>(operands[0].asInt());
         std::vector<std::shared_ptr<Value>> elements;
         elements.reserve(element_count);
         
@@ -699,7 +696,7 @@ namespace irgen {
     }
 
     inline void LOAD_FAST::emit(VM &vm) const {
-        size_t slot_index = static_cast<size_t>(operands[0].asInt());
+        const auto slot_index = static_cast<size_t>(operands[0].asInt());
         LOG("LOAD_FAST: slot_index=" << slot_index);
         
         if (vm.locals_stack.empty()) {
@@ -720,7 +717,7 @@ namespace irgen {
     }
 
     inline void STORE_FAST::emit(VM &vm) const {
-        size_t slot_index = static_cast<size_t>(operands[0].asInt());
+        const auto slot_index = static_cast<size_t>(operands[0].asInt());
         LOG("STORE_FAST: slot_index=" << slot_index);
         
         if (vm.locals_stack.empty()) {
@@ -736,37 +733,37 @@ namespace irgen {
         locals[slot_index] = value;
     }
 
+    void BIND_FAST::emit(VM &vm) const {
+        const auto slot_index = static_cast<size_t>(operands[0].asInt());
+        const auto var_id = static_cast<size_t>(operands[1].asInt());
+
+        if (vm.locals_stack.empty() || vm.symbol_stack.empty()) {
+            throw RuntimeError("BIND_FAST: No scope available");
+        }
+
+        auto& locals = vm.locals_stack.back();
+        if (slot_index >= locals.size()) {
+            throw RuntimeError("BIND_FAST: slot index out of range");
+        }
+
+        Value& local = locals[slot_index];
+        std::shared_ptr<Value> value_ptr;
+        if (local.isReference()) {
+            value_ptr = local.asReference().value_ptr;
+        } else {
+            value_ptr = std::make_shared<Value>(local);
+            local = Value::makeRef(value_ptr);
+        }
+
+        vm.symbol_stack.back().set(var_id, value_ptr);
+        vm.symbol_stack.back().set_constant(var_id, false);
+        vm.cache.add(var_id, value_ptr);
+    }
+
     Value ModuleObject::import(const std::string& module_name) {
         auto existing = get_attr(module_name);
         if (existing.has_value()) {
             return *existing;
-        }
-
-        if (owner_vm && owner_vm->module_manager) {
-            auto compiler_module = owner_vm->module_manager->import_module(
-                lm::compiler::ModulePath(module_name));
-            
-            if (compiler_module) {
-                auto irgen_module = std::make_shared<ModuleObject>(
-                    compiler_module->name, owner_vm);
-                irgen_module->full_name = compiler_module->full_name;
-                
-                for (const auto& [name, value] : compiler_module->variables) {
-                    irgen_module->exports[name] = value;
-                }
-                for (const auto& [name, func] : compiler_module->functions) {
-                    irgen_module->exports[name] = Value(func);
-                }
-                for (const auto& [name, child] : compiler_module->children) {
-                    auto child_irgen = std::make_shared<ModuleObject>(
-                        child->name, owner_vm);
-                    child_irgen->full_name = child->full_name;
-                    irgen_module->submodules[name] = child_irgen;
-                }
-                
-                set_attr(module_name, Value(irgen_module));
-                return Value(irgen_module);
-            }
         }
 
         std::vector<std::string> path_components;
@@ -807,7 +804,7 @@ namespace irgen {
                 module_path /= path_components[i];
             }
             
-            std::string last_component = path_components.back();
+            const std::string& last_component = path_components.back();
             std::filesystem::path file_path = module_path / (last_component + ".lm");
             std::filesystem::path dir_path = module_path / last_component / "main.lm";
 
@@ -892,7 +889,7 @@ namespace irgen {
             target_vm.op_stack.clear();
             return result;
         }
-        return Value();
+        return {};
     }
 
     template <StringType string>
@@ -901,40 +898,40 @@ namespace irgen {
         owner_vm = new VM(codes);
         owner_vm->run();
         
-        for (const auto& [name, value] : owner_vm->main_module->exports) {
+        for (const auto& [expname, value] : owner_vm->main_module->exports) {
             if (value.isUserFunction()) {
                 value.asFunctionObject()->owner_vm = owner_vm;
             }
-            exports[name] = value;
+            exports[expname] = value;
         }
         
-        for (const auto& [name, submod] : owner_vm->main_module->submodules) {
-            submodules[name] = submod;
+        for (const auto& [modname, submod] : owner_vm->main_module->submodules) {
+            submodules[modname] = submod;
         }
     }
 }
 
-bool irgen::IteratorObject::next(irgen::Value& out) {
-    irgen::Value& iterable_ref = iterable->deref();
+bool irgen::IteratorObject::next(Value& out) {
+    Value& iterable_ref = iterable->deref();
     
     if (iterable_ref.isVector()) {
         auto& vec = iterable_ref.asVector();
         if (index < vec.size()) {
-            out = irgen::Value::makeRef(vec[index++]);
+            out = Value::makeRef(vec[index++]);
             return true;
         }
     } else if (iterable_ref.isString()) {
         const std::string& str = iterable_ref.asString();
         if (index < str.size()) {
-            out = irgen::Value(std::string(1, str[index++]));
+            out = Value(std::string(1, str[index++]));
             return true;
         }
     } else if (iterable_ref.isDictionary()) {
         auto& dict = iterable_ref.asDictionary();
         size_t i = 0;
-        for (const auto& [key, value] : dict) {
+        for (const auto &key: dict | std::views::keys) {
             if (i == index) {
-                out = irgen::Value::makeRef(key);
+                out = Value::makeRef(key);
                 index++;
                 return true;
             }
@@ -945,30 +942,30 @@ bool irgen::IteratorObject::next(irgen::Value& out) {
     return false;
 }
 
-inline void irgen::ITER_NEW::emit(irgen::VM &vm) const {
-    irgen::Value iterable = vm.op_stack.popValue();
-    auto iter_obj = std::make_shared<irgen::IteratorObject>(std::make_shared<irgen::Value>(std::move(iterable)));
-    vm.op_stack.push(irgen::Value(iter_obj));
+inline void irgen::ITER_NEW::emit(VM &vm) const {
+    Value iterable = vm.op_stack.popValue();
+    auto iter_obj = std::make_shared<irgen::IteratorObject>(std::make_shared<Value>(std::move(iterable)));
+    vm.op_stack.push(Value(iter_obj));
 }
 
-inline void irgen::ITER_NEXT::emit(irgen::VM &vm) const {
-    irgen::Value iter_val = vm.op_stack.popValue();
-    irgen::Value& iter_deref = iter_val.deref();
+inline void irgen::ITER_NEXT::emit(VM &vm) const {
+    Value iter_val = vm.op_stack.popValue();
+    Value& iter_deref = iter_val.deref();
     
-    if (iter_deref.getType() != irgen::Value::Type::Iterator) {
+    if (iter_deref.getType() != Value::Type::Iterator) {
         throw RuntimeError("ITER_NEXT requires an iterator object");
     }
     
     auto iter = iter_deref.asIterator();
-    irgen::Value result;
+    Value result;
     bool has_next = iter->next(result);
     
     vm.op_stack.push(iter_val);
     vm.op_stack.push(result);
-    vm.op_stack.push(irgen::Value(has_next));
+    vm.op_stack.push(Value(has_next));
 }
 
-inline void irgen::ITER_END::emit(irgen::VM &vm) const {
-    vm.op_stack.popValue();
+inline void irgen::ITER_END::emit(VM &vm) const {
+    vm.op_stack.pop();
 }
 

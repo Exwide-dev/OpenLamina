@@ -37,16 +37,13 @@ return s; \
 return std::format("{} {}", name(), stringArgs()); \
 }
 
-namespace lm::compiler {
-    class ModuleManager;
-}
-
 namespace irgen {
     class ModuleObject;
     class Value;
     class VM;
     struct IteratorObject;
 
+    // IR 指令前向声明（各指令的作用、用法与意义见下方对应 class 前的块注释）
     class PUSH;
     class ADD;
     class MUL;
@@ -87,6 +84,7 @@ namespace irgen {
     class RET_THEN_LEAVE_SCOPE;
     class LOAD_FAST;
     class STORE_FAST;
+    class BIND_FAST;
     class ITER_NEW;
     class ITER_NEXT;
     class ITER_END;
@@ -316,6 +314,7 @@ namespace irgen {
     template<typename T>
     concept FloatType = std::floating_point<T> and !std::same_as<T, bool> and !IntegerType<T>;
 
+    /** 所有可执行 IR 指令的联合体；VM::code 的元素类型。 */
     using Opcode = std::variant<
         PUSH,
         ADD,
@@ -337,6 +336,7 @@ namespace irgen {
         LOAD,
         LOAD_FAST,
         STORE_FAST,
+        BIND_FAST,
         LABEL,
         GOTO,
         GOTOIF,
@@ -1150,6 +1150,13 @@ return std::get<CppType>(data); \
         };
     };
 
+    /**
+     * ITER_NEW — 为 for-in 创建迭代器。
+     *
+     * 作用：弹出栈顶可迭代对象，构造 IteratorObject 并压回（保留原对象语义见 emit）。
+     * 何时使用：for 循环进入前、对每个绑定序列的迭代驱动。
+     * 意义：将 for-in 降维为「迭代器 + 条件跳转」模式，与 ITER_NEXT/ITER_END 成套。
+     */
     class ITER_NEW {
     public:
         COMMON(ITER_NEW)
@@ -1160,6 +1167,14 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * ITER_NEXT — 推进迭代并压入 (has_next, value)。
+     *
+     * 作用：弹出迭代器，若还有下一项则压入 true 与当前值，否则压入 false；
+     *       迭代器对象留在栈上供下一轮使用（具体栈序见 generator/emit）。
+     * 何时使用：循环体每次迭代开头、配合 GOTOIF 判断退出。
+     * 意义：统一字符串/向量等类型的遍历协议。
+     */
     class ITER_NEXT {
     public:
         COMMON(ITER_NEXT)
@@ -1170,6 +1185,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * ITER_END — 结束迭代，清理迭代器。
+     *
+     * 作用：弹出栈顶迭代器对象，释放/for 循环收尾。
+     * 何时使用：for 循环正常结束或 break 汇合后的清理点。
+     * 意义：与 ITER_NEW 配对，避免迭代状态泄漏到外层栈帧。
+     */
     class ITER_END {
     public:
         COMMON(ITER_END)
@@ -1507,7 +1529,19 @@ return std::get<CppType>(data); \
         }
     };
 
-    // 定义所有指令类（emit 只声明）
+    // -------------------------------------------------------------------------
+    // IR 指令类：栈式字节码，由 codegen 生成、VM::run 解释执行。
+    // 约定：二元运算与比较从栈顶弹出右操作数再左操作数；CALL 栈顶为可调用对象。
+    // -------------------------------------------------------------------------
+
+    /**
+     * PUSH — 将常量或函数对象压入操作数栈。
+     *
+     * 作用：operands[0] 为待压入的 Value（字面量、标签占位、FunctionObject 等）。
+     * 何时使用：字面量、函数体定义末尾把 FunctionObject 压栈以便装饰器 CALL、
+     *           或任何需要把已知值送入后续指令的场景。
+     * 意义：栈机的基础数据来源；对 FunctionObject 还会在首次 PUSH 时捕获闭包环境。
+     */
     class PUSH {
     public:
         COMMON(PUSH)
@@ -1520,6 +1554,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * ADD — 二元加法。
+     *
+     * 作用：弹出栈顶 b、次顶 a，将 a + b 压回（支持 Number 拼接与 String 连接）。
+     * 何时使用：加法表达式、字符串拼接的 IR  lowering。
+     * 意义：对应语言中的 + 运算符；类型规则在 Value::operator+ 中实现。
+     */
     class ADD {
     public:
         COMMON(ADD)
@@ -1530,6 +1571,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * MUL — 二元乘法。
+     *
+     * 作用：弹出 b、a，压入 a * b（大整数经 lammp::Number）。
+     * 何时使用：乘法表达式、部分代数化简路径。
+     * 意义：算术核心指令之一，与 SUB/DIV 成组。
+     */
     class MUL {
     public:
         COMMON(MUL)
@@ -1540,6 +1588,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * SUB — 二元减法。
+     *
+     * 作用：弹出 b、a，压入 a - b。
+     * 何时使用：减法表达式、循环/索引中的递减。
+     * 意义：算术指令；注意栈顺序为「次顶减栈顶」。
+     */
     class SUB {
     public:
         COMMON(SUB)
@@ -1550,6 +1605,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * DIV — 二元除法。
+     *
+     * 作用：弹出 b、a，压入 a / b（整数除法或 Number 语义由 Value 定义）。
+     * 何时使用：除法表达式。
+     * 意义：完成四则运算集；除零等行为在运行时 Value 层处理。
+     */
     class DIV {
     public:
         COMMON(DIV)
@@ -1560,6 +1622,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * NEG — 一元取负。
+     *
+     * 作用：弹出栈顶，压入其相反数。
+     * 何时使用：前缀 - 表达式。
+     * 意义：一元算术，与 NOT 等一元逻辑指令对称。
+     */
     class NEG {
     public:
         COMMON(NEG)
@@ -1570,6 +1639,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * DEREF — 解引用。
+     *
+     * 作用：若栈顶为 Reference，则替换为所指向的实际 Value；否则保持不变。
+     * 何时使用：读取变量值（LOAD / LOAD_FAST 之后）、需要 RVALUE 的表达式位置。
+     * 意义：区分「名字/槽位里的引用」与「参与运算的值」；赋值走 STORE 不经 DEREF。
+     */
     class DEREF {
     public:
         COMMON(DEREF)
@@ -1580,6 +1656,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * NOT — 逻辑非。
+     *
+     * 作用：弹出栈顶，压入布尔取反。
+     * 何时使用：前缀 ! 、条件取反。
+     * 意义：一元逻辑；与 AND/OR 配合构成短路逻辑的底层（若未在 AST 层短路）。
+     */
     class NOT {
     public:
         COMMON(NOT)
@@ -1590,6 +1673,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * AND — 逻辑与。
+     *
+     * 作用：弹出 b、a，压入 a && b 的布尔结果。
+     * 何时使用：&& 表达式（若未完全在 codegen 层短路）。
+     * 意义：布尔组合；实际短路可能由 GOTOIF 实现，本指令为直译版本。
+     */
     class AND {
     public:
         COMMON(AND)
@@ -1600,6 +1690,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * OR — 逻辑或。
+     *
+     * 作用：弹出 b、a，压入 a || b 的布尔结果。
+     * 何时使用：|| 表达式。
+     * 意义：与 AND 对称；控制流中的「或」也常配合 GOTOIF。
+     */
     class OR {
     public:
         COMMON(OR)
@@ -1610,6 +1707,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * EQ — 相等比较。
+     *
+     * 作用：弹出 b、a，压入 (a == b) 的布尔值。
+     * 何时使用：== 表达式、条件判断。
+     * 意义：比较指令族；类型相同时按 Value 相等语义比较。
+     */
     class EQ {
     public:
         COMMON(EQ)
@@ -1620,6 +1724,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * NEQ — 不等比较。
+     *
+     * 作用：弹出 b、a，压入 (a != b)。
+     * 何时使用：!= 表达式。
+     * 意义：与 EQ 互补，常用于循环与分支条件。
+     */
     class NEQ {
     public:
         COMMON(NEQ)
@@ -1630,6 +1741,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * LT — 小于比较。
+     *
+     * 作用：弹出 b、a，压入 (a < b)。
+     * 何时使用：< 表达式、排序与循环边界。
+     * 意义：有序类型（Number 等）上的关系运算。
+     */
     class LT {
     public:
         COMMON(LT)
@@ -1640,6 +1758,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * LTE — 小于等于比较。
+     *
+     * 作用：弹出 b、a，压入 (a <= b)。
+     * 何时使用：<= 表达式（如 fib、while 条件）。
+     * 意义：与 LT/GT/GTE 共同支持完整比较运算符集。
+     */
     class LTE {
     public:
         COMMON(LTE)
@@ -1650,6 +1775,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * GT — 大于比较。
+     *
+     * 作用：弹出 b、a，压入 (a > b)。
+     * 何时使用：> 表达式。
+     * 意义：关系运算；栈顺序与数学写法 a > b 一致（a 在次顶）。
+     */
     class GT {
     public:
         COMMON(GT)
@@ -1660,6 +1792,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * GTE — 大于等于比较。
+     *
+     * 作用：弹出 b、a，压入 (a >= b)。
+     * 何时使用：>= 表达式。
+     * 意义：比较族最后一个；常用于循环与范围判断。
+     */
     class GTE {
     public:
         COMMON(GTE)
@@ -1670,6 +1809,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * STORE — 通过引用槽写入变量。
+     *
+     * 作用：栈顶为 ref_slot，次顶为 data；将 data 写入 ref 指向的单元（遵守 const 约束）。
+     * 何时使用：模块级 let 赋值、NEW_VAR 后的首次绑定、BIND_FAST 前的中间步骤。
+     * 意义：实现「名字指向可变单元」；与 LOAD+DEREF 读路径成对。
+     */
     class STORE {
     public:
         COMMON(STORE)
@@ -1680,6 +1826,14 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * LOAD — 按名字加载变量引用。
+     *
+     * 作用：operands[0] 为变量名（编译后变为 string pool id）；在 cache、
+     *       symbol_stack（含闭包捕获层）、main_module 中查找，压入 Reference。
+     * 何时使用：读取模块/闭包变量、外层捕获的 fast 参数（经 BIND_FAST 注册后）。
+     * 意义：名字解析的运行时入口；读值需再跟 DEREF。
+     */
     class LOAD {
     public:
         COMMON(LOAD)
@@ -1692,6 +1846,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * LABEL — 跳转锚点（无运行时效果）。
+     *
+     * 作用：在 label_table 中登记当前 PC，供 GOTO/GOTOIF 解析目标。
+     * 何时使用：函数体入口、循环头/尾、if 分支汇合点、跳过函数体定义。
+     * 意义：将控制流与线性指令序列分离；scan_labels 在 run 前填充表。
+     */
     class LABEL {
     public:
         COMMON(LABEL)
@@ -1710,6 +1871,13 @@ return std::get<CppType>(data); \
         void set_label(VM &vm, std::optional<size_t> on = std::nullopt) const;
     };
 
+    /**
+     * GOTO — 无条件跳转。
+     *
+     * 作用：将 PC 设为 label_table[label_id]。
+     * 何时使用：跳过函数体、循环回边、if 结束汇合、程序初始化跳转到 main 段。
+     * 意义：结构化控制流编译后的基本块连接手段。
+     */
     class GOTO {
     public:
         COMMON(GOTO)
@@ -1726,6 +1894,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * GOTOIF — 条件为真时跳转。
+     *
+     * 作用：弹出栈顶条件；若为真则跳到 label_id，否则 fall-through。
+     * 何时使用：if/while/for 分支、短路逻辑、循环退出判断。
+     * 意义：控制流核心；将布尔结果转为 PC 变更。
+     */
     class GOTOIF {
     public:
         COMMON(IFTRUEGOTO)
@@ -1742,6 +1917,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * ENTER_SCOPE — 进入词法作用域。
+     *
+     * 作用：在 symbol_stack 与 locals_stack 各压入一层新表，cache 进入子作用域。
+     * 何时使用：函数体、块语句、需要隔离局部绑定的区域。
+     * 意义：支撑嵌套作用域与 fast 局部槽；与 LEAVE_SCOPE 成对。
+     */
     class ENTER_SCOPE {
     public:
         COMMON(ENTER_SCOPE)
@@ -1752,6 +1934,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * LEAVE_SCOPE — 离开词法作用域。
+     *
+     * 作用：弹出 symbol_stack 与 locals_stack 栈顶一层，cache 离开子作用域。
+     * 何时使用：块结束、函数 RET 之后（或 RET_THEN_LEAVE_SCOPE 内）。
+     * 意义：释放本层绑定；闭包已捕获的环境不受此弹出影响（在 closure 向量中）。
+     */
     class LEAVE_SCOPE {
     public:
         COMMON(LEAVE_SCOPE)
@@ -1762,6 +1951,15 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * CALL — 调用函数。
+     *
+     * 作用：栈顶为 callable；弹出实参（个数由 operands 指定）后执行。
+     *       用户函数：压入闭包 scope、跳转至 FunctionObject::location；
+     *       内建函数：直接 C++ 回调并压回返回值。
+     * 何时使用：调用表达式、装饰器包装（decos.log(func)）、方法调用链末端。
+     * 意义：执行模型中心；连接 codegen 与运行时 builtins/UserFunction。
+     */
     class CALL {
     public:
         COMMON(CALL)
@@ -1779,6 +1977,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * RET — 从用户函数返回。
+     *
+     * 作用：栈顶（或约定位置）为返回值；恢复 call_stack 中的 PC，弹出闭包 scope。
+     * 何时使用：return 语句、do 表达式返回内部函数对象（无 LEAVE 的 RET）。
+     * 意义：与用户函数 CALL 配对；内建函数通常不经过 RET。
+     */
     class RET {
     public:
         COMMON(RET)
@@ -1789,6 +1994,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm);
     };
 
+    /**
+     * FINDMOD — 按名导入/查找子模块。
+     *
+     * 作用：operands[0] 为模块名字符串；通过 main_module->import 加载 .lm 并压入 ModuleObject。
+     * 何时使用：import 语句、访问 std 等子模块前的模块解析（若 codegen 生成）。
+     * 意义：模块系统的运行时链接点；与 GETATTR 组合实现 std.decos.log 等路径。
+     */
     class FINDMOD {
     public:
         COMMON(FINDMOD)
@@ -1798,10 +2010,16 @@ return std::get<CppType>(data); \
             operands.emplace_back(val);
         };
 
-        void emit(VM &vm);
+        void emit(VM &vm) const;
     };
 
-
+    /**
+     * GETATTR — 读取对象属性。
+     *
+     * 作用：栈顶为对象（Module、字典等），弹出后按属性名取成员并压栈。
+     * 何时使用：后缀 .name、模块成员访问（如 std.decos）。
+     * 意义：面向对象/模块访问的 IR 原语；名字在 operands 中（编译期入 string pool）。
+     */
     class GETATTR {
     public:
         COMMON(GETATTR)
@@ -1814,6 +2032,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * VEC_NEW — 构造向量字面量。
+     *
+     * 作用：从栈上弹出 n 个元素（操作数指定个数），组装 Vector 并压回。
+     * 何时使用：向量字面量 [a, b, c] 的 codegen。
+     * 意义：复合字面量构造；元素顺序与栈弹出顺序相反需注意。
+     */
     class VEC_NEW {
     public:
         COMMON(VEC_NEW)
@@ -1826,6 +2051,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * DICT_NEW — 构造字典字面量。
+     *
+     * 作用：从栈上弹出成对的 key/value（个数由操作数指定），构建 Dictionary。
+     * 何时使用：字典字面量 { k: v, ... }。
+     * 意义：与 VEC_NEW 类似，为聚合类型提供统一构造指令。
+     */
     class DICT_NEW {
     public:
         COMMON(DICT_NEW)
@@ -1838,6 +2070,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * INDEX — 下标/索引访问。
+     *
+     * 作用：弹出 index、container，将 container[index] 压栈（向量、字符串等）。
+     * 何时使用：a[i]、字符串字符访问（若语言支持）。
+     * 意义：随机访问原语；赋值到索引若支持则需另配 STORE 变体或专用指令。
+     */
     class INDEX {
     public:
         COMMON(INDEX)
@@ -1848,6 +2087,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * STORE_ARG — 向当前作用域写入命名参数/变量（直接值）。
+     *
+     * 作用：弹出栈顶值，按变量 id 写入 symbol_stack 顶层（非引用槽模式）。
+     * 何时使用：特定参数绑定路径、与模块加载相关的符号初始化（较少见）。
+     * 意义：区别于 STORE（经 ref）的另一种绑定方式；具体语义见 emit 实现。
+     */
     class STORE_ARG {
     public:
         COMMON(STORE_ARG)
@@ -1860,6 +2106,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * NEW_VAR — 在当前作用域创建可变变量引用槽。
+     *
+     * 作用：分配空 Reference，注册到 symbol_stack，并将 ref 压栈供后续 STORE。
+     * 何时使用：模块级 let、export 函数名绑定（func 声明后的 STORE）。
+     * 意义：名字与存储分离；赋值必须先 NEW_VAR（或 OR_LOAD）再 STORE。
+     */
     class NEW_VAR {
     public:
         COMMON(NEW_VAR)
@@ -1872,6 +2125,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * NEW_CONST — 在当前作用域创建常量引用槽。
+     *
+     * 作用：与 NEW_VAR 类似，但标记为 constant，后续 STORE 若已有值可拒绝修改。
+     * 何时使用：const 声明、不可重新绑定的模块级名字。
+     * 意义：在运行时保留「只赋一次」的约束，配合 STORE 的 const 检查。
+     */
     class NEW_CONST {
     public:
         COMMON(NEW_CONST)
@@ -1884,6 +2144,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * NEW_INTERN_VAR — 在函数/块内创建内部可变绑定。
+     *
+     * 作用：在当前 ENTER_SCOPE 层注册 intern 变量 ref，并压栈 ref。
+     * 何时使用：函数内 let、for 循环迭代器槽位名、需在 symbol 表可见的 intern 名。
+     * 意义：桥接 fast 局部与名字查找；常与 LOAD/STORE 或循环 IR 配合。
+     */
     class NEW_INTERN_VAR {
     public:
         COMMON(NEW_INTERN_VAR)
@@ -1896,6 +2163,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * NEW_INTERN_CONST — 在函数/块内创建内部常量绑定。
+     *
+     * 作用：同 NEW_INTERN_VAR，但 constants 标记为 true。
+     * 何时使用：块内 const、循环中不可改的迭代名（若语言区分）。
+     * 意义：作用域内常量语义与模块级 NEW_CONST 一致，层级更浅。
+     */
     class NEW_INTERN_CONST {
     public:
         COMMON(NEW_INTERN_CONST)
@@ -1908,6 +2182,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * NEW_VAR_OR_LOAD — 若已存在则加载引用，否则创建新变量。
+     *
+     * 作用：在 cache/symbol 中查找名字；找到则压入已有 ref，未找到则创建并注册。
+     * 何时使用：赋值语句左侧（可能首次赋值）、需要「读-改-写」同一名字的场景。
+     * 意义：统一首次定义与后续赋值的路径，简化 AssignNode 的 codegen。
+     */
     class NEW_VAR_OR_LOAD {
     public:
         COMMON(NEW_VAR_OR_LOAD)
@@ -1920,6 +2201,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * RET_THEN_LEAVE_SCOPE — 返回并弹出当前作用域。
+     *
+     * 作用：依次执行 RET 与 LEAVE_SCOPE（函数 return 的标准尾声）。
+     * 何时使用：带返回值的 func 声明体结束、需要同时归还调用方并销毁函数帧。
+     * 意义：避免忘记 LEAVE_SCOPE 导致 symbol/locals 泄漏；do 返回用裸 RET 即可。
+     */
     class RET_THEN_LEAVE_SCOPE {
     public:
         COMMON(RET_THEN_LEAVE_SCOPE)
@@ -1930,6 +2218,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * LOAD_FAST — 按槽位读取当前帧局部变量。
+     *
+     * 作用：从 locals_stack 顶层按 slot_index 取值，以 Reference 形式压栈（非 ref 则包装）。
+     * 何时使用：函数参数、块内 let、当前帧内的 VarRef（非闭包捕获的外层名）。
+     * 意义：O(1) 局部访问；闭包捕获的外层变量应走 LOAD(name)+DEREF 而非本指令。
+     */
     class LOAD_FAST {
     public:
         COMMON(LOAD_FAST)
@@ -1942,6 +2237,13 @@ return std::get<CppType>(data); \
         void emit(VM &vm) const;
     };
 
+    /**
+     * STORE_FAST — 按槽位写入当前帧局部变量。
+     *
+     * 作用：弹出栈顶值写入 locals_stack 顶层的 slot_index。
+     * 何时使用：参数接收（CALL 后）、let 初始化、for 循环迭代变量更新。
+     * 意义：函数帧的主力存储；参数绑定后常跟 BIND_FAST 以支持闭包与 LOAD 按名查找。
+     */
     class STORE_FAST {
     public:
         COMMON(STORE_FAST)
@@ -1949,6 +2251,27 @@ return std::get<CppType>(data); \
 
         explicit STORE_FAST(size_t slot_index) {
             operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+        }
+
+        void emit(VM &vm) const;
+    };
+
+    /**
+     * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定。
+     *
+     * 作用：把 locals_stack 某槽与 symbol_stack 顶层的 var_id 指向同一 ref 单元
+     *       （非 ref 槽会先包装为 ref 再注册）。
+     * 何时使用：函数参数 STORE_FAST 之后、需要被闭包捕获或 LOAD(name) 的外层局部。
+     * 意义：弥合「帧槽」与「名字+闭包」两套模型；无此指令则闭包只能捕获模块级符号。
+     */
+    class BIND_FAST {
+    public:
+        COMMON(BIND_FAST)
+        std::vector<Value> operands;
+
+        BIND_FAST(size_t slot_index, const std::string& name) {
+            operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+            operands.emplace_back(name);
         }
 
         void emit(VM &vm) const;
@@ -2061,8 +2384,7 @@ return std::get<CppType>(data); \
         std::unordered_map<size_t, size_t> label_table{};   ///< 标签位置表
         size_t pc = 0;                                      ///< 程序计数器
         size_t label_counter = 0;                           ///< 标签计数器
-        std::shared_ptr<ModuleObject> main_module;          ///< 主模块
-        lm::compiler::ModuleManager* module_manager = nullptr; ///< 模块管理器指针
+        std::shared_ptr<ModuleObject> main_module;          ///< 主模块（全局命名空间与 import 根）
 
         /**
          * @brief 初始化内置函数

@@ -1,10 +1,11 @@
 #pragma once
 #include <functional>
-#include <iostream>
 #include <stack>
 #include <string>
 
 #include "irgen/opcode.hpp"
+#include "../front-end/repl_session.hpp"
+#include "../../tools/utf8_io.hpp"
 
 namespace repl {
 
@@ -15,6 +16,7 @@ namespace repl {
 class REPL {
 public:
     irgen::VM vm{}; ///< 虚拟机实例
+    lmx::ReplSession parse_session{"<repl>"}; ///< 增量解析会话（保持行号与源码行）
     
     /**
      * @brief 默认构造函数
@@ -42,9 +44,7 @@ public:
      */
     ExecResult exec_input(
         const std::function<std::string()> &input_func = []() -> std::string {
-            std::string line;
-            std::getline(std::cin, line);
-            return line;
+            return lm::utf8_io::read_line_utf8();
         }
     );
 

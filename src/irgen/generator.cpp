@@ -38,6 +38,10 @@ bool iterableDependsOnPriorVars(const lmx::ExprNode* iterable,
     return false;
 }
 
+void emit_bind_fast(std::vector<::irgen::Opcode>& code, const size_t slot, const std::string& name) {
+    code.emplace_back(::irgen::BIND_FAST(slot, name));
+}
+
 } // namespace
 
 namespace lm::irgen {
@@ -153,16 +157,20 @@ namespace lm::irgen {
                 }
             }
             
+            bool use_closure_load = false;
             if (found_in_local) {
-                size_t current_depth = local_scope_stack.size() - 1;
                 if (!func_context_stack.empty()) {
-                    size_t func_depth = func_context_stack.back().func_depth;
+                    const size_t func_depth = func_context_stack.back().func_depth;
                     if (define_depth < func_depth) {
                         func_context_stack.back().needs_closure = true;
+                        use_closure_load = true;
                     }
                 }
-                code.emplace_back(::irgen::LOAD_FAST(slot));
-            } else {
+                if (!use_closure_load) {
+                    code.emplace_back(::irgen::LOAD_FAST(slot));
+                }
+            }
+            if (!found_in_local || use_closure_load) {
                 code.emplace_back(::irgen::LOAD(var_name));
             }
             // 读取变量值：LOAD 压入引用槽，DEREF 解引用为实际值（赋值走 AssignNode，不经此处）
@@ -207,6 +215,7 @@ namespace lm::irgen {
                     code.emplace_back(::irgen::PUSH(::irgen::Value()));
                 }
                 code.emplace_back(::irgen::STORE_FAST(slot));
+                emit_bind_fast(code, slot, var_decl_node->name);
             } else {
                 if (var_decl_node->init) {
                     auto init_code = gen_code(var_decl_node->init, loop_stack, local_scope_stack, func_context_stack);
@@ -285,8 +294,9 @@ namespace lm::irgen {
 
             for (size_t i = 0; i < func_decl_node->params.size(); ++i) {
                 const auto& param = func_decl_node->params[i];
-                auto slot = func_scope.get_slot(param).value();
+                const auto slot = func_scope.get_slot(param).value();
                 code.emplace_back(::irgen::STORE_FAST(slot));
+                emit_bind_fast(code, slot, param);
             }
 
             if (func_decl_node->body) {
@@ -350,8 +360,9 @@ namespace lm::irgen {
 
             for (size_t i = 0; i < do_func_node->params.size(); ++i) {
                 const auto& param = do_func_node->params[i];
-                auto slot = func_scope.get_slot(param).value();
+                const auto slot = func_scope.get_slot(param).value();
                 code.emplace_back(::irgen::STORE_FAST(slot));
+                emit_bind_fast(code, slot, param);
             }
 
             if (do_func_node->body) {
@@ -548,8 +559,8 @@ namespace lm::irgen {
             std::string store_name = import_node->alias.empty()
                 ? import_node->module_name.back()
                 : import_node->alias;
-            code.emplace_back(::irgen::NEW_VAR(store_name));
             code.emplace_back(::irgen::FINDMOD(::irgen::Value(full_module_name)));
+            code.emplace_back(::irgen::NEW_VAR(store_name));
             code.emplace_back(::irgen::STORE());
         } else if (node->kind == lmx::ASTNodeType::Use) {
             const auto* use_node = dynamic_cast<lmx::UseNode*>(node);

@@ -1,6 +1,7 @@
 #include "parser.hpp"
 #include "../../tools/debug.hpp"
 #include "../../tools/error.hpp"
+#include <format>
 #include <iomanip>
 #include <iostream>
 
@@ -9,27 +10,47 @@ namespace lmx {
 Parser::Parser(std::string filename)
     : filename(std::move(filename)) {}
 
+void Parser::append_source_lines(const std::string& source) {
+    if (source.empty()) {
+        return;
+    }
+    std::istringstream iss(source);
+    std::string line_str;
+    while (std::getline(iss, line_str)) {
+        source_lines.push_back(line_str);
+    }
+}
+
+void Parser::set_source_lines(const std::string& source) {
+    source_lines.clear();
+    append_source_lines(source);
+}
+
 void Parser::add_tokens(std::vector<Token> toks, const std::string& source) {
     tokens.insert(tokens.end(), toks.begin(), toks.end());
-    
-    if (!source.empty()) {
-        std::istringstream iss(source);
-        std::string line_str;
-        while (std::getline(iss, line_str)) {
-            source_lines.push_back(line_str);
-        }
-    } else {
+    append_source_lines(source);
+
+    if (source.empty()) {
         int max_line = 0;
         for (const auto& tok : toks) {
             if (tok.line > max_line) {
                 max_line = tok.line;
             }
         }
-        
+
         if (max_line > static_cast<int>(source_lines.size())) {
             source_lines.resize(max_line);
         }
     }
+}
+
+void Parser::append_tokens(std::vector<Token> toks, const std::string& source) {
+    if (!tokens.empty() && tokens.back().type == TokenType::END) {
+        tokens.pop_back();
+    }
+    current_pos = tokens.size();
+
+    add_tokens(std::move(toks), source);
 }
 
 std::string Parser::getTokenTypeName(const TokenType type) {
@@ -291,7 +312,8 @@ ASTNode* Parser::parseStatement() {
         return parseAssignStmt();
     }
 
-    if (current == TokenType::KW_FUNC) {
+    if (current == TokenType::KW_FUNC || current == TokenType::KW_WITH ||
+        looksLikeDecoratedFuncDecl()) {
         return parseFuncDecl();
     }
 
@@ -360,7 +382,22 @@ ASTNode* Parser::parseStatement() {
     
     LOG("Nothing matched, token type: " << static_cast<size_t>(current));
     Token tok = current_token();
-    throw_error_at("unexpected token: " + (tok.value.empty() ? getTokenTypeName(tok.type) : "'" + tok.value + "'"), tok);
+    std::string token_label;
+    if (tok.value.empty()) {
+        token_label = getTokenTypeName(tok.type);
+    } else if (tok.type == TokenType::MISMATCH) {
+        token_label = "invalid UTF-8 or character (bytes: ";
+        for (unsigned char b : tok.value) {
+            token_label += std::format("{:02X} ", b);
+        }
+        if (!tok.value.empty()) {
+            token_label.pop_back();
+        }
+        token_label += ")";
+    } else {
+        token_label = "'" + tok.value + "'";
+    }
+    throw_error_at("unexpected token: " + token_label, tok);
     return nullptr;
 }
 
@@ -401,14 +438,39 @@ ASTNode* Parser::parseAssignStmt() {
     return new AssignNode(left, right);
 }
 
+bool Parser::looksLikeDecoratedFuncDecl() {
+    if (isAtEnd() || check(TokenType::KW_FUNC)) {
+        return false;
+    }
+
+    const TokenType start = current_token().type;
+    if (start != TokenType::IDENTIFIER && start != TokenType::LPAREN &&
+        start != TokenType::STRING_LITERAL) {
+        return false;
+    }
+
+    const ParserState saved = save_state();
+    parsePostfixExpr();
+    const bool is_decorated = check(TokenType::KW_FUNC);
+    restore_state(saved);
+    return is_decorated;
+}
+
 ASTNode* Parser::parseFuncDecl() {
     LOG("Parsing func_decl");
     std::vector<ExprNode*> decorators;
-    
+
     if (check(TokenType::KW_WITH)) {
         decorators = parseWithDecoratorList();
+        if (check(TokenType::KW_MAKE)) {
+            consume(TokenType::KW_MAKE);
+        }
+    } else if (!check(TokenType::KW_FUNC)) {
+        while (!check(TokenType::KW_FUNC)) {
+            decorators.push_back(parsePostfixExpr());
+        }
     }
-    
+
     consume(TokenType::KW_FUNC);
     std::string name = current_token().value;
     consume(TokenType::IDENTIFIER);

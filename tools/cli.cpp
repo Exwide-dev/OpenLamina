@@ -3,6 +3,7 @@
 #include "front-end/front_end.hpp"
 #include "irgen/generator.hpp"
 #include "repl/repl.hpp"
+#include "utf8_io.hpp"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -43,9 +44,8 @@ namespace cli {
                 return 1;
             }
 
-            std::string source((std::istreambuf_iterator(file)),
-                             std::istreambuf_iterator<char>());
             file.close();
+            const std::string source = lm::utf8_io::read_file_utf8(file_path);
 
             lmx::ProgramASTNode* ast = parse(source, file_path);
             if (!ast) {
@@ -141,6 +141,8 @@ Contact OpenLamina-Developing for more information)",
     std::cout << welcome << std::endl;
     std::cout << std::endl;
 
+    lm::utf8_io::init_stdio_utf8();
+
     repl::REPL repl_instance;
     bool needs_more_input = false;
     int line_number = 1;
@@ -171,6 +173,7 @@ Contact OpenLamina-Developing for more information)",
 
             repl_instance.vm.pc = repl_instance.vm.code.size();
             repl_instance.vm.traceback.clear();
+            repl_instance.vm.op_stack.clear();
             needs_more_input = false;
             line_number++;
         } catch (const SyntaxError& e) {

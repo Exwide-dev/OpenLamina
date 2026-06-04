@@ -1,9 +1,11 @@
 #include "lexer.hpp"
+#include "utf8.hpp"
 
 #include <iostream>
-#include <utility>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
+#include <utility>
 
 #include "../../tools/error.hpp"
 #include "../../tools/debug.hpp"
@@ -24,6 +26,47 @@ void Lexer::add_input(const std::string& source) {
     while (std::getline(iss, line_str)) {
         source_lines.push_back(line_str);
     }
+}
+
+void Lexer::skipBom() {
+    if (pos != 0) {
+        return;
+    }
+    const size_t bom = utf8::bom_length(full_source);
+    if (bom > 0) {
+        pos = bom;
+        column = 1;
+    }
+}
+
+bool Lexer::identifierStartsHere() const {
+    return utf8::identifier_start_at(full_source, pos);
+}
+
+bool Lexer::identifierContinuesHere() const {
+    return utf8::identifier_continue_at(full_source, pos);
+}
+
+size_t Lexer::consumeCodepoint() {
+    if (isAtEnd()) {
+        return 0;
+    }
+
+    const auto decoded = utf8::decode(full_source, pos);
+    if (!decoded.ok) {
+        consumeChar();
+        return 1;
+    }
+
+    if (decoded.codepoint == '\n') {
+        line++;
+        column = 1;
+    } else {
+        column++;
+    }
+
+    pos += decoded.bytes;
+    return decoded.bytes;
 }
 
 std::string Lexer::getTokenTypeName(const TokenType type) {
@@ -117,11 +160,11 @@ char Lexer::peekChar() const {
 }
 
 char Lexer::consumeChar() {
-    char c = full_source[pos++];
+    const char c = full_source[pos++];
     if (c == '\n') {
         line++;
         column = 1;
-    } else {
+    } else if (static_cast<unsigned char>(c) < 0x80) {
         column++;
     }
     return c;
@@ -131,42 +174,47 @@ Token Lexer::parseString() {
     std::string value;
     const int start_line = line;
     const int start_col = column;
-    
+
     consumeChar();
-    
+
     while (!isAtEnd() && peekChar() != '"') {
         if (peekChar() == '\\') {
             consumeChar();
             if (!isAtEnd()) {
                 switch (peekChar()) {
-                    case 'n': value += '\n'; break;
-                    case 't': value += '\t'; break;
-                    case 'r': value += '\r'; break;
-                    case '"': value += '"'; break;
-                    case '\\': value += '\\'; break;
-                    default: value += peekChar(); break;
+                    case 'n': value += '\n'; consumeChar(); break;
+                    case 't': value += '\t'; consumeChar(); break;
+                    case 'r': value += '\r'; consumeChar(); break;
+                    case '"': value += '"'; consumeChar(); break;
+                    case '\\': value += '\\'; consumeChar(); break;
+                    default: {
+                        const size_t before = pos;
+                        consumeCodepoint();
+                        value.append(full_source, before, pos - before);
+                        break;
+                    }
                 }
-                consumeChar();
             }
         } else if (peekChar() == '\n') {
             return {TokenType::MISMATCH, value, start_line, start_col};
         } else {
-            value += consumeChar();
+            const size_t before = pos;
+            consumeCodepoint();
+            value.append(full_source, before, pos - before);
         }
     }
-    
+
     if (isAtEnd()) {
-        std::cerr << "End!" << std::endl;
         return {TokenType::MISMATCH, value, start_line, start_col};
     }
-    
+
     consumeChar();
     return {TokenType::STRING_LITERAL, value, start_line, start_col};
 }
 
 Token Lexer::parseNewline() {
-    int start_line = line;
-    int start_col = column;
+    const int start_line = line;
+    const int start_col = column;
     consumeChar();
     return Token(TokenType::NEWLINE, "\n", start_line, start_col);
 }
@@ -175,11 +223,13 @@ Token Lexer::parseIdentifierOrKeyword() {
     const int start_line = line;
     const int start_col = column;
     std::string value;
-    
-    while (!isAtEnd() && (isLetter(peekChar()) || isDigit(peekChar()))) {
-        value += consumeChar();
+
+    while (!isAtEnd() && identifierContinuesHere()) {
+        const size_t before = pos;
+        consumeCodepoint();
+        value.append(full_source, before, pos - before);
     }
-    
+
     static const std::unordered_map<std::string, TokenType> keywords = {
         {"let", TokenType::KW_LET},
         {"func", TokenType::KW_FUNC},
@@ -209,61 +259,86 @@ Token Lexer::parseIdentifierOrKeyword() {
     if (it != keywords.end()) {
         return {it->second, value, start_line, start_col};
     }
-    
+
     return {TokenType::IDENTIFIER, value, start_line, start_col};
 }
 
 Token Lexer::tryMatchPatterns() {
     const int start_line = line;
     const int start_col = column;
-    
-    std::vector<TokenPattern> patterns = initPatterns();
-    std::smatch match;
-    
-    for (const auto& pattern : patterns) {
-        std::string remaining(full_source.substr(pos));
-        if (std::regex_search(remaining, match, pattern.regex)) {
-            if (match.position() == 0) {
-                const std::string matched = match.str();
-                for (size_t i = 0; i < matched.length(); ++i) {
-                    consumeChar();
-                }
-                return {pattern.type, matched, start_line, start_col};
-            }
-        }
-    }
-    
-    if (isLetter(peekChar())) {
+
+    if (identifierStartsHere()) {
         return parseIdentifierOrKeyword();
     }
-    
-    if (isDigit(peekChar())) {
+
+    struct Candidate {
+        TokenType type;
+        std::string value;
+        size_t length = 0;
+    };
+    std::optional<Candidate> best;
+
+    const std::string remaining(full_source.substr(pos));
+    for (const auto& pattern : initPatterns()) {
+        const LexerState saved = save_state();
+        std::smatch match;
+        if (std::regex_search(remaining, match, pattern.regex) && match.position() == 0) {
+            const std::string matched = match.str();
+            if (!best || matched.length() > best->length) {
+                best = Candidate{pattern.type, matched, matched.length()};
+            }
+        }
+        restore_state(saved);
+    }
+
+    if (best) {
+        for (size_t i = 0; i < best->length; ++i) {
+            consumeChar();
+        }
+        return {best->type, best->value, start_line, start_col};
+    }
+
+    if (utf8::ascii_digit_at(full_source, pos)) {
         LOG("Find num");
         std::string value;
-        while (!isAtEnd() && isDigit(peekChar())) {
-            value += consumeChar();
+        while (!isAtEnd() && utf8::ascii_digit_at(full_source, pos)) {
+            const size_t before = pos;
+            consumeCodepoint();
+            value.append(full_source, before, pos - before);
         }
         return {TokenType::NUM_LITERAL, value, start_line, start_col};
     }
-    
-    const char c = consumeChar();
-    return {TokenType::MISMATCH, std::string(1, c), start_line, start_col};
+
+    if (!isAtEnd()) {
+        const size_t before = pos;
+        const auto decoded = utf8::decode(full_source, pos);
+        if (decoded.ok) {
+            consumeCodepoint();
+            std::string bad(full_source, before, pos - before);
+            return {TokenType::MISMATCH, bad, start_line, start_col};
+        }
+        const char c = consumeChar();
+        return {TokenType::MISMATCH, std::string(1, c), start_line, start_col};
+    }
+
+    return {TokenType::MISMATCH, "", start_line, start_col};
 }
 
 std::vector<Token> Lexer::tokenize() {
+    skipBom();
     std::vector<Token> tokens;
-    
+
     while (!isAtEnd()) {
         while (!isAtEnd() && isWhitespace(peekChar())) {
             consumeChar();
         }
-        
+
         if (isAtEnd()) {
             break;
         }
-        
-        char c = peekChar();
-        
+
+        const char c = peekChar();
+
         if (c == '"') {
             tokens.push_back(parseString());
         } else if (c == '\n') {
@@ -272,9 +347,8 @@ std::vector<Token> Lexer::tokenize() {
             tokens.push_back(tryMatchPatterns());
         }
     }
-    
+
     tokens.emplace_back(TokenType::END, "", line, column);
-    
     return tokens;
 }
 
@@ -283,24 +357,26 @@ void Lexer::add_error(const std::string& message) {
 }
 
 std::vector<Token> Lexer::lex_rest() {
+    skipBom();
+    clear_errors();
     std::vector<Token> tokens;
-    
+
     while (!isAtEnd()) {
         while (!isAtEnd() && isWhitespace(peekChar())) {
             consumeChar();
         }
-        
+
         if (isAtEnd()) {
             break;
         }
-        
-        char c = peekChar();
-        
+
+        const char c = peekChar();
+
         if (c == '"') {
             Token tok = parseString();
             tokens.push_back(tok);
             if (tok.type == TokenType::MISMATCH) {
-                add_error("Unclosed string literal");
+                add_error("Unclosed or invalid string literal");
             }
         } else if (c == '\n') {
             tokens.push_back(parseNewline());
@@ -312,20 +388,20 @@ std::vector<Token> Lexer::lex_rest() {
             }
         }
     }
-    
+
     tokens.emplace_back(TokenType::END, "", line, column);
-    
+
     if (!errors.empty()) {
         std::string error_msg;
         for (const auto& err : errors) {
             if (!error_msg.empty()) error_msg += "\n";
-            error_msg += "Lexer error at line " + std::to_string(err.line) + 
+            error_msg += "Lexer error at line " + std::to_string(err.line) +
                          ", column " + std::to_string(err.column) + ": " + err.message;
         }
         throw SyntaxError(error_msg);
     }
-    
+
     return tokens;
 }
 
-}
+} // namespace lmx

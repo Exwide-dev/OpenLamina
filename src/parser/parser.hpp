@@ -37,6 +37,15 @@ public:
      * @param source 源代码字符串
      */
     void add_tokens(std::vector<Token> toks, const std::string& source = "");
+
+    /**
+     * @brief 追加 token（用于 REPL 增量解析；会移除末尾 END 并接上新区块）
+     */
+    void append_tokens(std::vector<Token> toks, const std::string& source = "");
+
+    void append_source_lines(const std::string& source);
+
+    void set_source_lines(const std::string& source);
     
     /**
      * @brief 开始解析，生成程序 AST
@@ -68,6 +77,23 @@ private:
     std::vector<Token> tokens;      ///< token 列表
     std::vector<ParserContext> context_stack; ///< 上下文栈
     size_t current_pos = 0;         ///< 当前解析位置
+    
+    /**
+     * @brief 解析器快照，用于预测分析时的状态保存与回退
+     */
+    struct ParserState {
+        size_t token_pos = 0;
+        std::vector<ParserContext> contexts;
+    };
+    
+    [[nodiscard]] ParserState save_state() const {
+        return {current_pos, context_stack};
+    }
+    
+    void restore_state(const ParserState& state) {
+        current_pos = state.token_pos;
+        context_stack = state.contexts;
+    }
     
     /**
      * @brief 压入上下文
@@ -190,6 +216,11 @@ private:
      * @return 函数声明节点
      */
     ASTNode* parseFuncDecl();
+
+    /**
+     * @brief 判断当前位置是否为「装饰器表达式 + func」形式（如 std.decos.log func f）
+     */
+    [[nodiscard]] bool looksLikeDecoratedFuncDecl();
     
     /**
      * @brief 解析返回语句

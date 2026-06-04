@@ -7,6 +7,7 @@
 #include "../lexer/lexer.hpp"
 #include "../parser/parser.hpp"
 #include "../../tools/error.hpp"
+#include "../../tools/utf8_io.hpp"
 
 std::string detail_msg;
 
@@ -14,8 +15,10 @@ lmx::ProgramASTNode* parse(const std::string &source, const std::string& filenam
     LOG("\nfront-end Parsing...\n");
     
     try {
+        const std::string utf8_source = lm::utf8_io::normalize_to_utf8(source);
+
         lmx::Lexer lexer(filename);
-        lexer.add_input(source);
+        lexer.add_input(utf8_source);
         std::vector<lmx::Token> tokens = lexer.tokenize();
         
         for (const auto& tok : tokens) {
@@ -29,7 +32,7 @@ lmx::ProgramASTNode* parse(const std::string &source, const std::string& filenam
         }
         
         lmx::Parser parser(filename);
-        parser.add_tokens(tokens, source);
+        parser.add_tokens(tokens, utf8_source);
         
         lmx::ProgramASTNode* result = parser.parse();
         

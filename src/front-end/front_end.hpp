@@ -21,3 +21,7 @@ lmx::ProgramASTNode* parse(const std::string &source);
  * @return 程序AST根节点
  */
 lmx::ProgramASTNode* parse(const std::string &source, const std::string& filename);
+
+namespace lmx {
+class ReplSession;
+}
