@@ -12,7 +12,7 @@ extern std::string detail_msg;
  * @param source 源代码字符串
  * @return 程序AST根节点
  */
-lmx::ProgramASTNode* parse(const std::string &source);
+lmx::ProgramASTNode* parse(const std::string& source);
 
 /**
  * @brief 解析源代码字符串（带文件名）
@@ -20,7 +20,7 @@ lmx::ProgramASTNode* parse(const std::string &source);
  * @param filename 源文件名
  * @return 程序AST根节点
  */
-lmx::ProgramASTNode* parse(const std::string &source, const std::string& filename);
+lmx::ProgramASTNode* parse(const std::string& source, const std::string& filename);
 
 namespace lmx {
 class ReplSession;

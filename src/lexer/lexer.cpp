@@ -11,7 +11,6 @@
 #include "../../tools/debug.hpp"
 
 namespace lmx {
-
 Lexer::Lexer(std::string filename)
     : filename(std::move(filename)) {
     pos = 0;
@@ -97,6 +96,8 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_MAKE: return "make";
         case TokenType::KW_FOR: return "for";
         case TokenType::KW_IN: return "in";
+        case TokenType::KW_STRUCT: return "struct";
+        case TokenType::KW_TYPED: return "typed";
         case TokenType::OPER_PLUS: return "+";
         case TokenType::OPER_MINUS: return "-";
         case TokenType::OPER_MUL: return "*";
@@ -182,11 +183,21 @@ Token Lexer::parseString() {
             consumeChar();
             if (!isAtEnd()) {
                 switch (peekChar()) {
-                    case 'n': value += '\n'; consumeChar(); break;
-                    case 't': value += '\t'; consumeChar(); break;
-                    case 'r': value += '\r'; consumeChar(); break;
-                    case '"': value += '"'; consumeChar(); break;
-                    case '\\': value += '\\'; consumeChar(); break;
+                    case 'n': value += '\n';
+                        consumeChar();
+                        break;
+                    case 't': value += '\t';
+                        consumeChar();
+                        break;
+                    case 'r': value += '\r';
+                        consumeChar();
+                        break;
+                    case '"': value += '"';
+                        consumeChar();
+                        break;
+                    case '\\': value += '\\';
+                        consumeChar();
+                        break;
                     default: {
                         const size_t before = pos;
                         consumeCodepoint();
@@ -253,6 +264,8 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"make", TokenType::KW_MAKE},
         {"for", TokenType::KW_FOR},
         {"in", TokenType::KW_IN},
+        {"struct", TokenType::KW_STRUCT},
+        {"typed", TokenType::KW_TYPED},
     };
 
     const auto it = keywords.find(value);
@@ -396,12 +409,11 @@ std::vector<Token> Lexer::lex_rest() {
         for (const auto& err : errors) {
             if (!error_msg.empty()) error_msg += "\n";
             error_msg += "Lexer error at line " + std::to_string(err.line) +
-                         ", column " + std::to_string(err.column) + ": " + err.message;
+                    ", column " + std::to_string(err.column) + ": " + err.message;
         }
         throw SyntaxError(error_msg);
     }
 
     return tokens;
 }
-
 } // namespace lmx

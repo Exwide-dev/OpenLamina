@@ -5,11 +5,11 @@
 #include "../../tools/debug.hpp"
 
 namespace lmx {
-
 ReplSession::ReplSession(std::string filename)
     : filename_(std::move(filename)),
       lexer_(filename_),
-      parser_(filename_) {}
+      parser_(filename_) {
+}
 
 void ReplSession::reset() {
     lexer_ = Lexer(filename_);
@@ -39,7 +39,8 @@ std::vector<ASTNode*> ReplSession::parse_chunk(const std::string& source) {
         if (tok.type == TokenType::END && !tok.value.empty()) {
             throw SyntaxError(
                 "Lexer error: unclosed string literal at line " +
-                std::to_string(tok.line) + ", column " + std::to_string(tok.column));
+                std::to_string(tok.line) + ", column " + std::to_string(tok.column)
+            );
         }
     }
 
@@ -47,5 +48,4 @@ std::vector<ASTNode*> ReplSession::parse_chunk(const std::string& source) {
     parser_.set_source_lines(cumulative_source_);
     return parser_.parse_rest();
 }
-
 } // namespace lmx

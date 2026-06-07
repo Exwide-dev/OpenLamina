@@ -38,711 +38,730 @@ return std::format("{} {}", name(), stringArgs()); \
 }
 
 namespace irgen {
-    class ModuleObject;
-    class Value;
-    class VM;
-    struct IteratorObject;
+struct StructObject;
+class ModuleObject;
+class Value;
+class VM;
+struct IteratorObject;
 
-    // IR 指令前向声明（各指令的作用、用法与意义见下方对应 class 前的块注释）
-    class PUSH;
-    class ADD;
-    class MUL;
-    class SUB;
-    class DIV;
-    class NEG;
-    class DEREF;
-    class NOT;
-    class AND;
-    class OR;
-    class EQ;
-    class NEQ;
-    class LT;
-    class LTE;
-    class GT;
-    class GTE;
-    class STORE;
-    class LOAD;
-    class LABEL;
-    class GOTO;
-    class GOTOIF;
-    class ENTER_SCOPE;
-    class LEAVE_SCOPE;
-    class CALL;
-    class RET;
-    class FINDMOD;
-    class ATTR;
-    class GETATTR;
-    class VEC_NEW;
-    class DICT_NEW;
-    class INDEX;
-    class STORE_ARG;
-    class NEW_VAR;
-    class NEW_CONST;
-    class NEW_INTERN_VAR;
-    class NEW_INTERN_CONST;
-    class NEW_VAR_OR_LOAD;
-    class RET_THEN_LEAVE_SCOPE;
-    class LOAD_FAST;
-    class STORE_FAST;
-    class BIND_FAST;
-    class ITER_NEW;
-    class ITER_NEXT;
-    class ITER_END;
+// IR 指令前向声明（各指令的作用、用法与意义见下方对应 class 前的块注释）
+class PUSH;
+class ADD;
+class MUL;
+class SUB;
+class DIV;
+class NEG;
+class DEREF;
+class NOT;
+class AND;
+class OR;
+class EQ;
+class NEQ;
+class LT;
+class LTE;
+class GT;
+class GTE;
+class STORE;
+class LOAD;
+class LABEL;
+class GOTO;
+class GOTOIF;
+class ENTER_SCOPE;
+class LEAVE_SCOPE;
+class CALL;
+class RET;
+class FINDMOD;
+class ATTR;
+class GETATTR;
+class VEC_NEW;
+class DICT_NEW;
+class INDEX;
+class STORE_ARG;
+class NEW_VAR;
+class NEW_CONST;
+class NEW_INTERN_VAR;
+class NEW_INTERN_CONST;
+class NEW_VAR_OR_LOAD;
+class RET_THEN_LEAVE_SCOPE;
+class LOAD_FAST;
+class STORE_FAST;
+class BIND_FAST;
+class ITER_NEW;
+class ITER_NEXT;
+class ITER_END;
+class STRUCT_NEW;
+class SET_FIELD;
 
-    /**
-     * @brief 数组映射模板类，使用索引访问的稀疏数组
-     * @tparam T 值类型
-     */
-    template<typename T>
-    class ArrMap {
-        std::vector<T> data;
-        std::vector<bool> has;
-        T default_value;
-        size_t element_count = 0;
+/**
+ * @brief 数组映射模板类，使用索引访问的稀疏数组
+ * @tparam T 值类型
+ */
+template<typename T>
+class ArrMap {
+    std::vector<T> data;
+    std::vector<bool> has;
+    T default_value;
+    size_t element_count = 0;
+
+public:
+    class Iterator {
+        const std::vector<T>* data_ptr;
+        const std::vector<bool>* has_ptr;
+        size_t pos;
+
+        void next_valid() {
+            while (pos < data_ptr->size() && !(*has_ptr)[pos]) {
+                ++pos;
+            }
+        }
 
     public:
-        class Iterator {
-            const std::vector<T> *data_ptr;
-            const std::vector<bool> *has_ptr;
-            size_t pos;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = std::pair<size_t, T>;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const value_type*;
+        using reference = const value_type;
 
-            void next_valid() {
-                while (pos < data_ptr->size() && !(*has_ptr)[pos]) {
-                    ++pos;
-                }
-            }
+        Iterator(const std::vector<T>* d, const std::vector<bool>* h, size_t p)
+            : data_ptr(d), has_ptr(h), pos(p) {
+            next_valid();
+        }
 
-        public:
-            using iterator_category = std::forward_iterator_tag;
-            using value_type = std::pair<size_t, T>;
-            using difference_type = std::ptrdiff_t;
-            using pointer = const value_type *;
-            using reference = const value_type;
+        Iterator& operator++() {
+            ++pos;
+            next_valid();
+            return *this;
+        }
 
-            Iterator(const std::vector<T> *d, const std::vector<bool> *h, size_t p)
-                : data_ptr(d), has_ptr(h), pos(p) {
-                next_valid();
-            }
+        Iterator operator++(int) {
+            Iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
 
-            Iterator &operator++() {
-                ++pos;
-                next_valid();
-                return *this;
-            }
+        value_type operator*() const {
+            return {pos, (*data_ptr)[pos]};
+        }
 
-            Iterator operator++(int) {
-                Iterator tmp = *this;
-                ++(*this);
-                return tmp;
-            }
+        bool operator==(const Iterator& other) const {
+            return pos == other.pos;
+        }
 
-            value_type operator*() const {
-                return {pos, (*data_ptr)[pos]};
-            }
+        bool operator!=(const Iterator& other) const {
+            return !(*this == other);
+        }
+    };
 
-            bool operator==(const Iterator &other) const {
-                return pos == other.pos;
-            }
+    ArrMap() : has(false), default_value(T{}) {
+    }
 
-            bool operator!=(const Iterator &other) const {
-                return !(*this == other);
-            }
-        };
+    explicit ArrMap(const T& def) : has(false), default_value(def) {
+    }
 
-        ArrMap() : has(false), default_value(T{}) {}
+    ArrMap(const ArrMap& other)
+        : data(other.data),
+          has(other.has),
+          default_value(other.default_value),
+          element_count(other.element_count) {
+    }
 
-        explicit ArrMap(const T &def) : has(false), default_value(def) {}
+    ArrMap(ArrMap&& other) noexcept
+        : data(std::move(other.data)),
+          has(std::move(other.has)),
+          default_value(std::move(other.default_value)),
+          element_count(other.element_count) {
+        other.element_count = 0;
+    }
 
-        ArrMap(const ArrMap &other)
-            : data(other.data), has(other.has),
-              default_value(other.default_value),
-              element_count(other.element_count) {}
+    template<typename MapType>
+    explicit ArrMap(const MapType& map, T def = T{}) : has(false), default_value(std::move(def)) {
+        for (const auto& [key, value] : map) {
+            set(key, value);
+        }
+    }
 
-        ArrMap(ArrMap &&other) noexcept
-            : data(std::move(other.data)), has(std::move(other.has)),
-              default_value(std::move(other.default_value)),
-              element_count(other.element_count) {
+    ArrMap(std::initializer_list<std::pair<size_t, T>> init, const T& def = T{})
+        : default_value(def) {
+        for (const auto& kv : init) {
+            set(kv.first, kv.second);
+        }
+    }
+
+    ArrMap& operator=(const ArrMap& other) {
+        if (this != &other) {
+            data = other.data;
+            has = other.has;
+            default_value = other.default_value;
+            element_count = other.element_count;
+        }
+        return *this;
+    }
+
+    ArrMap& operator=(ArrMap&& other) noexcept {
+        if (this != &other) {
+            data = std::move(other.data);
+            has = std::move(other.has);
+            default_value = std::move(other.default_value);
+            element_count = other.element_count;
             other.element_count = 0;
         }
+        return *this;
+    }
 
-        template<typename MapType>
-        explicit ArrMap(const MapType &map, T def = T{}) : has(false), default_value(std::move(def)) {
-            for (const auto &[key, value]: map) {
-                set(key, value);
-            }
-        }
+    [[nodiscard]] Iterator begin() const {
+        return Iterator(&data, &has, 0);
+    }
 
-        ArrMap(std::initializer_list<std::pair<size_t, T>> init, const T &def = T{})
-            : default_value(def) {
-            for (const auto &kv: init) {
-                set(kv.first, kv.second);
-            }
-        }
+    [[nodiscard]] Iterator end() const {
+        return Iterator(&data, &has, data.size());
+    }
 
-        ArrMap &operator=(const ArrMap &other) {
-            if (this != &other) {
-                data = other.data;
-                has = other.has;
-                default_value = other.default_value;
-                element_count = other.element_count;
-            }
-            return *this;
-        }
+    [[nodiscard]] bool empty() const {
+        return element_count == 0;
+    }
 
-        ArrMap &operator=(ArrMap &&other) noexcept {
-            if (this != &other) {
-                data = std::move(other.data);
-                has = std::move(other.has);
-                default_value = std::move(other.default_value);
-                element_count = other.element_count;
-                other.element_count = 0;
-            }
-            return *this;
+    void set(size_t key, const T& value) {
+        if (key >= data.size()) {
+            data.resize(key + 1, default_value);
+            has.resize(key + 1, false);
         }
+        if (!has[key]) {
+            ++element_count;
+        }
+        data[key] = value;
+        has[key] = true;
+    }
 
-        [[nodiscard]] Iterator begin() const {
-            return Iterator(&data, &has, 0);
+    template<typename... Args>
+    void emplace(size_t key, Args&&... args) {
+        if (key >= data.size()) {
+            data.resize(key + 1, default_value);
+            has.resize(key + 1, false);
         }
+        if (!has[key]) {
+            ++element_count;
+        }
+        data[key] = T(std::forward<Args>(args)...);
+        has[key] = true;
+    }
 
-        [[nodiscard]] Iterator end() const {
-            return Iterator(&data, &has, data.size());
+    bool erase(size_t key) {
+        if (key >= data.size() || !has[key]) {
+            return false;
         }
+        has[key] = false;
+        --element_count;
+        data[key] = default_value;
+        return true;
+    }
 
-        [[nodiscard]] bool empty() const {
-            return element_count == 0;
+    [[nodiscard]] T get(size_t key) const {
+        if (key >= data.size() || !has[key]) {
+            throw std::out_of_range("ArrMap::get: key " + std::to_string(key) + " not found");
         }
+        return data[key];
+    }
 
-        void set(size_t key, const T &value) {
-            if (key >= data.size()) {
-                data.resize(key + 1, default_value);
-                has.resize(key + 1, false);
-            }
-            if (!has[key]) {
-                ++element_count;
-            }
-            data[key] = value;
-            has[key] = true;
+    [[nodiscard]] T find(size_t key) const {
+        if (key >= data.size() || !has[key]) {
+            throw std::out_of_range("ArrMap::find: key " + std::to_string(key) + " not found");
         }
+        return data[key];
+    }
 
-        template<typename... Args>
-        void emplace(size_t key, Args &&... args) {
-            if (key >= data.size()) {
-                data.resize(key + 1, default_value);
-                has.resize(key + 1, false);
-            }
-            if (!has[key]) {
-                ++element_count;
-            }
-            data[key] = T(std::forward<Args>(args)...);
-            has[key] = true;
+    [[nodiscard]] std::optional<T> try_get(size_t key) const {
+        if (key >= data.size() || !has[key]) {
+            return std::nullopt;
         }
+        return data[key];
+    }
 
-        bool erase(size_t key) {
-            if (key >= data.size() || !has[key]) {
-                return false;
-            }
-            has[key] = false;
-            --element_count;
-            data[key] = default_value;
-            return true;
+    T& operator[](size_t key) {
+        if (key >= data.size() || !has[key]) {
+            throw std::out_of_range("ArrMap::operator[]: key " + std::to_string(key) + " not found");
         }
+        return data[key];
+    }
 
-        [[nodiscard]] T get(size_t key) const {
-            if (key >= data.size() || !has[key]) {
-                throw std::out_of_range("ArrMap::get: key " + std::to_string(key) + " not found");
-            }
-            return data[key];
+    const T& operator[](size_t key) const {
+        if (key >= data.size() || !has[key]) {
+            throw std::out_of_range("ArrMap::operator[]: key " + std::to_string(key) + " not found");
         }
+        return data[key];
+    }
 
-        [[nodiscard]] T find(size_t key) const {
-            if (key >= data.size() || !has[key]) {
-                throw std::out_of_range("ArrMap::find: key " + std::to_string(key) + " not found");
-            }
-            return data[key];
-        }
+    [[nodiscard]] bool contains(size_t key) const {
+        return key < data.size() && has[key];
+    }
 
-        [[nodiscard]] std::optional<T> try_get(size_t key) const {
-            if (key >= data.size() || !has[key]) {
-                return std::nullopt;
-            }
-            return data[key];
-        }
+    void clear() {
+        data.clear();
+        has.clear();
+        element_count = 0;
+    }
 
-        T &operator[](size_t key) {
-            if (key >= data.size() || !has[key]) {
-                throw std::out_of_range("ArrMap::operator[]: key " + std::to_string(key) + " not found");
-            }
-            return data[key];
-        }
+    [[nodiscard]] size_t size() const {
+        return element_count;
+    }
 
-        const T &operator[](size_t key) const {
-            if (key >= data.size() || !has[key]) {
-                throw std::out_of_range("ArrMap::operator[]: key " + std::to_string(key) + " not found");
-            }
-            return data[key];
-        }
+    [[nodiscard]] size_t capacity() const {
+        return data.size();
+    }
 
-        [[nodiscard]] bool contains(size_t key) const {
-            return key < data.size() && has[key];
-        }
+    [[nodiscard]] size_t count() const {
+        return element_count;
+    }
+};
 
-        void clear() {
-            data.clear();
-            has.clear();
-            element_count = 0;
-        }
+template<typename T>
+concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
 
-        [[nodiscard]] size_t size() const {
-            return element_count;
-        }
+template<typename T>
+concept StringType = std::convertible_to<T, std::string> and !IntegerType<T>;
 
-        [[nodiscard]] size_t capacity() const {
-            return data.size();
-        }
+template<typename T>
+concept FloatType = std::floating_point<T> and !std::same_as<T, bool> and !IntegerType<T>;
 
-        [[nodiscard]] size_t count() const {
-            return element_count;
+/** 所有可执行 IR 指令的联合体；VM::code 的元素类型。 */
+using Opcode = std::variant<
+    PUSH,
+    ADD,
+    MUL,
+    SUB,
+    DIV,
+    NEG,
+    DEREF,
+    NOT,
+    AND,
+    OR,
+    EQ,
+    NEQ,
+    LT,
+    LTE,
+    GT,
+    GTE,
+    STORE,
+    LOAD,
+    LOAD_FAST,
+    STORE_FAST,
+    BIND_FAST,
+    LABEL,
+    GOTO,
+    GOTOIF,
+    ENTER_SCOPE,
+    LEAVE_SCOPE,
+    CALL,
+    RET,
+    FINDMOD,
+    GETATTR,
+    VEC_NEW,
+    DICT_NEW,
+    INDEX,
+    STORE_ARG,
+    NEW_VAR,
+    NEW_CONST,
+    NEW_INTERN_VAR,
+    NEW_INTERN_CONST,
+    NEW_VAR_OR_LOAD,
+    RET_THEN_LEAVE_SCOPE,
+    ITER_NEW,
+    ITER_NEXT,
+    ITER_END,
+    STRUCT_NEW,
+    SET_FIELD
+>;
+
+class SymbolTable;
+
+/**
+ * @brief 函数对象，存储用户定义函数的信息
+ */
+struct FunctionObject {
+    std::vector<std::string> params;  ///< 函数参数列表
+    std::vector<Opcode> body;         ///< 函数体的IR指令序列
+    size_t location;                  ///< 函数在源码中的位置
+    std::string name = "<anonymous>"; ///< 函数名称
+    VM* owner_vm = nullptr;           ///< 所属虚拟机
+    std::vector<SymbolTable> closure; ///< 闭包捕获的变量
+    bool needs_closure = false;       ///< 是否需要闭包
+
+    /**
+     * @brief 调用函数
+     * @param caller_vm 调用者虚拟机
+     * @param args 参数列表
+     * @return 返回值
+     */
+    Value call(VM& caller_vm, const std::vector<Value>& args);
+};
+
+/**
+ * @brief 函数类型，内置函数的签名
+ */
+using FunctionType = std::function<Value(VM&, const std::vector<Value>&)>;
+
+/**
+ * @brief 引用类型，用于值的间接引用
+ */
+struct Ref {
+    std::shared_ptr<Value> value_ptr; ///< 指向实际值的智能指针
+
+    /**
+     * @brief 构造函数
+     * @param ptr 值的智能指针
+     */
+    explicit Ref(std::shared_ptr<Value> ptr);
+
+    /**
+     * @brief 获取引用指向的值
+     * @return 值的引用
+     */
+    Value& get() {
+        if (!value_ptr) {
+            throw RuntimeError("Null reference");
         }
+        return *value_ptr;
+    }
+
+    /**
+     * @brief 获取引用指向的值（const版本）
+     * @return 值的const引用
+     */
+    [[nodiscard]] const Value& get() const {
+        if (!value_ptr) {
+            throw RuntimeError("Null reference");
+        }
+        return *value_ptr;
+    }
+};
+
+/**
+ * @brief 迭代器对象，支持遍历可迭代对象
+ */
+struct IteratorObject {
+    std::shared_ptr<Value> iterable; ///< 被迭代的对象（使用指针避免循环依赖）
+    size_t index = 0;                ///< 当前迭代位置
+
+    /**
+     * @brief 构造函数
+     * @param obj 要迭代的对象
+     */
+    explicit IteratorObject(std::shared_ptr<Value> obj) : iterable(std::move(obj)) {
+    }
+
+    /**
+     * @brief 获取下一个元素
+     * @return 是否还有下一个元素
+     */
+    bool next(Value& out);
+};
+
+/**
+ * @brief 统一值类型，支持多种数据类型的存储和操作
+ */
+class Value {
+public:
+    /**
+     * @brief 值的类型枚举
+     */
+    enum class Type {
+        None,        ///< 空值
+        Number,      ///< 任意精度整数
+        Bool,        ///< 布尔值
+        String,      ///< 字符串
+        Function,    ///< 函数（内置或用户定义）
+        Module,      ///< 模块
+        Vector,      ///< 向量/列表
+        Dictionary,  ///< 字典/映射
+        Reference,   ///< 引用
+        Rational,    ///< 有理数
+        Iterator,    ///< 迭代器
+        StructObject ///< 用户定义的 struct 实例
     };
 
-    template<typename T>
-    concept IntegerType = std::is_integral_v<T> and !std::same_as<T, bool>;
+private:
+    Type type; ///< 当前值的类型
+    std::variant<
+        lang::lammp::Number,
+        bool,
+        std::string,
+        FunctionType,
+        std::shared_ptr<FunctionObject>,
+        std::shared_ptr<ModuleObject>,
+        std::vector<std::shared_ptr<Value>>,
+        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>,
+        Ref,
+        lang::lammp::Rational,
+        std::shared_ptr<IteratorObject>,
+        std::shared_ptr<StructObject>
+    > data; ///< 存储实际值的变体
 
-    template<typename T>
-    concept StringType = std::convertible_to<T, std::string> and !IntegerType<T>;
-
-    template<typename T>
-    concept FloatType = std::floating_point<T> and !std::same_as<T, bool> and !IntegerType<T>;
-
-    /** 所有可执行 IR 指令的联合体；VM::code 的元素类型。 */
-    using Opcode = std::variant<
-        PUSH,
-        ADD,
-        MUL,
-        SUB,
-        DIV,
-        NEG,
-        DEREF,
-        NOT,
-        AND,
-        OR,
-        EQ,
-        NEQ,
-        LT,
-        LTE,
-        GT,
-        GTE,
-        STORE,
-        LOAD,
-        LOAD_FAST,
-        STORE_FAST,
-        BIND_FAST,
-        LABEL,
-        GOTO,
-        GOTOIF,
-        ENTER_SCOPE,
-        LEAVE_SCOPE,
-        CALL,
-        RET,
-        FINDMOD,
-        GETATTR,
-        VEC_NEW,
-        DICT_NEW,
-        INDEX,
-        STORE_ARG,
-        NEW_VAR,
-        NEW_CONST,
-        NEW_INTERN_VAR,
-        NEW_INTERN_CONST,
-        NEW_VAR_OR_LOAD,
-        RET_THEN_LEAVE_SCOPE,
-        ITER_NEW,
-        ITER_NEXT,
-        ITER_END
-    >;
-    
-    class SymbolTable;
-    
+public:
     /**
-     * @brief 函数对象，存储用户定义函数的信息
+     * @brief 默认构造函数，创建空值
      */
-    struct FunctionObject {
-        std::vector<std::string> params;           ///< 函数参数列表
-        std::vector<Opcode> body;                  ///< 函数体的IR指令序列
-        size_t location;                            ///< 函数在源码中的位置
-        std::string name = "<anonymous>";          ///< 函数名称
-        VM* owner_vm = nullptr;                    ///< 所属虚拟机
-        std::vector<SymbolTable> closure;          ///< 闭包捕获的变量
-        bool needs_closure = false;                ///< 是否需要闭包
-        
-        /**
-         * @brief 调用函数
-         * @param caller_vm 调用者虚拟机
-         * @param args 参数列表
-         * @return 返回值
-         */
-        Value call(VM& caller_vm, const std::vector<Value>& args);
-    };
+    Value() : type(Type::None) {
+    }
 
     /**
-     * @brief 函数类型，内置函数的签名
+     * @brief 复制构造函数
      */
-    using FunctionType = std::function<Value(VM &, const std::vector<Value> &)>;
+    Value(const Value& other) : type(other.type), data(other.data) {
+    }
 
     /**
-     * @brief 引用类型，用于值的间接引用
+     * @brief 移动构造函数
      */
-    struct Ref {
-        std::shared_ptr<Value> value_ptr;          ///< 指向实际值的智能指针
-
-        /**
-         * @brief 构造函数
-         * @param ptr 值的智能指针
-         */
-        explicit Ref(std::shared_ptr<Value> ptr);
-
-        /**
-         * @brief 获取引用指向的值
-         * @return 值的引用
-         */
-        Value &get() {
-            if (!value_ptr) {
-                throw RuntimeError("Null reference");
-            }
-            return *value_ptr;
-        }
-
-        /**
-         * @brief 获取引用指向的值（const版本）
-         * @return 值的const引用
-         */
-        [[nodiscard]] const Value &get() const {
-            if (!value_ptr) {
-                throw RuntimeError("Null reference");
-            }
-            return *value_ptr;
-        }
-    };
+    Value(Value&& other) noexcept : type(other.type), data(std::move(other.data)) {
+    }
 
     /**
-     * @brief 迭代器对象，支持遍历可迭代对象
+     * @brief 从Number类型构造
      */
-    struct IteratorObject {
-        std::shared_ptr<Value> iterable;             ///< 被迭代的对象（使用指针避免循环依赖）
-        size_t index = 0;                           ///< 当前迭代位置
-        
-        /**
-         * @brief 构造函数
-         * @param obj 要迭代的对象
-         */
-        explicit IteratorObject(std::shared_ptr<Value> obj) : iterable(std::move(obj)) {}
-        
-        /**
-         * @brief 获取下一个元素
-         * @return 是否还有下一个元素
-         */
-        bool next(Value& out);
-    };
+    explicit Value(const lang::lammp::Number& value)
+        : type(Type::Number), data(value) {
+    }
 
     /**
-     * @brief 统一值类型，支持多种数据类型的存储和操作
+     * @brief 从Number类型移动构造
      */
-    class Value {
-    public:
-        /**
-         * @brief 值的类型枚举
-         */
-        enum class Type {
-            None,           ///< 空值
-            Number,         ///< 任意精度整数
-            Bool,           ///< 布尔值
-            String,         ///< 字符串
-            Function,       ///< 函数（内置或用户定义）
-            Module,         ///< 模块
-            Vector,         ///< 向量/列表
-            Dictionary,     ///< 字典/映射
-            Reference,      ///< 引用
-            Rational,       ///< 有理数
-            Iterator        ///< 迭代器
-        };
+    explicit Value(lang::lammp::Number&& value)
+        : type(Type::Number), data(std::move(value)) {
+    }
 
-    private:
-        Type type;                                   ///< 当前值的类型
-        std::variant<
-            lang::lammp::Number,
-            bool,
-            std::string,
-            FunctionType,
-            std::shared_ptr<FunctionObject>,
-            std::shared_ptr<ModuleObject>,
-            std::vector<std::shared_ptr<Value>>,
-            std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>,
-            Ref,
-            lang::lammp::Rational,
-            std::shared_ptr<IteratorObject>
-        > data;                                      ///< 存储实际值的变体
+    /**
+     * @brief 从整数类型构造
+     * @tparam T 整数类型
+     */
+    template<IntegerType T>
+    explicit Value(T value)
+        : type(Type::Number), data(lang::lammp::Number(static_cast<int64_t>(value))) {
+    }
 
-    public:
-        /**
-         * @brief 默认构造函数，创建空值
-         */
-        Value() : type(Type::None) {
+    /**
+     * @brief 从字符串类型构造
+     * @tparam T 字符串类型
+     */
+    template<StringType T>
+    explicit Value(T value)
+        : type(Type::String), data(static_cast<std::string>(std::move(value))) {
+    }
+
+    /**
+     * @brief 从std::string构造
+     */
+    explicit Value(const std::string& value)
+        : type(Type::String), data(value) {
+    }
+
+    /**
+     * @brief 从std::string移动构造
+     */
+    explicit Value(std::string&& value)
+        : type(Type::String), data(std::move(value)) {
+    }
+
+    /**
+     * @brief 从内置函数类型构造
+     */
+    explicit Value(FunctionType value)
+        : type(Type::Function), data(value) {
+    }
+
+    /**
+     * @brief 从用户定义函数对象构造
+     */
+    explicit Value(std::shared_ptr<FunctionObject> value)
+        : type(Type::Function), data(value) {
+    }
+
+    /**
+     * @brief 从布尔值构造
+     */
+    explicit Value(bool value)
+        : type(Type::Bool), data(value) {
+    }
+
+    /**
+     * @brief 从模块对象构造
+     */
+    explicit Value(std::shared_ptr<ModuleObject> value)
+        : type(Type::Module), data(value) {
+    }
+
+    /**
+     * @brief 从迭代器对象构造
+     */
+    explicit Value(std::shared_ptr<IteratorObject> value)
+        : type(Type::Iterator), data(value) {
+    }
+
+    /**
+     * @brief 从向量构造
+     */
+    explicit Value(std::vector<std::shared_ptr<Value>> value)
+        : type(Type::Vector), data(std::move(value)) {
+    }
+
+    /**
+     * @brief 从字典构造
+     */
+    explicit Value(std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> value)
+        : type(Type::Dictionary), data(std::move(value)) {
+    }
+
+    explicit Value(std::shared_ptr<StructObject> value)
+        : type(Type::StructObject), data(std::move(value)) {
+    }
+
+    /**
+     * @brief 从初始化列表构造向量
+     */
+    Value(const std::initializer_list<Value> init)
+        : type(Type::Vector) {
+        std::vector<std::shared_ptr<Value>> vec;
+        vec.reserve(init.size());
+        for (const auto& val : init) {
+            vec.push_back(std::make_shared<Value>(val));
         }
+        data = std::move(vec);
+    }
 
-        /**
-         * @brief 复制构造函数
-         */
-        Value(const Value& other) : type(other.type), data(other.data) {
+    /**
+     * @brief 复制赋值运算符
+     */
+    Value& operator=(const Value& other) {
+        if (this != &other) {
+            type = other.type;
+            data = other.data;
         }
+        return *this;
+    }
 
-        /**
-         * @brief 移动构造函数
-         */
-        Value(Value&& other) noexcept : type(other.type), data(std::move(other.data)) {
+    /**
+     * @brief 移动赋值运算符
+     */
+    Value& operator=(Value&& other) noexcept {
+        if (this != &other) {
+            type = other.type;
+            data = std::move(other.data);
         }
+        return *this;
+    }
 
-        /**
-         * @brief 从Number类型构造
-         */
-        explicit Value(const lang::lammp::Number &value)
-            : type(Type::Number), data(value) {
+    /**
+     * @brief 从引用构造
+     */
+    explicit Value(Ref ref)
+        : type(Type::Reference), data(std::move(ref)) {
+    }
+
+    /**
+     * @brief 从有理数构造
+     */
+    explicit Value(const lang::lammp::Rational& value)
+        : type(Type::Rational), data(value) {
+    }
+
+    /**
+     * @brief 从有理数移动构造
+     */
+    explicit Value(lang::lammp::Rational&& value)
+        : type(Type::Rational), data(std::move(value)) {
+    }
+
+    /**
+     * @brief 创建指向值的引用（移动语义）
+     */
+    static Value makeRef(Value&& val) {
+        return Value(Ref(std::make_shared<Value>(std::move(val))));
+    }
+
+    /**
+     * @brief 创建指向值的引用（复制语义）
+     */
+    static Value makeRef(const Value& val) {
+        return Value(Ref(std::make_shared<Value>(val)));
+    }
+
+    /**
+     * @brief 从智能指针创建引用
+     */
+    static Value makeRef(std::shared_ptr<Value> val_ptr) {
+        return Value(Ref(std::move(val_ptr)));
+    }
+
+    /**
+     * @brief 创建空引用
+     */
+    static Value makeEmptyRef() {
+        return Value(Ref(std::make_shared<Value>()));
+    }
+
+    /**
+     * @brief 函数调用操作符
+     * @param vm 虚拟机实例
+     * @param args 参数列表
+     * @return 返回值
+     */
+    Value operator()(VM& vm, const std::vector<Value>& args) const {
+        if (type != Type::Function) {
+            throw RuntimeError("Value is not a function");
         }
-
-        /**
-         * @brief 从Number类型移动构造
-         */
-        explicit Value(lang::lammp::Number &&value)
-            : type(Type::Number), data(std::move(value)) {
+        if (std::holds_alternative<FunctionType>(data)) {
+            return std::get<FunctionType>(data)(vm, args);
         }
+        throw RuntimeError("User-defined functions should be called via CALL instruction");
+    }
 
-        /**
-         * @brief 从整数类型构造
-         * @tparam T 整数类型
-         */
-        template<IntegerType T>
-        explicit Value(T value)
-            : type(Type::Number), data(lang::lammp::Number(static_cast<int64_t>(value))) {
+    /**
+     * @brief 获取值的类型（解引用后）
+     * @return 值类型
+     */
+    [[nodiscard]] Type getType() const {
+        if (type == Type::Reference) {
+            return asReference().get().getType();
         }
+        return type;
+    }
 
-        /**
-         * @brief 从字符串类型构造
-         * @tparam T 字符串类型
-         */
-        template<StringType T>
-        explicit Value(T value)
-            : type(Type::String), data(static_cast<std::string>(std::move(value))) {
+    /**
+     * @brief 获取类型名称字符串
+     * @return 类型名称
+     */
+    [[nodiscard]] std::string type_name() const {
+        switch (type) {
+            case Type::None:
+                return "None";
+            case Type::String:
+                return "String";
+            case Type::Number:
+                return "Number";
+            case Type::Bool:
+                return "Bool";
+            case Type::Function:
+                return "Function";
+            case Type::Module:
+                return "Module";
+            case Type::Vector:
+                return "Vector";
+            case Type::Rational:
+                return "Rational";
+            case Type::Dictionary:
+                return "Dictionary";
+            case Type::StructObject:
+                return "Struct";
+            case Type::Reference:
+                return "Reference";
+            default:
+                return "<Unknown_Type>";
         }
+    }
 
-        /**
-         * @brief 从std::string构造
-         */
-        explicit Value(const std::string& value)
-            : type(Type::String), data(value) {
-        }
-
-        /**
-         * @brief 从std::string移动构造
-         */
-        explicit Value(std::string&& value)
-            : type(Type::String), data(std::move(value)) {
-        }
-
-        /**
-         * @brief 从内置函数类型构造
-         */
-        explicit Value(FunctionType value)
-            : type(Type::Function), data(value) {
-        }
-
-        /**
-         * @brief 从用户定义函数对象构造
-         */
-        explicit Value(std::shared_ptr<FunctionObject> value)
-            : type(Type::Function), data(value) {
-        }
-
-        /**
-         * @brief 从布尔值构造
-         */
-        explicit Value(bool value)
-            : type(Type::Bool), data(value) {
-        }
-
-        /**
-         * @brief 从模块对象构造
-         */
-        explicit Value(std::shared_ptr<ModuleObject> value)
-            : type(Type::Module), data(value) {
-        }
-
-        /**
-         * @brief 从迭代器对象构造
-         */
-        explicit Value(std::shared_ptr<IteratorObject> value)
-            : type(Type::Iterator), data(value) {
-        }
-
-        /**
-         * @brief 从向量构造
-         */
-        explicit Value(std::vector<std::shared_ptr<Value>> value)
-            : type(Type::Vector), data(std::move(value)) {
-        }
-
-        /**
-         * @brief 从字典构造
-         */
-        explicit Value(std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> value)
-            : type(Type::Dictionary), data(std::move(value)) {
-        }
-
-        /**
-         * @brief 从初始化列表构造向量
-         */
-        Value(const std::initializer_list<Value> init)
-            : type(Type::Vector) {
-            std::vector<std::shared_ptr<Value>> vec;
-            vec.reserve(init.size());
-            for (const auto &val: init) {
-                vec.push_back(std::make_shared<Value>(val));
-            }
-            data = std::move(vec);
-        }
-
-        /**
-         * @brief 复制赋值运算符
-         */
-        Value& operator=(const Value& other) {
-            if (this != &other) {
-                type = other.type;
-                data = other.data;
-            }
-            return *this;
-        }
-
-        /**
-         * @brief 移动赋值运算符
-         */
-        Value& operator=(Value&& other) noexcept {
-            if (this != &other) {
-                type = other.type;
-                data = std::move(other.data);
-            }
-            return *this;
-        }
-
-        /**
-         * @brief 从引用构造
-         */
-        explicit Value(Ref ref)
-            : type(Type::Reference), data(std::move(ref)) {
-        }
-
-        /**
-         * @brief 从有理数构造
-         */
-        explicit Value(const lang::lammp::Rational &value)
-            : type(Type::Rational), data(value) {
-        }
-
-        /**
-         * @brief 从有理数移动构造
-         */
-        explicit Value(lang::lammp::Rational &&value)
-            : type(Type::Rational), data(std::move(value)) {
-        }
-
-        /**
-         * @brief 创建指向值的引用（移动语义）
-         */
-        static Value makeRef(Value &&val) {
-            return Value(Ref(std::make_shared<Value>(std::move(val))));
-        }
-
-        /**
-         * @brief 创建指向值的引用（复制语义）
-         */
-        static Value makeRef(const Value &val) {
-            return Value(Ref(std::make_shared<Value>(val)));
-        }
-
-        /**
-         * @brief 从智能指针创建引用
-         */
-        static Value makeRef(std::shared_ptr<Value> val_ptr) {
-            return Value(Ref(std::move(val_ptr)));
-        }
-
-        /**
-         * @brief 创建空引用
-         */
-        static Value makeEmptyRef() {
-            return Value(Ref(std::make_shared<Value>()));
-        }
-
-        /**
-         * @brief 函数调用操作符
-         * @param vm 虚拟机实例
-         * @param args 参数列表
-         * @return 返回值
-         */
-        Value operator()(VM &vm, const std::vector<Value> &args) const {
-            if (type != Type::Function) {
-                throw RuntimeError("Value is not a function");
-            }
-            if (std::holds_alternative<FunctionType>(data)) {
-                return std::get<FunctionType>(data)(vm, args);
-            }
-            throw RuntimeError("User-defined functions should be called via CALL instruction");
-        }
-
-        /**
-         * @brief 获取值的类型（解引用后）
-         * @return 值类型
-         */
-        [[nodiscard]] Type getType() const {
-            if (type == Type::Reference) {
-                return asReference().get().getType();
-            }
-            return type;
-        }
-
-        /**
-         * @brief 获取类型名称字符串
-         * @return 类型名称
-         */
-        [[nodiscard]] std::string type_name() const {
-            switch (type) {
-                case Type::None:
-                    return "None";
-                case Type::String:
-                    return "String";
-                case Type::Number:
-                    return "Number";
-                case Type::Bool:
-                    return "Bool";
-                case Type::Function:
-                    return "Function";
-                case Type::Module:
-                    return "Module";
-                case Type::Vector:
-                    return "Vector";
-                case Type::Rational:
-                    return "Rational";
-                case Type::Dictionary:
-                    return "Dictionary";
-                case Type::Reference:
-                    return "Reference";
-                default:
-                    return "<Unknown_Type>";
-            }
-        }
-
-        /**
-         * @brief 转换为字符串表示
-         * @return 字符串表示
-         */
-        [[nodiscard]] std::string toString() const;
+    /**
+     * @brief 转换为字符串表示
+     * @return 字符串表示
+     */
+    [[nodiscard]] std::string toString() const;
 
 #define DEFINE_AS_METHOD(FieldName, EnumValue, CppType, ErrorMsg) \
 [[nodiscard]] CppType as##FieldName() const { \
@@ -755,1797 +774,1876 @@ throw RuntimeError("Value is not " ErrorMsg); \
 return std::get<CppType>(data); \
 }
 
-        [[nodiscard]] const lang::lammp::Number &asNumber() const {
-            if (type == Type::Reference) {
-                return asReference().get().asNumber();
-            }
-            if (type == Type::Rational) {
-                return const_cast<lang::lammp::Number &>(
-                    *new lang::lammp::Number(asRational().toNumber()));
-            }
-            if (type != Type::Number) {
-                throw RuntimeError("Value is not a number");
-            }
-            return std::get<lang::lammp::Number>(data);
+    [[nodiscard]] const lang::lammp::Number& asNumber() const {
+        if (type == Type::Reference) {
+            return asReference().get().asNumber();
         }
-
-        [[nodiscard]] lang::lammp::Number &asNumber() {
-            if (type == Type::Reference) {
-                return const_cast<lang::lammp::Number &>(asReference().get().asNumber());
-            }
-            if (type == Type::Rational) {
-                return *new lang::lammp::Number(asRational().toNumber());
-            }
-            if (type != Type::Number) {
-                throw RuntimeError("Value is not a number");
-            }
-            return std::get<lang::lammp::Number>(data);
+        if (type == Type::Rational) {
+            return const_cast<lang::lammp::Number&>(
+                *new lang::lammp::Number(asRational().toNumber()));
         }
-
-        [[nodiscard]] bool isRational() const {
-            return deref().type == Type::Rational;
+        if (type != Type::Number) {
+            throw RuntimeError("Value is not a number");
         }
+        return std::get<lang::lammp::Number>(data);
+    }
 
-        [[nodiscard]] const lang::lammp::Rational &asRational() const {
-            if (type == Type::Reference) {
-                return asReference().get().asRational();
-            }
-            if (type == Type::Number) {
-                return const_cast<lang::lammp::Rational &>(
-                    *new lang::lammp::Rational(asNumber()));
-            }
-            if (type != Type::Rational) {
-                throw RuntimeError("Value is not a rational");
-            }
-            return std::get<lang::lammp::Rational>(data);
+    [[nodiscard]] lang::lammp::Number& asNumber() {
+        if (type == Type::Reference) {
+            return const_cast<lang::lammp::Number&>(asReference().get().asNumber());
         }
-
-        [[nodiscard]] lang::lammp::Rational &asRational() {
-            if (type == Type::Reference) {
-                return const_cast<lang::lammp::Rational &>(asReference().get().asRational());
-            }
-            if (type == Type::Number) {
-                return *new lang::lammp::Rational(asNumber());
-            }
-            if (type != Type::Rational) {
-                throw RuntimeError("Value is not a rational");
-            }
-            return std::get<lang::lammp::Rational>(data);
+        if (type == Type::Rational) {
+            return *new lang::lammp::Number(asRational().toNumber());
         }
-
-        [[nodiscard]] ptrdiff_t asInt() const {
-            return asNumber().toInt64();
+        if (type != Type::Number) {
+            throw RuntimeError("Value is not a number");
         }
+        return std::get<lang::lammp::Number>(data);
+    }
 
-        DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
-        DEFINE_AS_METHOD(String, String, std::string, "a string")
-        DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
-        DEFINE_AS_METHOD(Module, Module, std::shared_ptr<ModuleObject>, "a module")
-        DEFINE_AS_METHOD(Iterator, Iterator, std::shared_ptr<IteratorObject>, "an iterator")
+    [[nodiscard]] bool isRational() const {
+        return deref().type == Type::Rational;
+    }
 
-        [[nodiscard]] const std::vector<std::shared_ptr<Value>> &asVector() const {
-            const Value &self = deref();
-            if (self.type != Type::Vector) {
-                throw RuntimeError("Value is not a vector");
-            }
-            return std::get<std::vector<std::shared_ptr<Value>>>(self.data);
+    [[nodiscard]] const lang::lammp::Rational& asRational() const {
+        if (type == Type::Reference) {
+            return asReference().get().asRational();
         }
-
-        [[nodiscard]] std::vector<std::shared_ptr<Value>> &asVector() {
-            Value &self = deref();
-            if (self.type != Type::Vector) {
-                throw RuntimeError("Value is not a vector");
-            }
-            return std::get<std::vector<std::shared_ptr<Value>>>(self.data);
+        if (type == Type::Number) {
+            return const_cast<lang::lammp::Rational&>(
+                *new lang::lammp::Rational(asNumber()));
         }
-
-        [[nodiscard]] const std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> &asDictionary() const {
-            const Value &self = deref();
-            if (self.type != Type::Dictionary) {
-                throw RuntimeError("Value is not a dictionary");
-            }
-            return std::get<std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>>(self.data);
+        if (type != Type::Rational) {
+            throw RuntimeError("Value is not a rational");
         }
+        return std::get<lang::lammp::Rational>(data);
+    }
 
-        [[nodiscard]] std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> &asDictionary() {
-            Value &self = deref();
-            if (self.type != Type::Dictionary) {
-                throw RuntimeError("Value is not a dictionary");
-            }
-            return std::get<std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>>(self.data);
+    [[nodiscard]] lang::lammp::Rational& asRational() {
+        if (type == Type::Reference) {
+            return const_cast<lang::lammp::Rational&>(asReference().get().asRational());
         }
+        if (type == Type::Number) {
+            return *new lang::lammp::Rational(asNumber());
+        }
+        if (type != Type::Rational) {
+            throw RuntimeError("Value is not a rational");
+        }
+        return std::get<lang::lammp::Rational>(data);
+    }
 
-        [[nodiscard]] Ref &asReference() {
-            if (type != Type::Reference) {
-                throw RuntimeError("Value is not a reference");
-            }
-            return std::get<Ref>(data);
-        }
+    [[nodiscard]] ptrdiff_t asInt() const {
+        return asNumber().toInt64();
+    }
 
-        [[nodiscard]] const Ref &asReference() const {
-            if (type != Type::Reference) {
-                throw RuntimeError("Value is not a reference");
-            }
-            return std::get<Ref>(data);
-        }
+    DEFINE_AS_METHOD(Bool, Bool, bool, "a boolean")
+    DEFINE_AS_METHOD(String, String, std::string, "a string")
+    DEFINE_AS_METHOD(Function, Function, FunctionType, "a function")
+    DEFINE_AS_METHOD(Module, Module, std::shared_ptr<ModuleObject>, "a module")
+    DEFINE_AS_METHOD(Iterator, Iterator, std::shared_ptr<IteratorObject>, "an iterator")
 
-        std::shared_ptr<Value> getRefValuePtr() {
-            if (type != Type::Reference) {
-                throw RuntimeError("Value is not a reference");
-            }
-            return std::get<Ref>(data).value_ptr;
+    [[nodiscard]] const std::vector<std::shared_ptr<Value>>& asVector() const {
+        const Value& self = deref();
+        if (self.type != Type::Vector) {
+            throw RuntimeError("Value is not a vector");
         }
+        return std::get<std::vector<std::shared_ptr<Value>>>(self.data);
+    }
 
-        Value operator+(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() + b.asNumber());
-            }
-            if (a.type == Type::String && b.type == Type::String) {
-                return Value(a.asString() + b.asString());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() + b.asRational());
-            }
-            throw RuntimeError("Unsupported + operation");
+    [[nodiscard]] std::vector<std::shared_ptr<Value>>& asVector() {
+        Value& self = deref();
+        if (self.type != Type::Vector) {
+            throw RuntimeError("Value is not a vector");
         }
+        return std::get<std::vector<std::shared_ptr<Value>>>(self.data);
+    }
 
-        Value operator-(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() - b.asNumber());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() - b.asRational());
-            }
-            throw RuntimeError("Unsupported - operation");
+    [[nodiscard]] const std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>& asDictionary() const {
+        const Value& self = deref();
+        if (self.type != Type::Dictionary) {
+            throw RuntimeError("Value is not a dictionary");
         }
+        return std::get<std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>>(self.data);
+    }
 
-        Value operator*(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() * b.asNumber());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() * b.asRational());
-            }
-            throw RuntimeError("Unsupported * operation");
+    [[nodiscard]] std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>& asDictionary() {
+        Value& self = deref();
+        if (self.type != Type::Dictionary) {
+            throw RuntimeError("Value is not a dictionary");
         }
+        return std::get<std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>>(self.data);
+    }
 
-        Value operator/(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                LOG("exec div...");
-                return Value(a.asRational() / b.asRational());
-            }
-            throw RuntimeError("Unsupported / operation");
+    [[nodiscard]] Ref& asReference() {
+        if (type != Type::Reference) {
+            throw RuntimeError("Value is not a reference");
         }
+        return std::get<Ref>(data);
+    }
 
-        Value operator-() const {
-            const Value &self = deref();
-            if (self.type == Type::Number) {
-                return Value(-self.asNumber());
-            }
-            if (self.type == Type::Rational) {
-                return Value(-self.asRational());
-            }
-            throw RuntimeError("Unsupported unary - operation");
+    [[nodiscard]] const Ref& asReference() const {
+        if (type != Type::Reference) {
+            throw RuntimeError("Value is not a reference");
         }
+        return std::get<Ref>(data);
+    }
 
-        Value operator!() const {
-            const Value &self = deref();
-            if (self.type == Type::Bool) {
-                return Value(!self.asBool());
-            }
-            throw RuntimeError("Unsupported ! operation");
+    std::shared_ptr<Value> getRefValuePtr() {
+        if (type != Type::Reference) {
+            throw RuntimeError("Value is not a reference");
         }
+        return std::get<Ref>(data).value_ptr;
+    }
 
-        Value operator&&(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Bool && b.type == Type::Bool) {
-                return Value(a.asBool() && b.asBool());
-            }
-            throw RuntimeError("Unsupported && operation");
+    Value operator+(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() + b.asNumber());
         }
+        if (a.type == Type::String && b.type == Type::String) {
+            return Value(a.asString() + b.asString());
+        }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() + b.asRational());
+        }
+        throw RuntimeError("Unsupported + operation");
+    }
 
-        Value operator||(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Bool && b.type == Type::Bool) {
-                return Value(a.asBool() || b.asBool());
-            }
-            throw RuntimeError("Unsupported || operation");
+    Value operator-(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() - b.asNumber());
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() - b.asRational());
+        }
+        throw RuntimeError("Unsupported - operation");
+    }
 
-        Value operator<(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() < b.asNumber());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() < b.asRational());
-            }
-            throw RuntimeError("Unsupported < operation");
+    Value operator*(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() * b.asNumber());
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() * b.asRational());
+        }
+        throw RuntimeError("Unsupported * operation");
+    }
 
-        Value operator<=(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() <= b.asNumber());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() <= b.asRational());
-            }
-            throw RuntimeError("Unsupported <= operation");
+    Value operator/(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            LOG("exec div...");
+            return Value(a.asRational() / b.asRational());
         }
+        throw RuntimeError("Unsupported / operation");
+    }
 
-        Value operator>(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() > b.asNumber());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() > b.asRational());
-            }
-            throw RuntimeError("Unsupported > operation");
+    Value operator-() const {
+        const Value& self = deref();
+        if (self.type == Type::Number) {
+            return Value(-self.asNumber());
         }
+        if (self.type == Type::Rational) {
+            return Value(-self.asRational());
+        }
+        throw RuntimeError("Unsupported unary - operation");
+    }
 
-        Value operator>=(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() >= b.asNumber());
-            }
-            if ((a.type == Type::Rational || a.type == Type::Number) && 
-                (b.type == Type::Rational || b.type == Type::Number)) {
-                return Value(a.asRational() >= b.asRational());
-            }
-            throw RuntimeError("Unsupported >= operation");
+    Value operator!() const {
+        const Value& self = deref();
+        if (self.type == Type::Bool) {
+            return Value(!self.asBool());
         }
+        throw RuntimeError("Unsupported ! operation");
+    }
 
-        bool operator==(const Value &other) {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return a.asNumber() == b.asNumber();
-            }
-            if (a.type == Type::Bool && b.type == Type::Bool) {
-                return a.asBool() == b.asBool();
-            }
-            if (a.type == Type::String && b.type == Type::String) {
-                return a.asString() == b.asString();
-            }
-            throw RuntimeError(std::format("Unsupported == operation, left = {}, right = {}", a.type_name(), b.type_name()));
+    Value operator&&(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Bool && b.type == Type::Bool) {
+            return Value(a.asBool() && b.asBool());
         }
+        throw RuntimeError("Unsupported && operation");
+    }
 
-        Value operator!=(const Value &other) const {
-            const Value &a = deref();
-            const Value &b = other.deref();
-            if (a.type == Type::Number && b.type == Type::Number) {
-                return Value(a.asNumber() != b.asNumber());
-            }
-            if (a.type == Type::Bool && b.type == Type::Bool) {
-                return Value(a.asBool() != b.asBool());
-            }
-            if (a.type == Type::String && b.type == Type::String) {
-                return Value(a.asString() != b.asString());
-            }
-            throw RuntimeError("Unsupported != operation");
+    Value operator||(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Bool && b.type == Type::Bool) {
+            return Value(a.asBool() || b.asBool());
         }
+        throw RuntimeError("Unsupported || operation");
+    }
 
-        [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
-            const Value &self = deref();
-            if (self.type != Type::Function) {
-                throw RuntimeError("Value is not a function");
-            }
-            if (self.data.index() == 4) {
-                return std::get<std::shared_ptr<FunctionObject>>(self.data);
-            }
-            throw RuntimeError("Value is not a user-defined function");
+    Value operator<(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() < b.asNumber());
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() < b.asRational());
+        }
+        throw RuntimeError("Unsupported < operation");
+    }
 
-        [[nodiscard]] bool isUserFunction() const {
-            const Value &self = deref();
-            return self.type == Type::Function &&
-                   self.data.index() == 4;
+    Value operator<=(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() <= b.asNumber());
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() <= b.asRational());
+        }
+        throw RuntimeError("Unsupported <= operation");
+    }
 
-        [[nodiscard]] bool isBuiltinFunction() const {
-            const Value &self = deref();
-            return self.type == Type::Function &&
-                   self.data.index() == 3;
+    Value operator>(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() > b.asNumber());
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() > b.asRational());
+        }
+        throw RuntimeError("Unsupported > operation");
+    }
+
+    Value operator>=(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() >= b.asNumber());
+        }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() >= b.asRational());
+        }
+        throw RuntimeError("Unsupported >= operation");
+    }
+
+    bool operator==(const Value& other) {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return a.asNumber() == b.asNumber();
+        }
+        if (a.type == Type::Bool && b.type == Type::Bool) {
+            return a.asBool() == b.asBool();
+        }
+        if (a.type == Type::String && b.type == Type::String) {
+            return a.asString() == b.asString();
+        }
+        throw RuntimeError(
+            std::format("Unsupported == operation, left = {}, right = {}", a.type_name(), b.type_name())
+        );
+    }
+
+    Value operator!=(const Value& other) const {
+        const Value& a = deref();
+        const Value& b = other.deref();
+        if (a.type == Type::Number && b.type == Type::Number) {
+            return Value(a.asNumber() != b.asNumber());
+        }
+        if (a.type == Type::Bool && b.type == Type::Bool) {
+            return Value(a.asBool() != b.asBool());
+        }
+        if (a.type == Type::String && b.type == Type::String) {
+            return Value(a.asString() != b.asString());
+        }
+        throw RuntimeError("Unsupported != operation");
+    }
+
+    [[nodiscard]] std::shared_ptr<FunctionObject> asFunctionObject() const {
+        const Value& self = deref();
+        if (self.type != Type::Function) {
+            throw RuntimeError("Value is not a function");
+        }
+        if (self.data.index() == 4) {
+            return std::get<std::shared_ptr<FunctionObject>>(self.data);
+        }
+        throw RuntimeError("Value is not a user-defined function");
+    }
+
+    [[nodiscard]] bool isUserFunction() const {
+        const Value& self = deref();
+        return self.type == Type::Function &&
+               self.data.index() == 4;
+    }
+
+    [[nodiscard]] bool isBuiltinFunction() const {
+        const Value& self = deref();
+        return self.type == Type::Function &&
+               self.data.index() == 3;
+    }
 
 #undef DEFINE_AS_METHOD
 
-        [[nodiscard]] bool isNone() const {
-            return deref().type == Type::None;
-        }
-
-        [[nodiscard]] bool isInt() const {
-            return deref().type == Type::Number;
-        }
-
-        [[nodiscard]] bool isBool() const {
-            return deref().type == Type::Bool;
-        }
-
-        [[nodiscard]] bool isString() const {
-            return deref().type == Type::String;
-        }
-
-        [[nodiscard]] bool isFunction() const {
-            return deref().type == Type::Function;
-        }
-
-        [[nodiscard]] bool isVector() const {
-            return deref().type == Type::Vector;
-        }
-
-        [[nodiscard]] bool isDictionary() const {
-            return deref().type == Type::Dictionary;
-        }
-
-        [[nodiscard]] bool isReference() const { return type == Type::Reference; }
-
-        void set(const Value &value) const {
-            if (type != Type::Reference) {
-                throw RuntimeError("Cannot set a non-reference value");
-            }
-            *std::get<Ref>(data).value_ptr = value.deref();
-        }
-
-        [[nodiscard]] const Value &deref() const {
-            if (type == Type::Reference) {
-                return std::get<Ref>(data).value_ptr->deref();
-            }
-            return *this;
-        }
-
-        Value &deref() {
-            auto current = this;
-            while (current->type == Type::Reference) {
-                current = std::get<Ref>(current->data).value_ptr.get();
-            }
-            return *current;
-        }
-
-        Value& safe_deref() {
-            std::unordered_set<Value*> visited;  // 用裸指针，避免 shared_ptr 拷贝
-            auto current = this;
-
-            while (current->type == Type::Reference) {
-                if (visited.contains(current)) {  // 先检查当前节点
-                    throw RuntimeError("Circular reference detected");
-                }
-                visited.insert(current);
-                current = std::get<Ref>(current->data).value_ptr.get();
-            }
-
-            return *current;
-        }
-
-        friend std::ostream &operator<<(std::ostream &os, const Value &value) {
-            os << value.toString();
-            return os;
-        }
-
-        bool isNumber() const {
-            return deref().type == Type::Number;
-        };
-    };
-
-    /**
-     * ITER_NEW — 为 for-in 创建迭代器。
-     *
-     * 作用：弹出栈顶可迭代对象，构造 IteratorObject 并压回（保留原对象语义见 emit）。
-     * 何时使用：for 循环进入前、对每个绑定序列的迭代驱动。
-     * 意义：将 for-in 降维为「迭代器 + 条件跳转」模式，与 ITER_NEXT/ITER_END 成套。
-     */
-    class ITER_NEW {
-    public:
-        COMMON(ITER_NEW)
-        std::vector<Value> operands;
-
-        ITER_NEW() = default;
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * ITER_NEXT — 推进迭代并压入 (has_next, value)。
-     *
-     * 作用：弹出迭代器，若还有下一项则压入 true 与当前值，否则压入 false；
-     *       迭代器对象留在栈上供下一轮使用（具体栈序见 generator/emit）。
-     * 何时使用：循环体每次迭代开头、配合 GOTOIF 判断退出。
-     * 意义：统一字符串/向量等类型的遍历协议。
-     */
-    class ITER_NEXT {
-    public:
-        COMMON(ITER_NEXT)
-        std::vector<Value> operands;
-
-        ITER_NEXT() = default;
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * ITER_END — 结束迭代，清理迭代器。
-     *
-     * 作用：弹出栈顶迭代器对象，释放/for 循环收尾。
-     * 何时使用：for 循环正常结束或 break 汇合后的清理点。
-     * 意义：与 ITER_NEW 配对，避免迭代状态泄漏到外层栈帧。
-     */
-    class ITER_END {
-    public:
-        COMMON(ITER_END)
-        std::vector<Value> operands;
-
-        ITER_END() = default;
-
-        void emit(VM &vm) const;
-    };
-
-    inline Ref::Ref(std::shared_ptr<Value> ptr) : value_ptr(std::move(ptr)) {
-        if (value_ptr->isReference()) {
-            value_ptr = std::make_shared<Value>(value_ptr->deref());
-        }
+    [[nodiscard]] bool isNone() const {
+        return deref().type == Type::None;
     }
 
+    [[nodiscard]] bool isInt() const {
+        return deref().type == Type::Number;
+    }
 
-    /**
-     * @brief 符号表，用于管理变量的存储和访问
-     */
-    class SymbolTable {
-    public:
-        ArrMap<std::shared_ptr<Value>> symbols;    ///< 符号值映射
-        ArrMap<bool> constants;                    ///< 常量标记映射
+    [[nodiscard]] bool isBool() const {
+        return deref().type == Type::Bool;
+    }
 
-        /**
-         * @brief 默认构造函数
-         */
-        SymbolTable() = default;
+    [[nodiscard]] bool isString() const {
+        return deref().type == Type::String;
+    }
 
-        /**
-         * @brief 从map构造符号表
-         */
-        explicit SymbolTable(const std::map<size_t, std::shared_ptr<Value>> &symbols)
-            : symbols(symbols) {
+    [[nodiscard]] bool isFunction() const {
+        return deref().type == Type::Function;
+    }
+
+    [[nodiscard]] bool isVector() const {
+        return deref().type == Type::Vector;
+    }
+
+    [[nodiscard]] bool isDictionary() const {
+        return deref().type == Type::Dictionary;
+    }
+
+    [[nodiscard]] bool isStruct() const {
+        return deref().type == Type::StructObject;
+    }
+
+    [[nodiscard]] const std::shared_ptr<StructObject>& asStruct() const;
+
+    [[nodiscard]] std::shared_ptr<StructObject>& asStruct();
+
+    [[nodiscard]] bool isReference() const { return type == Type::Reference; }
+
+    void set(const Value& value) const {
+        if (type != Type::Reference) {
+            throw RuntimeError("Cannot set a non-reference value");
         }
+        *std::get<Ref>(data).value_ptr = value.deref();
+    }
 
-        /**
-         * @brief 从map移动构造符号表
-         */
-        explicit SymbolTable(std::map<size_t, std::shared_ptr<Value>> &&symbols)
-            : symbols(symbols) {
+    [[nodiscard]] const Value& deref() const {
+        if (type == Type::Reference) {
+            return std::get<Ref>(data).value_ptr->deref();
         }
+        return *this;
+    }
 
-        /**
-         * @brief 设置符号值
-         * @param id 符号ID
-         * @param value 值
-         */
-        void set(size_t id, const Value &value);
-
-        /**
-         * @brief 设置符号值（智能指针版本）
-         * @param id 符号ID
-         * @param value 值的智能指针
-         */
-        void set(size_t id, const std::shared_ptr<Value> &value);
-
-        /**
-         * @brief 设置符号是否为常量
-         * @param id 符号ID
-         * @param is_constant 是否为常量
-         */
-        void set_constant(size_t id, bool is_constant);
-
-        /**
-         * @brief 检查符号是否为常量
-         * @param id 符号ID
-         * @return 是否为常量
-         */
-        [[nodiscard]] bool is_constant(size_t id) const noexcept;
-
-        /**
-         * @brief 转换为字符串表示
-         * @return 字符串表示
-         */
-        [[nodiscard]] std::string toString() const;
-
-        /**
-         * @brief 获取符号值
-         * @param id 符号ID
-         * @return 值的智能指针（如果存在）
-         */
-        [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const noexcept;
-
-        /**
-         * @brief 检查符号是否存在
-         * @param id 符号ID
-         * @return 是否存在
-         */
-        [[nodiscard]] bool exists(const size_t id) const {
-            return symbols.contains(id);
+    Value& deref() {
+        auto current = this;
+        while (current->type == Type::Reference) {
+            current = std::get<Ref>(current->data).value_ptr.get();
         }
+        return *current;
+    }
 
-        [[nodiscard]] auto begin() const { return symbols.begin(); }
-        [[nodiscard]] auto end() const { return symbols.end(); }
-        [[nodiscard]] bool empty() const { return symbols.empty(); }
-    };
+    Value& safe_deref() {
+        std::unordered_set<Value*> visited; // 用裸指针，避免 shared_ptr 拷贝
+        auto current = this;
 
-    /**
-     * @brief 栈模板类
-     * @tparam Stackable 栈元素类型
-     * @tparam reserve 预分配空间大小
-     */
-    template<typename Stackable, size_t reserve = 256>
-    class Stack {
-        std::vector<Stackable> data;               ///< 存储栈元素的向量
-
-    public:
-        /**
-         * @brief 默认构造函数
-         */
-        Stack() {
-            data.reserve(reserve);
-        }
-
-        /**
-         * @brief 从向量构造
-         */
-        explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
-            data.reserve(reserve);
-        }
-
-        /**
-         * @brief 压入元素
-         */
-        void push(const Stackable &value) {
-            data.push_back(value);
-        }
-
-        /**
-         * @brief 移动压入元素
-         */
-        void push(Stackable &&value) {
-            data.push_back(std::move(value));
-        }
-
-        /**
-         * @brief 弹出元素（不返回）
-         */
-        void pop() {
-            data.pop_back();
-        }
-
-        /**
-         * @brief 弹出并返回元素
-         * @return 弹出的元素
-         */
-        [[nodiscard]] Stackable popValue() {
-            Stackable value = data.back();
-            data.pop_back();
-            return value;
-        }
-
-        /**
-         * @brief 获取栈顶元素
-         * @return 栈顶元素引用
-         */
-        [[nodiscard]] const Stackable &top() const {
-            return data.back();
-        }
-
-        /**
-         * @brief 获取栈大小
-         * @return 元素数量
-         */
-        [[nodiscard]] size_t size() const {
-            return data.size();
-        }
-
-        /**
-         * @brief 检查栈是否为空
-         * @return 是否为空
-         */
-        [[nodiscard]] bool empty() const {
-            return data.empty();
-        }
-
-        /**
-         * @brief 清空栈
-         */
-        void clear() {
-            data.clear();
-        }
-
-        auto begin() { return data.begin(); }
-        auto end() { return data.end(); }
-        [[nodiscard]] auto begin() const { return data.begin(); }
-        [[nodiscard]] auto end() const { return data.end(); }
-
-        /**
-         * @brief 转换为字符串表示
-         * @return 字符串表示
-         */
-        [[nodiscard]] std::string toString() const {
-            return "Stack:\n" + std::accumulate(
-                data.rbegin(), data.rend(),
-                std::string{},
-                [i = data.size() - 1](std::string acc, const auto &elem) mutable {
-                    return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
-                }
-            );
-        }
-    };
-
-    /**
-     * @brief 寄存器类，用于存储临时值
-     */
-    class Register {
-    public:
-        std::vector<Value> data;                   ///< 寄存器数据
-
-        /**
-         * @brief 构造函数
-         * @param data 初始数据
-         */
-        explicit Register(std::vector<Value> const &data = std::vector<Value>())
-            : data(data) {
-        }
-
-        /**
-         * @brief 索引访问
-         * @param index 索引
-         * @return 值
-         */
-        Value operator[](const size_t index) {
-            if (index >= data.size()) {
-                std::stringstream ss;
-                ss << "Register[]: index out of range, size=" << data.size() << ", try to access " << index;
-                throw std::out_of_range(ss.str());
+        while (current->type == Type::Reference) {
+            if (visited.contains(current)) {
+                // 先检查当前节点
+                throw RuntimeError("Circular reference detected");
             }
-            return data[index];
+            visited.insert(current);
+            current = std::get<Ref>(current->data).value_ptr.get();
         }
+
+        return *current;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Value& value) {
+        os << value.toString();
+        return os;
+    }
+
+    bool isNumber() const {
+        return deref().type == Type::Number;
     };
+};
 
-    /**
-     * @brief 缓存类，用于加速变量访问
-     * 使用固定大小的槽位实现，支持作用域管理
-     */
-    class Cache {
-        static constexpr size_t SLOT_COUNT = 16;   ///< 槽位数量
+struct StructFieldDef {
+    std::string name;
+    std::string type_name;
+    bool has_type_annotation = false;
+    bool mutable_field = false;
+    bool has_default = false;
+    Value default_value;
+};
 
-        /**
-         * @brief 作用域内的缓存槽
-         */
-        struct Scope {
-            std::array<std::pair<size_t, std::shared_ptr<Value>>, SLOT_COUNT> slots;  ///< 槽数组
-            std::unordered_map<size_t, size_t> id_to_index;                           ///< ID到索引的映射
-            size_t next_slot = 0;                                                     ///< 下一个可用槽位
+struct StructTypeDef {
+    std::string name;
+    bool typed = false;
+    std::vector<StructFieldDef> fields;
 
-            Scope() {
-                for (auto &id: slots | std::views::keys) {
-                    id = 0;
-                }
+    [[nodiscard]] size_t required_field_count() const {
+        size_t n = 0;
+        for (const auto& f : fields) {
+            if (!f.has_default) {
+                ++n;
             }
-        };
-
-        std::vector<Scope> scopes;                 ///< 作用域栈
-
-    public:
-        /**
-         * @brief 默认构造函数，创建初始作用域
-         */
-        Cache() {
-            scopes.emplace_back();
         }
+        return n;
+    }
+};
 
-        /**
-         * @brief 添加或更新缓存项
-         * @param id 符号ID
-         * @param val 值的智能指针
-         */
-        void add(size_t id, const std::shared_ptr<Value> &val) {
-            auto &scope = scopes.back();
-            auto it = scope.id_to_index.find(id);
-            if (it != scope.id_to_index.end()) {
-                scope.slots[it->second].second = val;
-                return;
+struct StructObject {
+    std::shared_ptr<StructTypeDef> type;
+    std::vector<Value> slots;
+};
+
+/**
+ * ITER_NEW — 为 for-in 创建迭代器。
+ *
+ * 作用：弹出栈顶可迭代对象，构造 IteratorObject 并压回（保留原对象语义见 emit）。
+ * 何时使用：for 循环进入前、对每个绑定序列的迭代驱动。
+ * 意义：将 for-in 降维为「迭代器 + 条件跳转」模式，与 ITER_NEXT/ITER_END 成套。
+ */
+class ITER_NEW {
+public:
+    COMMON(ITER_NEW)
+    std::vector<Value> operands;
+
+    ITER_NEW() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * ITER_NEXT — 推进迭代并压入 (has_next, value)。
+ *
+ * 作用：弹出迭代器，若还有下一项则压入 true 与当前值，否则压入 false；
+ *       迭代器对象留在栈上供下一轮使用（具体栈序见 generator/emit）。
+ * 何时使用：循环体每次迭代开头、配合 GOTOIF 判断退出。
+ * 意义：统一字符串/向量等类型的遍历协议。
+ */
+class ITER_NEXT {
+public:
+    COMMON(ITER_NEXT)
+    std::vector<Value> operands;
+
+    ITER_NEXT() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * ITER_END — 结束迭代，清理迭代器。
+ *
+ * 作用：弹出栈顶迭代器对象，释放/for 循环收尾。
+ * 何时使用：for 循环正常结束或 break 汇合后的清理点。
+ * 意义：与 ITER_NEW 配对，避免迭代状态泄漏到外层栈帧。
+ */
+class ITER_END {
+public:
+    COMMON(ITER_END)
+    std::vector<Value> operands;
+
+    ITER_END() = default;
+
+    void emit(VM& vm) const;
+};
+
+inline Ref::Ref(std::shared_ptr<Value> ptr) : value_ptr(std::move(ptr)) {
+    if (value_ptr->isReference()) {
+        value_ptr = std::make_shared<Value>(value_ptr->deref());
+    }
+}
+
+
+/**
+ * @brief 符号表，用于管理变量的存储和访问
+ */
+class SymbolTable {
+public:
+    ArrMap<std::shared_ptr<Value>> symbols; ///< 符号值映射
+    ArrMap<bool> constants;                 ///< 常量标记映射
+
+    /**
+     * @brief 默认构造函数
+     */
+    SymbolTable() = default;
+
+    /**
+     * @brief 从map构造符号表
+     */
+    explicit SymbolTable(const std::map<size_t, std::shared_ptr<Value>>& symbols)
+        : symbols(symbols) {
+    }
+
+    /**
+     * @brief 从map移动构造符号表
+     */
+    explicit SymbolTable(std::map<size_t, std::shared_ptr<Value>>&& symbols)
+        : symbols(symbols) {
+    }
+
+    /**
+     * @brief 设置符号值
+     * @param id 符号ID
+     * @param value 值
+     */
+    void set(size_t id, const Value& value);
+
+    /**
+     * @brief 设置符号值（智能指针版本）
+     * @param id 符号ID
+     * @param value 值的智能指针
+     */
+    void set(size_t id, const std::shared_ptr<Value>& value);
+
+    /**
+     * @brief 设置符号是否为常量
+     * @param id 符号ID
+     * @param is_constant 是否为常量
+     */
+    void set_constant(size_t id, bool is_constant);
+
+    /**
+     * @brief 检查符号是否为常量
+     * @param id 符号ID
+     * @return 是否为常量
+     */
+    [[nodiscard]] bool is_constant(size_t id) const noexcept;
+
+    /**
+     * @brief 转换为字符串表示
+     * @return 字符串表示
+     */
+    [[nodiscard]] std::string toString() const;
+
+    /**
+     * @brief 获取符号值
+     * @param id 符号ID
+     * @return 值的智能指针（如果存在）
+     */
+    [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const noexcept;
+
+    /**
+     * @brief 检查符号是否存在
+     * @param id 符号ID
+     * @return 是否存在
+     */
+    [[nodiscard]] bool exists(const size_t id) const {
+        return symbols.contains(id);
+    }
+
+    [[nodiscard]] auto begin() const { return symbols.begin(); }
+    [[nodiscard]] auto end() const { return symbols.end(); }
+    [[nodiscard]] bool empty() const { return symbols.empty(); }
+};
+
+/**
+ * @brief 栈模板类
+ * @tparam Stackable 栈元素类型
+ * @tparam reserve 预分配空间大小
+ */
+template<typename Stackable, size_t reserve = 256>
+class Stack {
+    std::vector<Stackable> data; ///< 存储栈元素的向量
+
+public:
+    /**
+     * @brief 默认构造函数
+     */
+    Stack() {
+        data.reserve(reserve);
+    }
+
+    /**
+     * @brief 从向量构造
+     */
+    explicit Stack(std::vector<Stackable> data) : data(std::move(data)) {
+        data.reserve(reserve);
+    }
+
+    /**
+     * @brief 压入元素
+     */
+    void push(const Stackable& value) {
+        data.push_back(value);
+    }
+
+    /**
+     * @brief 移动压入元素
+     */
+    void push(Stackable&& value) {
+        data.push_back(std::move(value));
+    }
+
+    /**
+     * @brief 弹出元素（不返回）
+     */
+    void pop() {
+        data.pop_back();
+    }
+
+    /**
+     * @brief 弹出并返回元素
+     * @return 弹出的元素
+     */
+    [[nodiscard]] Stackable popValue() {
+        Stackable value = data.back();
+        data.pop_back();
+        return value;
+    }
+
+    /**
+     * @brief 获取栈顶元素
+     * @return 栈顶元素引用
+     */
+    [[nodiscard]] const Stackable& top() const {
+        return data.back();
+    }
+
+    /**
+     * @brief 获取栈大小
+     * @return 元素数量
+     */
+    [[nodiscard]] size_t size() const {
+        return data.size();
+    }
+
+    /**
+     * @brief 检查栈是否为空
+     * @return 是否为空
+     */
+    [[nodiscard]] bool empty() const {
+        return data.empty();
+    }
+
+    /**
+     * @brief 清空栈
+     */
+    void clear() {
+        data.clear();
+    }
+
+    auto begin() { return data.begin(); }
+    auto end() { return data.end(); }
+    [[nodiscard]] auto begin() const { return data.begin(); }
+    [[nodiscard]] auto end() const { return data.end(); }
+
+    /**
+     * @brief 转换为字符串表示
+     * @return 字符串表示
+     */
+    [[nodiscard]] std::string toString() const {
+        return "Stack:\n" + std::accumulate(
+                   data.rbegin(),
+                   data.rend(),
+                   std::string{},
+                   [i = data.size() - 1](std::string acc, const auto& elem) mutable {
+                       return std::move(acc) + std::format("{} | {}\n", i--, elem.toString());
+                   }
+               );
+    }
+};
+
+/**
+ * @brief 寄存器类，用于存储临时值
+ */
+class Register {
+public:
+    std::vector<Value> data; ///< 寄存器数据
+
+    /**
+     * @brief 构造函数
+     * @param data 初始数据
+     */
+    explicit Register(std::vector<Value> const& data = std::vector<Value>())
+        : data(data) {
+    }
+
+    /**
+     * @brief 索引访问
+     * @param index 索引
+     * @return 值
+     */
+    Value operator[](const size_t index) {
+        if (index >= data.size()) {
+            std::stringstream ss;
+            ss << "Register[]: index out of range, size=" << data.size() << ", try to access " << index;
+            throw std::out_of_range(ss.str());
+        }
+        return data[index];
+    }
+};
+
+/**
+ * @brief 缓存类，用于加速变量访问
+ * 使用固定大小的槽位实现，支持作用域管理
+ */
+class Cache {
+    static constexpr size_t SLOT_COUNT = 16; ///< 槽位数量
+
+    /**
+     * @brief 作用域内的缓存槽
+     */
+    struct Scope {
+        std::array<std::pair<size_t, std::shared_ptr<Value>>, SLOT_COUNT> slots; ///< 槽数组
+        std::unordered_map<size_t, size_t> id_to_index;                          ///< ID到索引的映射
+        size_t next_slot = 0;                                                    ///< 下一个可用槽位
+
+        Scope() {
+            for (auto& id : slots | std::views::keys) {
+                id = 0;
             }
-
-            size_t idx = scope.next_slot;
-            size_t old_id = scope.slots[idx].first;
-            if (old_id != 0) {
-                scope.id_to_index.erase(old_id);
-            }
-            scope.slots[idx] = {id, val};
-            scope.id_to_index[id] = idx;
-            scope.next_slot = (idx + 1) % SLOT_COUNT;
-        }
-
-        /**
-         * @brief 获取缓存项
-         * @param id 符号ID
-         * @return 值的智能指针（如果存在）
-         */
-        [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const {
-            const auto &scope = scopes.back();
-            const auto it = scope.id_to_index.find(id);
-            if (it != scope.id_to_index.end()) {
-                return scope.slots[it->second].second;
-            }
-            return std::nullopt;
-        }
-
-        /**
-         * @brief 检查缓存是否包含指定ID
-         * @param id 符号ID
-         * @return 是否包含
-         */
-        [[nodiscard]] bool contains(size_t id) const {
-            const auto &scope = scopes.back();
-            return scope.id_to_index.contains(id);
-        }
-
-        /**
-         * @brief 进入新作用域
-         */
-        void enter_scope() {
-            scopes.emplace_back();
-        }
-
-        /**
-         * @brief 离开当前作用域
-         */
-        void leave_scope() {
-            scopes.pop_back();
-        }
-
-        /**
-         * @brief 清空所有缓存
-         */
-        void clear() {
-            scopes.clear();
-            scopes.emplace_back();
         }
     };
 
-    // -------------------------------------------------------------------------
-    // IR 指令类：栈式字节码，由 codegen 生成、VM::run 解释执行。
-    // 约定：二元运算与比较从栈顶弹出右操作数再左操作数；CALL 栈顶为可调用对象。
-    // -------------------------------------------------------------------------
+    std::vector<Scope> scopes; ///< 作用域栈
+
+public:
+    /**
+     * @brief 默认构造函数，创建初始作用域
+     */
+    Cache() {
+        scopes.emplace_back();
+    }
 
     /**
-     * PUSH — 将常量或函数对象压入操作数栈。
-     *
-     * 作用：operands[0] 为待压入的 Value（字面量、标签占位、FunctionObject 等）。
-     * 何时使用：字面量、函数体定义末尾把 FunctionObject 压栈以便装饰器 CALL、
-     *           或任何需要把已知值送入后续指令的场景。
-     * 意义：栈机的基础数据来源；对 FunctionObject 还会在首次 PUSH 时捕获闭包环境。
+     * @brief 添加或更新缓存项
+     * @param id 符号ID
+     * @param val 值的智能指针
      */
-    class PUSH {
-    public:
-        COMMON(PUSH)
-        std::vector<Value> operands;
-
-        explicit PUSH(const Value &v) {
-            operands.push_back(v);
+    void add(size_t id, const std::shared_ptr<Value>& val) {
+        auto& scope = scopes.back();
+        auto it = scope.id_to_index.find(id);
+        if (it != scope.id_to_index.end()) {
+            scope.slots[it->second].second = val;
+            return;
         }
 
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * ADD — 二元加法。
-     *
-     * 作用：弹出栈顶 b、次顶 a，将 a + b 压回（支持 Number 拼接与 String 连接）。
-     * 何时使用：加法表达式、字符串拼接的 IR  lowering。
-     * 意义：对应语言中的 + 运算符；类型规则在 Value::operator+ 中实现。
-     */
-    class ADD {
-    public:
-        COMMON(ADD)
-        std::vector<Value> operands;
-
-        ADD() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * MUL — 二元乘法。
-     *
-     * 作用：弹出 b、a，压入 a * b（大整数经 lammp::Number）。
-     * 何时使用：乘法表达式、部分代数化简路径。
-     * 意义：算术核心指令之一，与 SUB/DIV 成组。
-     */
-    class MUL {
-    public:
-        COMMON(MUL)
-        std::vector<Value> operands;
-
-        MUL() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * SUB — 二元减法。
-     *
-     * 作用：弹出 b、a，压入 a - b。
-     * 何时使用：减法表达式、循环/索引中的递减。
-     * 意义：算术指令；注意栈顺序为「次顶减栈顶」。
-     */
-    class SUB {
-    public:
-        COMMON(SUB)
-        std::vector<Value> operands;
-
-        SUB() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * DIV — 二元除法。
-     *
-     * 作用：弹出 b、a，压入 a / b（整数除法或 Number 语义由 Value 定义）。
-     * 何时使用：除法表达式。
-     * 意义：完成四则运算集；除零等行为在运行时 Value 层处理。
-     */
-    class DIV {
-    public:
-        COMMON(DIV)
-        std::vector<Value> operands;
-
-        DIV() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * NEG — 一元取负。
-     *
-     * 作用：弹出栈顶，压入其相反数。
-     * 何时使用：前缀 - 表达式。
-     * 意义：一元算术，与 NOT 等一元逻辑指令对称。
-     */
-    class NEG {
-    public:
-        COMMON(NEG)
-        std::vector<Value> operands;
-
-        NEG() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * DEREF — 解引用。
-     *
-     * 作用：若栈顶为 Reference，则替换为所指向的实际 Value；否则保持不变。
-     * 何时使用：读取变量值（LOAD / LOAD_FAST 之后）、需要 RVALUE 的表达式位置。
-     * 意义：区分「名字/槽位里的引用」与「参与运算的值」；赋值走 STORE 不经 DEREF。
-     */
-    class DEREF {
-    public:
-        COMMON(DEREF)
-        std::vector<Value> operands;
-
-        DEREF() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * NOT — 逻辑非。
-     *
-     * 作用：弹出栈顶，压入布尔取反。
-     * 何时使用：前缀 ! 、条件取反。
-     * 意义：一元逻辑；与 AND/OR 配合构成短路逻辑的底层（若未在 AST 层短路）。
-     */
-    class NOT {
-    public:
-        COMMON(NOT)
-        std::vector<Value> operands;
-
-        NOT() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * AND — 逻辑与。
-     *
-     * 作用：弹出 b、a，压入 a && b 的布尔结果。
-     * 何时使用：&& 表达式（若未完全在 codegen 层短路）。
-     * 意义：布尔组合；实际短路可能由 GOTOIF 实现，本指令为直译版本。
-     */
-    class AND {
-    public:
-        COMMON(AND)
-        std::vector<Value> operands;
-
-        AND() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * OR — 逻辑或。
-     *
-     * 作用：弹出 b、a，压入 a || b 的布尔结果。
-     * 何时使用：|| 表达式。
-     * 意义：与 AND 对称；控制流中的「或」也常配合 GOTOIF。
-     */
-    class OR {
-    public:
-        COMMON(OR)
-        std::vector<Value> operands;
-
-        OR() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * EQ — 相等比较。
-     *
-     * 作用：弹出 b、a，压入 (a == b) 的布尔值。
-     * 何时使用：== 表达式、条件判断。
-     * 意义：比较指令族；类型相同时按 Value 相等语义比较。
-     */
-    class EQ {
-    public:
-        COMMON(EQ)
-        std::vector<Value> operands;
-
-        EQ() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * NEQ — 不等比较。
-     *
-     * 作用：弹出 b、a，压入 (a != b)。
-     * 何时使用：!= 表达式。
-     * 意义：与 EQ 互补，常用于循环与分支条件。
-     */
-    class NEQ {
-    public:
-        COMMON(NEQ)
-        std::vector<Value> operands;
-
-        NEQ() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * LT — 小于比较。
-     *
-     * 作用：弹出 b、a，压入 (a < b)。
-     * 何时使用：< 表达式、排序与循环边界。
-     * 意义：有序类型（Number 等）上的关系运算。
-     */
-    class LT {
-    public:
-        COMMON(LT)
-        std::vector<Value> operands;
-
-        LT() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * LTE — 小于等于比较。
-     *
-     * 作用：弹出 b、a，压入 (a <= b)。
-     * 何时使用：<= 表达式（如 fib、while 条件）。
-     * 意义：与 LT/GT/GTE 共同支持完整比较运算符集。
-     */
-    class LTE {
-    public:
-        COMMON(LTE)
-        std::vector<Value> operands;
-
-        LTE() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * GT — 大于比较。
-     *
-     * 作用：弹出 b、a，压入 (a > b)。
-     * 何时使用：> 表达式。
-     * 意义：关系运算；栈顺序与数学写法 a > b 一致（a 在次顶）。
-     */
-    class GT {
-    public:
-        COMMON(GT)
-        std::vector<Value> operands;
-
-        GT() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * GTE — 大于等于比较。
-     *
-     * 作用：弹出 b、a，压入 (a >= b)。
-     * 何时使用：>= 表达式。
-     * 意义：比较族最后一个；常用于循环与范围判断。
-     */
-    class GTE {
-    public:
-        COMMON(GTE)
-        std::vector<Value> operands;
-
-        GTE() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * STORE — 通过引用槽写入变量。
-     *
-     * 作用：栈顶为 ref_slot，次顶为 data；将 data 写入 ref 指向的单元（遵守 const 约束）。
-     * 何时使用：模块级 let 赋值、NEW_VAR 后的首次绑定、BIND_FAST 前的中间步骤。
-     * 意义：实现「名字指向可变单元」；与 LOAD+DEREF 读路径成对。
-     */
-    class STORE {
-    public:
-        COMMON(STORE)
-        std::vector<Value> operands;
-
-        STORE() = default;
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * LOAD — 按名字加载变量引用。
-     *
-     * 作用：operands[0] 为变量名（编译后变为 string pool id）；在 cache、
-     *       symbol_stack（含闭包捕获层）、main_module 中查找，压入 Reference。
-     * 何时使用：读取模块/闭包变量、外层捕获的 fast 参数（经 BIND_FAST 注册后）。
-     * 意义：名字解析的运行时入口；读值需再跟 DEREF。
-     */
-    class LOAD {
-    public:
-        COMMON(LOAD)
-        std::vector<Value> operands;
-
-        explicit LOAD(const std::string &name) {
-            operands.emplace_back(name);
+        size_t idx = scope.next_slot;
+        size_t old_id = scope.slots[idx].first;
+        if (old_id != 0) {
+            scope.id_to_index.erase(old_id);
         }
-
-        void emit(VM &vm) const;
-    };
+        scope.slots[idx] = {id, val};
+        scope.id_to_index[id] = idx;
+        scope.next_slot = (idx + 1) % SLOT_COUNT;
+    }
 
     /**
-     * LABEL — 跳转锚点（无运行时效果）。
-     *
-     * 作用：在 label_table 中登记当前 PC，供 GOTO/GOTOIF 解析目标。
-     * 何时使用：函数体入口、循环头/尾、if 分支汇合点、跳过函数体定义。
-     * 意义：将控制流与线性指令序列分离；scan_labels 在 run 前填充表。
+     * @brief 获取缓存项
+     * @param id 符号ID
+     * @return 值的智能指针（如果存在）
      */
-    class LABEL {
-    public:
-        COMMON(LABEL)
-        std::vector<Value> operands;
-
-        explicit LABEL(size_t label_id) {
-            operands.emplace_back(static_cast<ptrdiff_t>(label_id));
+    [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const {
+        const auto& scope = scopes.back();
+        const auto it = scope.id_to_index.find(id);
+        if (it != scope.id_to_index.end()) {
+            return scope.slots[it->second].second;
         }
-
-        explicit LABEL(const Value &label_id) {
-            operands.emplace_back(label_id);
-        }
-
-        void emit(VM &vm);
-
-        void set_label(VM &vm, std::optional<size_t> on = std::nullopt) const;
-    };
+        return std::nullopt;
+    }
 
     /**
-     * GOTO — 无条件跳转。
-     *
-     * 作用：将 PC 设为 label_table[label_id]。
-     * 何时使用：跳过函数体、循环回边、if 结束汇合、程序初始化跳转到 main 段。
-     * 意义：结构化控制流编译后的基本块连接手段。
+     * @brief 检查缓存是否包含指定ID
+     * @param id 符号ID
+     * @return 是否包含
      */
-    class GOTO {
-    public:
-        COMMON(GOTO)
-        std::vector<Value> operands;
-
-        explicit GOTO(size_t label_id) {
-            operands.emplace_back(static_cast<ptrdiff_t>(label_id));
-        }
-
-        explicit GOTO(const Value &label_id) {
-            operands.emplace_back(label_id);
-        }
-
-        void emit(VM &vm) const;
-    };
+    [[nodiscard]] bool contains(size_t id) const {
+        const auto& scope = scopes.back();
+        return scope.id_to_index.contains(id);
+    }
 
     /**
-     * GOTOIF — 条件为真时跳转。
-     *
-     * 作用：弹出栈顶条件；若为真则跳到 label_id，否则 fall-through。
-     * 何时使用：if/while/for 分支、短路逻辑、循环退出判断。
-     * 意义：控制流核心；将布尔结果转为 PC 变更。
+     * @brief 进入新作用域
      */
-    class GOTOIF {
-    public:
-        COMMON(IFTRUEGOTO)
-        std::vector<Value> operands;
-
-        explicit GOTOIF(size_t label_id) {
-            operands.emplace_back(static_cast<ptrdiff_t>(label_id));
-        }
-
-        explicit GOTOIF(const Value &label_id) {
-            operands.emplace_back(label_id);
-        }
-
-        void emit(VM &vm) const;
-    };
+    void enter_scope() {
+        scopes.emplace_back();
+    }
 
     /**
-     * ENTER_SCOPE — 进入词法作用域。
-     *
-     * 作用：在 symbol_stack 与 locals_stack 各压入一层新表，cache 进入子作用域。
-     * 何时使用：函数体、块语句、需要隔离局部绑定的区域。
-     * 意义：支撑嵌套作用域与 fast 局部槽；与 LEAVE_SCOPE 成对。
+     * @brief 离开当前作用域
      */
-    class ENTER_SCOPE {
-    public:
-        COMMON(ENTER_SCOPE)
-        std::vector<Value> operands;
-
-        ENTER_SCOPE() = default;
-
-        void emit(VM &vm);
-    };
+    void leave_scope() {
+        scopes.pop_back();
+    }
 
     /**
-     * LEAVE_SCOPE — 离开词法作用域。
-     *
-     * 作用：弹出 symbol_stack 与 locals_stack 栈顶一层，cache 离开子作用域。
-     * 何时使用：块结束、函数 RET 之后（或 RET_THEN_LEAVE_SCOPE 内）。
-     * 意义：释放本层绑定；闭包已捕获的环境不受此弹出影响（在 closure 向量中）。
+     * @brief 清空所有缓存
      */
-    class LEAVE_SCOPE {
-    public:
-        COMMON(LEAVE_SCOPE)
-        std::vector<Value> operands;
+    void clear() {
+        scopes.clear();
+        scopes.emplace_back();
+    }
+};
 
-        LEAVE_SCOPE() = default;
+// -------------------------------------------------------------------------
+// IR 指令类：栈式字节码，由 codegen 生成、VM::run 解释执行。
+// 约定：二元运算与比较从栈顶弹出右操作数再左操作数；CALL 栈顶为可调用对象。
+// -------------------------------------------------------------------------
 
-        void emit(VM &vm);
+/**
+ * PUSH — 将常量或函数对象压入操作数栈。
+ *
+ * 作用：operands[0] 为待压入的 Value（字面量、标签占位、FunctionObject 等）。
+ * 何时使用：字面量、函数体定义末尾把 FunctionObject 压栈以便装饰器 CALL、
+ *           或任何需要把已知值送入后续指令的场景。
+ * 意义：栈机的基础数据来源；对 FunctionObject 还会在首次 PUSH 时捕获闭包环境。
+ */
+class PUSH {
+public:
+    COMMON(PUSH)
+    std::vector<Value> operands;
+
+    explicit PUSH(const Value& v) {
+        operands.push_back(v);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * ADD — 二元加法。
+ *
+ * 作用：弹出栈顶 b、次顶 a，将 a + b 压回（支持 Number 拼接与 String 连接）。
+ * 何时使用：加法表达式、字符串拼接的 IR  lowering。
+ * 意义：对应语言中的 + 运算符；类型规则在 Value::operator+ 中实现。
+ */
+class ADD {
+public:
+    COMMON(ADD)
+    std::vector<Value> operands;
+
+    ADD() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * MUL — 二元乘法。
+ *
+ * 作用：弹出 b、a，压入 a * b（大整数经 lammp::Number）。
+ * 何时使用：乘法表达式、部分代数化简路径。
+ * 意义：算术核心指令之一，与 SUB/DIV 成组。
+ */
+class MUL {
+public:
+    COMMON(MUL)
+    std::vector<Value> operands;
+
+    MUL() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * SUB — 二元减法。
+ *
+ * 作用：弹出 b、a，压入 a - b。
+ * 何时使用：减法表达式、循环/索引中的递减。
+ * 意义：算术指令；注意栈顺序为「次顶减栈顶」。
+ */
+class SUB {
+public:
+    COMMON(SUB)
+    std::vector<Value> operands;
+
+    SUB() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * DIV — 二元除法。
+ *
+ * 作用：弹出 b、a，压入 a / b（整数除法或 Number 语义由 Value 定义）。
+ * 何时使用：除法表达式。
+ * 意义：完成四则运算集；除零等行为在运行时 Value 层处理。
+ */
+class DIV {
+public:
+    COMMON(DIV)
+    std::vector<Value> operands;
+
+    DIV() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * NEG — 一元取负。
+ *
+ * 作用：弹出栈顶，压入其相反数。
+ * 何时使用：前缀 - 表达式。
+ * 意义：一元算术，与 NOT 等一元逻辑指令对称。
+ */
+class NEG {
+public:
+    COMMON(NEG)
+    std::vector<Value> operands;
+
+    NEG() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * DEREF — 解引用。
+ *
+ * 作用：若栈顶为 Reference，则替换为所指向的实际 Value；否则保持不变。
+ * 何时使用：读取变量值（LOAD / LOAD_FAST 之后）、需要 RVALUE 的表达式位置。
+ * 意义：区分「名字/槽位里的引用」与「参与运算的值」；赋值走 STORE 不经 DEREF。
+ */
+class DEREF {
+public:
+    COMMON(DEREF)
+    std::vector<Value> operands;
+
+    DEREF() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * NOT — 逻辑非。
+ *
+ * 作用：弹出栈顶，压入布尔取反。
+ * 何时使用：前缀 ! 、条件取反。
+ * 意义：一元逻辑；与 AND/OR 配合构成短路逻辑的底层（若未在 AST 层短路）。
+ */
+class NOT {
+public:
+    COMMON(NOT)
+    std::vector<Value> operands;
+
+    NOT() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * AND — 逻辑与。
+ *
+ * 作用：弹出 b、a，压入 a && b 的布尔结果。
+ * 何时使用：&& 表达式（若未完全在 codegen 层短路）。
+ * 意义：布尔组合；实际短路可能由 GOTOIF 实现，本指令为直译版本。
+ */
+class AND {
+public:
+    COMMON(AND)
+    std::vector<Value> operands;
+
+    AND() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * OR — 逻辑或。
+ *
+ * 作用：弹出 b、a，压入 a || b 的布尔结果。
+ * 何时使用：|| 表达式。
+ * 意义：与 AND 对称；控制流中的「或」也常配合 GOTOIF。
+ */
+class OR {
+public:
+    COMMON(OR)
+    std::vector<Value> operands;
+
+    OR() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * EQ — 相等比较。
+ *
+ * 作用：弹出 b、a，压入 (a == b) 的布尔值。
+ * 何时使用：== 表达式、条件判断。
+ * 意义：比较指令族；类型相同时按 Value 相等语义比较。
+ */
+class EQ {
+public:
+    COMMON(EQ)
+    std::vector<Value> operands;
+
+    EQ() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * NEQ — 不等比较。
+ *
+ * 作用：弹出 b、a，压入 (a != b)。
+ * 何时使用：!= 表达式。
+ * 意义：与 EQ 互补，常用于循环与分支条件。
+ */
+class NEQ {
+public:
+    COMMON(NEQ)
+    std::vector<Value> operands;
+
+    NEQ() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * LT — 小于比较。
+ *
+ * 作用：弹出 b、a，压入 (a < b)。
+ * 何时使用：< 表达式、排序与循环边界。
+ * 意义：有序类型（Number 等）上的关系运算。
+ */
+class LT {
+public:
+    COMMON(LT)
+    std::vector<Value> operands;
+
+    LT() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * LTE — 小于等于比较。
+ *
+ * 作用：弹出 b、a，压入 (a <= b)。
+ * 何时使用：<= 表达式（如 fib、while 条件）。
+ * 意义：与 LT/GT/GTE 共同支持完整比较运算符集。
+ */
+class LTE {
+public:
+    COMMON(LTE)
+    std::vector<Value> operands;
+
+    LTE() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * GT — 大于比较。
+ *
+ * 作用：弹出 b、a，压入 (a > b)。
+ * 何时使用：> 表达式。
+ * 意义：关系运算；栈顺序与数学写法 a > b 一致（a 在次顶）。
+ */
+class GT {
+public:
+    COMMON(GT)
+    std::vector<Value> operands;
+
+    GT() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * GTE — 大于等于比较。
+ *
+ * 作用：弹出 b、a，压入 (a >= b)。
+ * 何时使用：>= 表达式。
+ * 意义：比较族最后一个；常用于循环与范围判断。
+ */
+class GTE {
+public:
+    COMMON(GTE)
+    std::vector<Value> operands;
+
+    GTE() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * STORE — 通过引用槽写入变量。
+ *
+ * 作用：栈顶为 ref_slot，次顶为 data；将 data 写入 ref 指向的单元（遵守 const 约束）。
+ * 何时使用：模块级 let 赋值、NEW_VAR 后的首次绑定、BIND_FAST 前的中间步骤。
+ * 意义：实现「名字指向可变单元」；与 LOAD+DEREF 读路径成对。
+ */
+class STORE {
+public:
+    COMMON(STORE)
+    std::vector<Value> operands;
+
+    STORE() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * LOAD — 按名字加载变量引用。
+ *
+ * 作用：operands[0] 为变量名（编译后变为 string pool id）；在 cache、
+ *       symbol_stack（含闭包捕获层）、main_module 中查找，压入 Reference。
+ * 何时使用：读取模块/闭包变量、外层捕获的 fast 参数（经 BIND_FAST 注册后）。
+ * 意义：名字解析的运行时入口；读值需再跟 DEREF。
+ */
+class LOAD {
+public:
+    COMMON(LOAD)
+    std::vector<Value> operands;
+
+    explicit LOAD(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * LABEL — 跳转锚点（无运行时效果）。
+ *
+ * 作用：在 label_table 中登记当前 PC，供 GOTO/GOTOIF 解析目标。
+ * 何时使用：函数体入口、循环头/尾、if 分支汇合点、跳过函数体定义。
+ * 意义：将控制流与线性指令序列分离；scan_labels 在 run 前填充表。
+ */
+class LABEL {
+public:
+    COMMON(LABEL)
+    std::vector<Value> operands;
+
+    explicit LABEL(const size_t label_id) {
+        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
+    }
+
+    explicit LABEL(const Value& label_id) {
+        operands.emplace_back(label_id);
+    }
+
+    void emit(VM& vm);
+
+    void set_label(VM& vm, std::optional<size_t> on = std::nullopt) const;
+};
+
+/**
+ * GOTO — 无条件跳转。
+ *
+ * 作用：将 PC 设为 label_table[label_id]。
+ * 何时使用：跳过函数体、循环回边、if 结束汇合、程序初始化跳转到 main 段。
+ * 意义：结构化控制流编译后的基本块连接手段。
+ */
+class GOTO {
+public:
+    COMMON(GOTO)
+    std::vector<Value> operands;
+
+    explicit GOTO(size_t label_id) {
+        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
+    }
+
+    explicit GOTO(const Value& label_id) {
+        operands.emplace_back(label_id);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * GOTOIF — 条件为真时跳转。
+ *
+ * 作用：弹出栈顶条件；若为真则跳到 label_id，否则 fall-through。
+ * 何时使用：if/while/for 分支、短路逻辑、循环退出判断。
+ * 意义：控制流核心；将布尔结果转为 PC 变更。
+ */
+class GOTOIF {
+public:
+    COMMON(IFTRUEGOTO)
+    std::vector<Value> operands;
+
+    explicit GOTOIF(size_t label_id) {
+        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
+    }
+
+    explicit GOTOIF(const Value& label_id) {
+        operands.emplace_back(label_id);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * ENTER_SCOPE — 进入词法作用域。
+ *
+ * 作用：在 symbol_stack 与 locals_stack 各压入一层新表，cache 进入子作用域。
+ * 何时使用：函数体、块语句、需要隔离局部绑定的区域。
+ * 意义：支撑嵌套作用域与 fast 局部槽；与 LEAVE_SCOPE 成对。
+ */
+class ENTER_SCOPE {
+public:
+    COMMON(ENTER_SCOPE)
+    std::vector<Value> operands;
+
+    ENTER_SCOPE() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * LEAVE_SCOPE — 离开词法作用域。
+ *
+ * 作用：弹出 symbol_stack 与 locals_stack 栈顶一层，cache 离开子作用域。
+ * 何时使用：块结束、函数 RET 之后（或 RET_THEN_LEAVE_SCOPE 内）。
+ * 意义：释放本层绑定；闭包已捕获的环境不受此弹出影响（在 closure 向量中）。
+ */
+class LEAVE_SCOPE {
+public:
+    COMMON(LEAVE_SCOPE)
+    std::vector<Value> operands;
+
+    LEAVE_SCOPE() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * CALL — 调用函数。
+ *
+ * 作用：栈顶为 callable；弹出实参（个数由 operands 指定）后执行。
+ *       用户函数：压入闭包 scope、跳转至 FunctionObject::location；
+ *       内建函数：直接 C++ 回调并压回返回值。
+ * 何时使用：调用表达式、装饰器包装（decos.log(func)）、方法调用链末端。
+ * 意义：执行模型中心；连接 codegen 与运行时 builtins/UserFunction。
+ */
+class CALL {
+public:
+    COMMON(CALL)
+    std::vector<Value> operands;
+
+    explicit CALL(const std::string& name, const size_t arg_count) {
+        operands.emplace_back(name);
+        operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
+    }
+
+    explicit CALL(const size_t arg_count) {
+        operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * RET — 从用户函数返回。
+ *
+ * 作用：栈顶（或约定位置）为返回值；恢复 call_stack 中的 PC，弹出闭包 scope。
+ * 何时使用：return 语句、do 表达式返回内部函数对象（无 LEAVE 的 RET）。
+ * 意义：与用户函数 CALL 配对；内建函数通常不经过 RET。
+ */
+class RET {
+public:
+    COMMON(RET)
+    std::vector<Value> operands;
+
+    RET() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * FINDMOD — 按名导入/查找子模块。
+ *
+ * 作用：operands[0] 为模块名字符串；通过 main_module->import 加载 .lm 并压入 ModuleObject。
+ * 何时使用：import 语句、访问 std 等子模块前的模块解析（若 codegen 生成）。
+ * 意义：模块系统的运行时链接点；与 GETATTR 组合实现 std.decos.log 等路径。
+ */
+class FINDMOD {
+public:
+    COMMON(FINDMOD)
+    std::vector<Value> operands;
+
+    explicit FINDMOD(const Value& val) {
+        operands.emplace_back(val);
     };
 
+    void emit(VM& vm) const;
+};
+
+/**
+ * GETATTR — 读取对象属性。
+ *
+ * 作用：栈顶为对象（Module、字典等），弹出后按属性名取成员并压栈。
+ * 何时使用：后缀 .name、模块成员访问（如 std.decos）。
+ * 意义：面向对象/模块访问的 IR 原语；名字在 operands 中（编译期入 string pool）。
+ */
+class GETATTR {
+public:
+    COMMON(GETATTR)
+    std::vector<Value> operands;
+
+    explicit GETATTR(const Value& attr_name) {
+        operands.emplace_back(attr_name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * VEC_NEW — 构造向量字面量。
+ *
+ * 作用：从栈上弹出 n 个元素（操作数指定个数），组装 Vector 并压回。
+ * 何时使用：向量字面量 [a, b, c] 的 codegen。
+ * 意义：复合字面量构造；元素顺序与栈弹出顺序相反需注意。
+ */
+class VEC_NEW {
+public:
+    COMMON(VEC_NEW)
+    std::vector<Value> operands;
+
+    explicit VEC_NEW(const size_t element_count) {
+        operands.emplace_back(static_cast<ptrdiff_t>(element_count));
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * DICT_NEW — 构造字典字面量。
+ *
+ * 作用：从栈上弹出成对的 key/value（个数由操作数指定），构建 Dictionary。
+ * 何时使用：字典字面量 { k: v, ... }。
+ * 意义：与 VEC_NEW 类似，为聚合类型提供统一构造指令。
+ */
+class DICT_NEW {
+public:
+    COMMON(DICT_NEW)
+    std::vector<Value> operands;
+
+    explicit DICT_NEW(const size_t entry_count) {
+        operands.emplace_back(static_cast<ptrdiff_t>(entry_count));
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * INDEX — 下标/索引访问。
+ *
+ * 作用：弹出 index、container，将 container[index] 压栈（向量、字符串等）。
+ * 何时使用：a[i]、字符串字符访问（若语言支持）。
+ * 意义：随机访问原语；赋值到索引若支持则需另配 STORE 变体或专用指令。
+ */
+class INDEX {
+public:
+    COMMON(INDEX)
+    std::vector<Value> operands;
+
+    INDEX() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * STORE_ARG — 向当前作用域写入命名参数/变量（直接值）。
+ *
+ * 作用：弹出栈顶值，按变量 id 写入 symbol_stack 顶层（非引用槽模式）。
+ * 何时使用：特定参数绑定路径、与模块加载相关的符号初始化（较少见）。
+ * 意义：区别于 STORE（经 ref）的另一种绑定方式；具体语义见 emit 实现。
+ */
+class STORE_ARG {
+public:
+    COMMON(STORE_ARG)
+    std::vector<Value> operands;
+
+    explicit STORE_ARG(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * NEW_VAR — 在当前作用域创建可变变量引用槽。
+ *
+ * 作用：分配空 Reference，注册到 symbol_stack，并将 ref 压栈供后续 STORE。
+ * 何时使用：模块级 let、export 函数名绑定（func 声明后的 STORE）。
+ * 意义：名字与存储分离；赋值必须先 NEW_VAR（或 OR_LOAD）再 STORE。
+ */
+class NEW_VAR {
+public:
+    COMMON(NEW_VAR)
+    std::vector<Value> operands;
+
+    explicit NEW_VAR(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * NEW_CONST — 在当前作用域创建常量引用槽。
+ *
+ * 作用：与 NEW_VAR 类似，但标记为 constant，后续 STORE 若已有值可拒绝修改。
+ * 何时使用：const 声明、不可重新绑定的模块级名字。
+ * 意义：在运行时保留「只赋一次」的约束，配合 STORE 的 const 检查。
+ */
+class NEW_CONST {
+public:
+    COMMON(NEW_CONST)
+    std::vector<Value> operands;
+
+    explicit NEW_CONST(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * NEW_INTERN_VAR — 在函数/块内创建内部可变绑定。
+ *
+ * 作用：在当前 ENTER_SCOPE 层注册 intern 变量 ref，并压栈 ref。
+ * 何时使用：函数内 let、for 循环迭代器槽位名、需在 symbol 表可见的 intern 名。
+ * 意义：桥接 fast 局部与名字查找；常与 LOAD/STORE 或循环 IR 配合。
+ */
+class NEW_INTERN_VAR {
+public:
+    COMMON(NEW_INTERN_VAR)
+    std::vector<Value> operands;
+
+    explicit NEW_INTERN_VAR(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * NEW_INTERN_CONST — 在函数/块内创建内部常量绑定。
+ *
+ * 作用：同 NEW_INTERN_VAR，但 constants 标记为 true。
+ * 何时使用：块内 const、循环中不可改的迭代名（若语言区分）。
+ * 意义：作用域内常量语义与模块级 NEW_CONST 一致，层级更浅。
+ */
+class NEW_INTERN_CONST {
+public:
+    COMMON(NEW_INTERN_CONST)
+    std::vector<Value> operands;
+
+    explicit NEW_INTERN_CONST(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * NEW_VAR_OR_LOAD — 若已存在则加载引用，否则创建新变量。
+ *
+ * 作用：在 cache/symbol 中查找名字；找到则压入已有 ref，未找到则创建并注册。
+ * 何时使用：赋值语句左侧（可能首次赋值）、需要「读-改-写」同一名字的场景。
+ * 意义：统一首次定义与后续赋值的路径，简化 AssignNode 的 codegen。
+ */
+class NEW_VAR_OR_LOAD {
+public:
+    COMMON(NEW_VAR_OR_LOAD)
+    std::vector<Value> operands;
+
+    explicit NEW_VAR_OR_LOAD(const std::string& name) {
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * RET_THEN_LEAVE_SCOPE — 返回并弹出当前作用域。
+ *
+ * 作用：依次执行 RET 与 LEAVE_SCOPE（函数 return 的标准尾声）。
+ * 何时使用：带返回值的 func 声明体结束、需要同时归还调用方并销毁函数帧。
+ * 意义：避免忘记 LEAVE_SCOPE 导致 symbol/locals 泄漏；do 返回用裸 RET 即可。
+ */
+class RET_THEN_LEAVE_SCOPE {
+public:
+    COMMON(RET_THEN_LEAVE_SCOPE)
+    std::vector<Value> operands;
+
+    RET_THEN_LEAVE_SCOPE() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * LOAD_FAST — 按槽位读取当前帧局部变量。
+ *
+ * 作用：从 locals_stack 顶层按 slot_index 取值，以 Reference 形式压栈（非 ref 则包装）。
+ * 何时使用：函数参数、块内 let、当前帧内的 VarRef（非闭包捕获的外层名）。
+ * 意义：O(1) 局部访问；闭包捕获的外层变量应走 LOAD(name)+DEREF 而非本指令。
+ */
+class LOAD_FAST {
+public:
+    COMMON(LOAD_FAST)
+    std::vector<Value> operands;
+
+    explicit LOAD_FAST(size_t slot_index) {
+        operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * STORE_FAST — 按槽位写入当前帧局部变量。
+ *
+ * 作用：弹出栈顶值写入 locals_stack 顶层的 slot_index。
+ * 何时使用：参数接收（CALL 后）、let 初始化、for 循环迭代变量更新。
+ * 意义：函数帧的主力存储；参数绑定后常跟 BIND_FAST 以支持闭包与 LOAD 按名查找。
+ */
+class STORE_FAST {
+public:
+    COMMON(STORE_FAST)
+    std::vector<Value> operands;
+
+    explicit STORE_FAST(size_t slot_index) {
+        operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * STRUCT_NEW — 按已注册的 struct 类型构造实例。
+ *
+ * 作用：弹出 n 个 positional 实参，与 struct 字段顺序对齐；缺省字段用默认值。
+ * 何时使用：A(1, 2) 且 A 为 struct 名（由 codegen 根据全局 struct 注册表生成）。
+ */
+class STRUCT_NEW {
+public:
+    COMMON(STRUCT_NEW)
+    std::vector<Value> operands;
+
+    STRUCT_NEW(const std::string& struct_name, size_t arg_count) {
+        operands.emplace_back(struct_name);
+        operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * SET_FIELD — 写入 struct 的可变字段（var）。
+ *
+ * 作用：栈顶为值、次栈顶为 struct；typed struct 时做类型检查。
+ * 何时使用：a.b = expr 且 a 为 struct 实例。
+ */
+class SET_FIELD {
+public:
+    COMMON(SET_FIELD)
+    std::vector<Value> operands;
+
+    explicit SET_FIELD(const std::string& field_name) {
+        operands.emplace_back(field_name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定。
+ *
+ * 作用：把 locals_stack 某槽与 symbol_stack 顶层的 var_id 指向同一 ref 单元
+ *       （非 ref 槽会先包装为 ref 再注册）。
+ * 何时使用：函数参数 STORE_FAST 之后、需要被闭包捕获或 LOAD(name) 的外层局部。
+ * 意义：弥合「帧槽」与「名字+闭包」两套模型；无此指令则闭包只能捕获模块级符号。
+ */
+class BIND_FAST {
+public:
+    COMMON(BIND_FAST)
+    std::vector<Value> operands;
+
+    BIND_FAST(size_t slot_index, const std::string& name) {
+        operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
+        operands.emplace_back(name);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * @brief 字符串池，用于字符串的唯一化存储
+ */
+class StringPool {
+    std::unordered_map<std::string, size_t> string_to_id; ///< 字符串到ID的映射
+    std::vector<std::string> id_to_string;                ///< ID到字符串的映射
+    size_t counter = 0;                                   ///< 下一个可用ID
+
+public:
     /**
-     * CALL — 调用函数。
-     *
-     * 作用：栈顶为 callable；弹出实参（个数由 operands 指定）后执行。
-     *       用户函数：压入闭包 scope、跳转至 FunctionObject::location；
-     *       内建函数：直接 C++ 回调并压回返回值。
-     * 何时使用：调用表达式、装饰器包装（decos.log(func)）、方法调用链末端。
-     * 意义：执行模型中心；连接 codegen 与运行时 builtins/UserFunction。
+     * @brief 默认构造函数
      */
-    class CALL {
-    public:
-        COMMON(CALL)
-        std::vector<Value> operands;
-
-        explicit CALL(const std::string &name, const size_t arg_count) {
-            operands.emplace_back(name);
-            operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
-        }
-
-        explicit CALL(const size_t arg_count) {
-            operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * RET — 从用户函数返回。
-     *
-     * 作用：栈顶（或约定位置）为返回值；恢复 call_stack 中的 PC，弹出闭包 scope。
-     * 何时使用：return 语句、do 表达式返回内部函数对象（无 LEAVE 的 RET）。
-     * 意义：与用户函数 CALL 配对；内建函数通常不经过 RET。
-     */
-    class RET {
-    public:
-        COMMON(RET)
-        std::vector<Value> operands;
-
-        RET() = default;
-
-        void emit(VM &vm);
-    };
-
-    /**
-     * FINDMOD — 按名导入/查找子模块。
-     *
-     * 作用：operands[0] 为模块名字符串；通过 main_module->import 加载 .lm 并压入 ModuleObject。
-     * 何时使用：import 语句、访问 std 等子模块前的模块解析（若 codegen 生成）。
-     * 意义：模块系统的运行时链接点；与 GETATTR 组合实现 std.decos.log 等路径。
-     */
-    class FINDMOD {
-    public:
-        COMMON(FINDMOD)
-        std::vector<Value> operands;
-
-        explicit FINDMOD(const Value &val) {
-            operands.emplace_back(val);
-        };
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * GETATTR — 读取对象属性。
-     *
-     * 作用：栈顶为对象（Module、字典等），弹出后按属性名取成员并压栈。
-     * 何时使用：后缀 .name、模块成员访问（如 std.decos）。
-     * 意义：面向对象/模块访问的 IR 原语；名字在 operands 中（编译期入 string pool）。
-     */
-    class GETATTR {
-    public:
-        COMMON(GETATTR)
-        std::vector<Value> operands;
-
-        explicit GETATTR(const Value &attr_name) {
-            operands.emplace_back(attr_name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * VEC_NEW — 构造向量字面量。
-     *
-     * 作用：从栈上弹出 n 个元素（操作数指定个数），组装 Vector 并压回。
-     * 何时使用：向量字面量 [a, b, c] 的 codegen。
-     * 意义：复合字面量构造；元素顺序与栈弹出顺序相反需注意。
-     */
-    class VEC_NEW {
-    public:
-        COMMON(VEC_NEW)
-        std::vector<Value> operands;
-
-        explicit VEC_NEW(const size_t element_count) {
-            operands.emplace_back(static_cast<ptrdiff_t>(element_count));
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * DICT_NEW — 构造字典字面量。
-     *
-     * 作用：从栈上弹出成对的 key/value（个数由操作数指定），构建 Dictionary。
-     * 何时使用：字典字面量 { k: v, ... }。
-     * 意义：与 VEC_NEW 类似，为聚合类型提供统一构造指令。
-     */
-    class DICT_NEW {
-    public:
-        COMMON(DICT_NEW)
-        std::vector<Value> operands;
-
-        explicit DICT_NEW(const size_t entry_count) {
-            operands.emplace_back(static_cast<ptrdiff_t>(entry_count));
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * INDEX — 下标/索引访问。
-     *
-     * 作用：弹出 index、container，将 container[index] 压栈（向量、字符串等）。
-     * 何时使用：a[i]、字符串字符访问（若语言支持）。
-     * 意义：随机访问原语；赋值到索引若支持则需另配 STORE 变体或专用指令。
-     */
-    class INDEX {
-    public:
-        COMMON(INDEX)
-        std::vector<Value> operands;
-
-        INDEX() = default;
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * STORE_ARG — 向当前作用域写入命名参数/变量（直接值）。
-     *
-     * 作用：弹出栈顶值，按变量 id 写入 symbol_stack 顶层（非引用槽模式）。
-     * 何时使用：特定参数绑定路径、与模块加载相关的符号初始化（较少见）。
-     * 意义：区别于 STORE（经 ref）的另一种绑定方式；具体语义见 emit 实现。
-     */
-    class STORE_ARG {
-    public:
-        COMMON(STORE_ARG)
-        std::vector<Value> operands;
-
-        explicit STORE_ARG(const std::string &name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * NEW_VAR — 在当前作用域创建可变变量引用槽。
-     *
-     * 作用：分配空 Reference，注册到 symbol_stack，并将 ref 压栈供后续 STORE。
-     * 何时使用：模块级 let、export 函数名绑定（func 声明后的 STORE）。
-     * 意义：名字与存储分离；赋值必须先 NEW_VAR（或 OR_LOAD）再 STORE。
-     */
-    class NEW_VAR {
-    public:
-        COMMON(NEW_VAR)
-        std::vector<Value> operands;
-
-        explicit NEW_VAR(const std::string &name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * NEW_CONST — 在当前作用域创建常量引用槽。
-     *
-     * 作用：与 NEW_VAR 类似，但标记为 constant，后续 STORE 若已有值可拒绝修改。
-     * 何时使用：const 声明、不可重新绑定的模块级名字。
-     * 意义：在运行时保留「只赋一次」的约束，配合 STORE 的 const 检查。
-     */
-    class NEW_CONST {
-    public:
-        COMMON(NEW_CONST)
-        std::vector<Value> operands;
-
-        explicit NEW_CONST(const std::string &name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * NEW_INTERN_VAR — 在函数/块内创建内部可变绑定。
-     *
-     * 作用：在当前 ENTER_SCOPE 层注册 intern 变量 ref，并压栈 ref。
-     * 何时使用：函数内 let、for 循环迭代器槽位名、需在 symbol 表可见的 intern 名。
-     * 意义：桥接 fast 局部与名字查找；常与 LOAD/STORE 或循环 IR 配合。
-     */
-    class NEW_INTERN_VAR {
-    public:
-        COMMON(NEW_INTERN_VAR)
-        std::vector<Value> operands;
-
-        explicit NEW_INTERN_VAR(const std::string &name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * NEW_INTERN_CONST — 在函数/块内创建内部常量绑定。
-     *
-     * 作用：同 NEW_INTERN_VAR，但 constants 标记为 true。
-     * 何时使用：块内 const、循环中不可改的迭代名（若语言区分）。
-     * 意义：作用域内常量语义与模块级 NEW_CONST 一致，层级更浅。
-     */
-    class NEW_INTERN_CONST {
-    public:
-        COMMON(NEW_INTERN_CONST)
-        std::vector<Value> operands;
-
-        explicit NEW_INTERN_CONST(const std::string &name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * NEW_VAR_OR_LOAD — 若已存在则加载引用，否则创建新变量。
-     *
-     * 作用：在 cache/symbol 中查找名字；找到则压入已有 ref，未找到则创建并注册。
-     * 何时使用：赋值语句左侧（可能首次赋值）、需要「读-改-写」同一名字的场景。
-     * 意义：统一首次定义与后续赋值的路径，简化 AssignNode 的 codegen。
-     */
-    class NEW_VAR_OR_LOAD {
-    public:
-        COMMON(NEW_VAR_OR_LOAD)
-        std::vector<Value> operands;
-
-        explicit NEW_VAR_OR_LOAD(const std::string &name) {
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * RET_THEN_LEAVE_SCOPE — 返回并弹出当前作用域。
-     *
-     * 作用：依次执行 RET 与 LEAVE_SCOPE（函数 return 的标准尾声）。
-     * 何时使用：带返回值的 func 声明体结束、需要同时归还调用方并销毁函数帧。
-     * 意义：避免忘记 LEAVE_SCOPE 导致 symbol/locals 泄漏；do 返回用裸 RET 即可。
-     */
-    class RET_THEN_LEAVE_SCOPE {
-    public:
-        COMMON(RET_THEN_LEAVE_SCOPE)
-        std::vector<Value> operands;
-
-        RET_THEN_LEAVE_SCOPE() = default;
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * LOAD_FAST — 按槽位读取当前帧局部变量。
-     *
-     * 作用：从 locals_stack 顶层按 slot_index 取值，以 Reference 形式压栈（非 ref 则包装）。
-     * 何时使用：函数参数、块内 let、当前帧内的 VarRef（非闭包捕获的外层名）。
-     * 意义：O(1) 局部访问；闭包捕获的外层变量应走 LOAD(name)+DEREF 而非本指令。
-     */
-    class LOAD_FAST {
-    public:
-        COMMON(LOAD_FAST)
-        std::vector<Value> operands;
-
-        explicit LOAD_FAST(size_t slot_index) {
-            operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * STORE_FAST — 按槽位写入当前帧局部变量。
-     *
-     * 作用：弹出栈顶值写入 locals_stack 顶层的 slot_index。
-     * 何时使用：参数接收（CALL 后）、let 初始化、for 循环迭代变量更新。
-     * 意义：函数帧的主力存储；参数绑定后常跟 BIND_FAST 以支持闭包与 LOAD 按名查找。
-     */
-    class STORE_FAST {
-    public:
-        COMMON(STORE_FAST)
-        std::vector<Value> operands;
-
-        explicit STORE_FAST(size_t slot_index) {
-            operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
-        }
-
-        void emit(VM &vm) const;
-    };
-
-    /**
-     * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定。
-     *
-     * 作用：把 locals_stack 某槽与 symbol_stack 顶层的 var_id 指向同一 ref 单元
-     *       （非 ref 槽会先包装为 ref 再注册）。
-     * 何时使用：函数参数 STORE_FAST 之后、需要被闭包捕获或 LOAD(name) 的外层局部。
-     * 意义：弥合「帧槽」与「名字+闭包」两套模型；无此指令则闭包只能捕获模块级符号。
-     */
-    class BIND_FAST {
-    public:
-        COMMON(BIND_FAST)
-        std::vector<Value> operands;
-
-        BIND_FAST(size_t slot_index, const std::string& name) {
-            operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
-            operands.emplace_back(name);
-        }
-
-        void emit(VM &vm) const;
-    };
+    StringPool() = default;
 
     /**
-     * @brief 字符串池，用于字符串的唯一化存储
+     * @brief 添加字符串到池中
+     * @param name 字符串
+     * @return 字符串的ID
      */
-    class StringPool {
-        std::unordered_map<std::string, size_t> string_to_id;  ///< 字符串到ID的映射
-        std::vector<std::string> id_to_string;                  ///< ID到字符串的映射
-        size_t counter = 0;                                     ///< 下一个可用ID
-
-    public:
-        /**
-         * @brief 默认构造函数
-         */
-        StringPool() = default;
-
-        /**
-         * @brief 添加字符串到池中
-         * @param name 字符串
-         * @return 字符串的ID
-         */
-        size_t add(const std::string &name) {
-            const auto it = string_to_id.find(name);
-            if (it != string_to_id.end()) {
-                return it->second;
-            }
-            string_to_id[name] = counter;
-            id_to_string.push_back(name);
-            return counter++;
-        }
-
-        /**
-         * @brief 检查字符串是否存在
-         * @param name 字符串
-         * @return 是否存在
-         */
-        bool exists(const std::string &name) const {
-            return string_to_id.contains(name);
-        }
-
-        /**
-         * @brief 获取字符串的ID
-         * @param name 字符串
-         * @return ID
-         */
-        size_t get_id(const std::string &name) const {
-            const auto it = string_to_id.find(name);
-            if (it == string_to_id.end()) {
-                throw RuntimeError("String not found in pool: " + name);
-            }
+    size_t add(const std::string& name) {
+        const auto it = string_to_id.find(name);
+        if (it != string_to_id.end()) {
             return it->second;
         }
-
-        /**
-         * @brief 根据ID获取字符串
-         * @param id ID
-         * @return 字符串
-         */
-        const std::string &get_string(size_t id) const {
-            if (id >= id_to_string.size()) {
-                throw RuntimeError("String ID out of range: " + std::to_string(id));
-            }
-            return id_to_string[id];
-        }
-
-        /**
-         * @brief 获取池大小
-         * @return 字符串数量
-         */
-        size_t size() const {
-            return id_to_string.size();
-        }
-
-        /**
-         * @brief 检查池是否为空
-         * @return 是否为空
-         */
-        bool empty() const {
-            return id_to_string.empty();
-        }
-
-        /**
-         * @brief 清空池
-         */
-        void clear() {
-            string_to_id.clear();
-            id_to_string.clear();
-            counter = 0;
-        }
-    };
-
-    inline StringPool g_string_pool{};                      ///< 全局字符串池
+        string_to_id[name] = counter;
+        id_to_string.push_back(name);
+        return counter++;
+    }
 
     /**
-     * @brief 虚拟机类，执行IR指令
+     * @brief 检查字符串是否存在
+     * @param name 字符串
+     * @return 是否存在
      */
-    class VM {
-    public:
-        Stack<Value> op_stack{};                            ///< 操作数栈
-        Stack<Value> call_stack{};                          ///< 调用栈
-        std::vector<std::string> traceback{};               ///< 调用栈跟踪
-        std::vector<FunctionObject> call_func_stack{};      ///< 函数调用栈
-        std::vector<Opcode> code{};                         ///< IR指令序列
-        std::vector<SymbolTable> symbol_stack{SymbolTable()};///< 符号表栈
-        std::vector<std::vector<Value>> locals_stack;       ///< 局部变量栈
-        Cache cache{};                                      ///< 变量缓存
-        std::unordered_map<size_t, size_t> label_table{};   ///< 标签位置表
-        size_t pc = 0;                                      ///< 程序计数器
-        size_t label_counter = 0;                           ///< 标签计数器
-        std::shared_ptr<ModuleObject> main_module;          ///< 主模块（全局命名空间与 import 根）
+    bool exists(const std::string& name) const {
+        return string_to_id.contains(name);
+    }
 
-        /**
-         * @brief 初始化内置函数
-         */
-        void init_builtins();
+    /**
+     * @brief 获取字符串的ID
+     * @param name 字符串
+     * @return ID
+     */
+    size_t get_id(const std::string& name) const {
+        const auto it = string_to_id.find(name);
+        if (it == string_to_id.end()) {
+            throw RuntimeError("String not found in pool: " + name);
+        }
+        return it->second;
+    }
 
-        /**
-         * @brief 默认构造函数
-         */
-        VM();
+    /**
+     * @brief 根据ID获取字符串
+     * @param id ID
+     * @return 字符串
+     */
+    const std::string& get_string(size_t id) const {
+        if (id >= id_to_string.size()) {
+            throw RuntimeError("String ID out of range: " + std::to_string(id));
+        }
+        return id_to_string[id];
+    }
 
-        /**
-         * @brief 从IR指令序列构造
-         * @param c IR指令序列
-         */
-        explicit VM(std::vector<Opcode> c);
+    /**
+     * @brief 获取池大小
+     * @return 字符串数量
+     */
+    size_t size() const {
+        return id_to_string.size();
+    }
 
-        /**
-         * @brief 扫描标签并建立标签位置映射
-         */
-        void scan_labels() {
-            for (size_t i = pc; i < code.size(); i++) {
-                std::visit([&]<typename VT>(VT &op) -> void {
+    /**
+     * @brief 检查池是否为空
+     * @return 是否为空
+     */
+    bool empty() const {
+        return id_to_string.empty();
+    }
+
+    /**
+     * @brief 清空池
+     */
+    void clear() {
+        string_to_id.clear();
+        id_to_string.clear();
+        counter = 0;
+    }
+};
+
+inline StringPool g_string_pool{}; ///< 全局字符串池
+
+/**
+ * @brief 虚拟机类，执行IR指令
+ */
+class VM {
+public:
+    Stack<Value> op_stack{};                              ///< 操作数栈
+    Stack<Value> call_stack{};                            ///< 调用栈
+    std::vector<std::string> traceback{};                 ///< 调用栈跟踪
+    std::vector<FunctionObject> call_func_stack{};        ///< 函数调用栈
+    std::vector<Opcode> code{};                           ///< IR指令序列
+    std::vector<SymbolTable> symbol_stack{SymbolTable()}; ///< 符号表栈
+    std::vector<std::vector<Value>> locals_stack;         ///< 局部变量栈
+    Cache cache{};                                        ///< 变量缓存
+    std::unordered_map<size_t, size_t> label_table{};     ///< 标签位置表
+    size_t pc = 0;                                        ///< 程序计数器
+    size_t label_counter = 0;                             ///< 标签计数器
+    std::shared_ptr<ModuleObject> main_module;            ///< 主模块（全局命名空间与 import 根）
+
+    /**
+     * @brief 初始化内置函数
+     */
+    void init_builtins();
+
+    VM();
+
+    /**
+     * @brief 从IR指令序列构造
+     * @param c IR指令序列
+     */
+    explicit VM(std::vector<Opcode> c);
+
+    /**
+     * @brief 扫描标签并建立标签位置映射
+     */
+    void scan_labels() {
+        for (size_t i = pc; i < code.size(); i++) {
+            std::visit(
+                [&]<typename VT>(VT& op) -> void {
                     if constexpr (std::is_same_v<std::decay_t<VT>, LABEL>) {
                         label_table[static_cast<size_t>(op.operands[0].asInt())] = i;
                     }
-                }, code[i]);
-            }
+                },
+                code[i]
+            );
         }
-
-        /**
-         * @brief 执行IR指令序列
-         */
-        void run();
-
-        /**
-         * @brief 获取符号值
-         * @param name 符号名称
-         * @return 值（如果存在）
-         */
-        std::optional<Value> get_symbol(const std::string &name) const;
-
-        /**
-         * @brief 设置符号值
-         * @param name 符号名称
-         * @param value 值
-         */
-        void set_symbol(const std::string &name, const Value &value);
-    };
+    }
 
     /**
-     * @brief 模块对象，存储模块的导出和子模块
+     * @brief 执行IR指令序列
      */
-    class ModuleObject : public std::enable_shared_from_this<ModuleObject> {
-        bool is_user;                                        ///< 是否为用户模块
+    void run();
 
-    public:
-        std::string name;                                    ///< 模块名称
-        std::string full_name;                               ///< 完整模块路径名
-        std::unordered_map<std::string, Value> exports;      ///< 导出的符号
-        std::unordered_map<std::string, std::shared_ptr<ModuleObject>> submodules;  ///< 子模块
-        VM *owner_vm = nullptr;                             ///< 所属虚拟机
+    /**
+     * @brief 获取符号值
+     * @param name 符号名称
+     * @return 值（如果存在）
+     */
+    std::optional<Value> get_symbol(const std::string& name) const;
 
-        /**
-         * @brief 从代码字符串构造模块
-         * @tparam string 字符串类型
-         * @param code 代码字符串
-         */
-        template<StringType string>
-        explicit ModuleObject(string code);
+    /**
+     * @brief 设置符号值
+     * @param name 符号名称
+     * @param value 值
+     */
+    void set_symbol(const std::string& name, const Value& value);
+};
 
-        /**
-         * @brief 从符号表构造模块（内置模块）
-         * @param symbols 符号表
-         */
-        explicit(false) ModuleObject(const SymbolTable &symbols) : is_user(false) {
-            for (const auto &[id, val]: symbols.symbols) {
+/**
+ * @brief 模块对象，存储模块的导出和子模块
+ */
+class ModuleObject : public std::enable_shared_from_this<ModuleObject> {
+    bool is_user; ///< 是否为用户模块
+
+public:
+    std::string name;                                                          ///< 模块名称
+    std::string full_name;                                                     ///< 完整模块路径名
+    std::unordered_map<std::string, Value> exports;                            ///< 导出的符号
+    std::unordered_map<std::string, std::shared_ptr<ModuleObject>> submodules; ///< 子模块
+    VM* owner_vm = nullptr;                                                    ///< 所属虚拟机
+
+    /**
+     * @brief 从代码字符串构造模块
+     * @tparam string 字符串类型
+     * @param code 代码字符串
+     */
+    template<StringType string>
+    explicit ModuleObject(string code);
+
+    /**
+     * @brief 从符号表构造模块（内置模块）
+     * @param symbols 符号表
+     */
+    explicit(false) ModuleObject(const SymbolTable& symbols) : is_user(false) {
+        for (const auto& [id, val] : symbols.symbols) {
+            exports[g_string_pool.get_string(id)] = *val;
+        }
+        LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
+        for (const auto& [atname, val] : exports) {
+            LOG(atname << " : " << val);
+        }
+    }
+
+    /**
+     * @brief 从符号表栈构造模块（用户模块）
+     * @param symbol_stack 符号表栈
+     */
+    explicit ModuleObject(const std::vector<SymbolTable>& symbol_stack) : is_user(true) {
+        for (const auto& table : symbol_stack) {
+            for (const auto& [id, val] : table.symbols) {
                 exports[g_string_pool.get_string(id)] = *val;
             }
-            LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
-            for (const auto &[atname, val]: exports) {
-                LOG(atname << " : " << val);
-            }
+        }
+        LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
+        for (const auto& [atname, val] : exports) {
+            LOG(atname << " : " << val);
+        }
+    }
+
+    /**
+     * @brief 构造空模块
+     * @param n 模块名称
+     * @param vm 所属虚拟机
+     */
+    explicit ModuleObject(std::string n, VM* vm)
+        : is_user(true), name(std::move(n)), full_name(name), owner_vm(vm) {
+        LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
+        for (const auto& [atname, val] : exports) {
+            LOG(atname << " : " << val);
+        }
+    }
+
+    /**
+     * @brief 获取模块属性
+     * @param attrname 属性名称
+     * @return 属性值（如果存在）
+     */
+    std::optional<Value> get_attr(const std::string& attrname) const {
+        LOG("Finding " + attrname);
+
+        LOG("exports: ");
+        for (const auto& [atname, val] : exports) {
+            LOG(atname << " : " << val);
         }
 
-        /**
-         * @brief 从符号表栈构造模块（用户模块）
-         * @param symbol_stack 符号表栈
-         */
-        explicit ModuleObject(const std::vector<SymbolTable> &symbol_stack) : is_user(true) {
-            for (const auto &table: symbol_stack) {
-                for (const auto &[id, val]: table.symbols) {
-                    exports[g_string_pool.get_string(id)] = *val;
-                }
-            }
-            LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
-            for (const auto &[atname, val]: exports) {
-                LOG(atname << " : " << val);
-            }
+        if (exports.contains(attrname)) {
+            const auto it = exports.find(attrname);
+            LOG("Found it in itself");
+            return it->second;
         }
-
-        /**
-         * @brief 构造空模块
-         * @param n 模块名称
-         * @param vm 所属虚拟机
-         */
-        explicit ModuleObject(std::string n, VM *vm)
-            : is_user(true), name(std::move(n)), full_name(name), owner_vm(vm) {
-            LOG("Done exports of " << name << " : " << full_name << "(" << is_user << ")");
-            for (const auto &[atname, val]: exports) {
-                LOG(atname << " : " << val);
-            }
+        if (submodules.contains(attrname)) {
+            const auto mod_it = submodules.find(attrname);
+            LOG("Found it in submodule");
+            return Value(mod_it->second);
         }
+        LOG("Not found it");
+        return std::nullopt;
+    }
 
-        /**
-         * @brief 获取模块属性
-         * @param attrname 属性名称
-         * @return 属性值（如果存在）
-         */
-        std::optional<Value> get_attr(const std::string &attrname) const {
-            LOG("Finding " + attrname);
-
-            LOG("exports: ");
-            for (const auto &[atname, val]: exports) {
-                LOG(atname << " : " << val);
-            }
-
-            if (exports.contains(attrname)) {
-                const auto it = exports.find(attrname);
-                LOG("Found it in itself");
-                return it->second;
-            }
-            if (submodules.contains(attrname)) {
-                const auto mod_it = submodules.find(attrname);
-                LOG("Found it in submodule");
-                return Value(mod_it->second);
-            }
-            LOG("Not found it");
-            return std::nullopt;
+    /**
+     * @brief 设置模块属性
+     * @param attrname 属性名称
+     * @param value 属性值
+     */
+    void set_attr(const std::string& attrname, const Value& value) {
+        if (value.getType() == Value::Type::Module) {
+            auto mod = value.asModule();
+            mod->full_name = this->full_name.empty() ? attrname : this->full_name + "." + attrname;
+            submodules[attrname] = mod;
         }
+        exports[attrname] = value;
+    }
 
-        /**
-         * @brief 设置模块属性
-         * @param attrname 属性名称
-         * @param value 属性值
-         */
-        void set_attr(const std::string &attrname, const Value &value) {
-            if (value.getType() == Value::Type::Module) {
-                auto mod = value.asModule();
-                mod->full_name = this->full_name.empty() ? attrname : this->full_name + "." + attrname;
-                submodules[attrname] = mod;
-            }
-            exports[attrname] = value;
-        }
-
-        /**
-         * @brief 导入子模块
-         * @param module_name 模块名称
-         * @return 模块值
-         */
-        Value import(const std::string &module_name);
-    };
+    /**
+     * @brief 导入子模块
+     * @param module_name 模块名称
+     * @return 模块值
+     */
+    Value import(const std::string& module_name);
+};
 }
 #undef NAME

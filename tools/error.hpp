@@ -12,7 +12,8 @@ public:
      * @brief 构造函数
      * @param msg 错误信息
      */
-    explicit SyntaxError(const std::string &msg) : std::runtime_error(msg) {}
+    explicit SyntaxError(const std::string& msg) : std::runtime_error(msg) {
+    }
 };
 
 /**
@@ -25,5 +26,6 @@ public:
      * @brief 构造函数
      * @param msg 错误信息
      */
-    explicit RuntimeError(const std::string &msg) : std::runtime_error(msg) {}
+    explicit RuntimeError(const std::string& msg) : std::runtime_error(msg) {
+    }
 };

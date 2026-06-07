@@ -13,10 +13,10 @@ void repl::REPL::reset_state() {
 void repl::REPL::update_state(const std::string& line) {
     bool prev_char_is_whitespace = true;
     std::string prev_token;
-    
+
     for (size_t i = 0; i < line.size(); ++i) {
         char c = line[i];
-        
+
         if (in_string) {
             if (c == '\\' && i + 1 < line.size()) {
                 i++;
@@ -67,7 +67,12 @@ void repl::REPL::update_state(const std::string& line) {
             bool is_func_body = false;
             if (!prev_token.empty()) {
                 static const std::string func_keywords[] = {
-                    "func", "do", "if", "else", "loop", "while"
+                    "func",
+                    "do",
+                    "if",
+                    "else",
+                    "loop",
+                    "while"
                 };
                 for (const auto& kw : func_keywords) {
                     if (prev_token == kw) {
@@ -76,7 +81,7 @@ void repl::REPL::update_state(const std::string& line) {
                     }
                 }
             }
-            
+
             if (is_func_body || (!brace_stack.empty() && brace_stack.top() == BraceType::BRACE_FUNC)) {
                 brace_stack.push(BraceType::BRACE_FUNC);
             } else {
@@ -84,7 +89,7 @@ void repl::REPL::update_state(const std::string& line) {
             }
         } else if (token == "}") {
             if (!brace_stack.empty()) {
-                if (brace_stack.top() == BraceType::BRACE_FUNC || 
+                if (brace_stack.top() == BraceType::BRACE_FUNC ||
                     brace_stack.top() == BraceType::BRACE_DICT) {
                     brace_stack.pop();
                 }
@@ -100,7 +105,7 @@ bool repl::REPL::needs_more_input() const {
     return !brace_stack.empty();
 }
 
-repl::REPL::ExecResult repl::REPL::exec_input(const std::function<std::string()> &input_func) {
+repl::REPL::ExecResult repl::REPL::exec_input(const std::function<std::string()>& input_func) {
     const std::string line = input_func();
     if (line.empty()) {
         if (!pending_input.empty()) {
@@ -110,7 +115,7 @@ repl::REPL::ExecResult repl::REPL::exec_input(const std::function<std::string()>
     }
 
     update_state(line);
-    
+
     if (!pending_input.empty()) {
         pending_input += "\n";
     }

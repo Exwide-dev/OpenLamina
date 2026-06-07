@@ -19,6 +19,8 @@ set(OPENLAMINA_CORE_SOURCES
     tools/lang/builtins.hpp
     tools/lang/number.cpp
     tools/lang/number.hpp
+    tools/lang/rational.cpp
+    tools/lang/rational.hpp
     src/irgen/generator.cpp
     src/irgen/generator.hpp
     src/lexer/lexer.cpp
@@ -32,6 +34,8 @@ set(OPENLAMINA_CORE_SOURCES
     src/parser/ast.hpp
     src/irgen/opcode.cpp
     src/irgen/opcode.hpp
+    src/irgen/struct_types.cpp
+    src/irgen/struct_types.hpp
     src/repl/repl.cpp
     src/repl/repl.hpp
     tools/cli.cpp
@@ -44,12 +48,14 @@ set(OPENLAMINA_TEST_SOURCES
     tools/utf8_io.cpp
     tools/lang/builtins.cpp
     tools/lang/number.cpp
+    tools/lang/rational.cpp
     src/irgen/generator.cpp
     src/lexer/lexer.cpp
     src/parser/parser.cpp
     src/front-end/front_end.cpp
     src/front-end/repl_session.cpp
     src/irgen/opcode.cpp
+    src/irgen/struct_types.cpp
 )
 
 add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})
@@ -94,7 +100,7 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" OFF)
+option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" ON)
 
 if (FETCH_LAMMP)
     message(STATUS "OpenLamina: Fetching LAMMP")

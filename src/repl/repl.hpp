@@ -8,21 +8,20 @@
 #include "../../tools/utf8_io.hpp"
 
 namespace repl {
-
 /**
  * @class REPL
  * @brief 交互式解释器类
  */
 class REPL {
 public:
-    irgen::VM vm{}; ///< 虚拟机实例
+    irgen::VM vm{};                           ///< 虚拟机实例
     lmx::ReplSession parse_session{"<repl>"}; ///< 增量解析会话（保持行号与源码行）
-    
+
     /**
      * @brief 默认构造函数
      */
     REPL() = default;
-    
+
     /**
      * @brief 默认析构函数
      */
@@ -43,7 +42,7 @@ public:
      * @return 执行结果
      */
     ExecResult exec_input(
-        const std::function<std::string()> &input_func = []() -> std::string {
+        const std::function<std::string()>& input_func = []() -> std::string {
             return lm::utf8_io::read_line_utf8();
         }
     );
@@ -54,11 +53,11 @@ private:
      * @brief 括号类型枚举
      */
     enum class BraceType {
-        NONE,         ///< 无括号
-        PAREN,        ///< 圆括号 ()
-        BRACKET,      ///< 方括号 []
-        BRACE_FUNC,   ///< 花括号 {}（函数体）
-        BRACE_DICT    ///< 花括号 {}（字典）
+        NONE,       ///< 无括号
+        PAREN,      ///< 圆括号 ()
+        BRACKET,    ///< 方括号 []
+        BRACE_FUNC, ///< 花括号 {}（函数体）
+        BRACE_DICT  ///< 花括号 {}（字典）
     };
 
     std::stack<BraceType> brace_stack; ///< 括号栈，用于处理多行输入
@@ -71,17 +70,16 @@ private:
      * @param line 当前输入行
      */
     void update_state(const std::string& line);
-    
+
     /**
      * @brief 判断是否需要更多输入
      * @return 如果需要更多输入返回true
      */
     bool needs_more_input() const;
-    
+
     /**
      * @brief 重置解析状态
      */
     void reset_state();
 };
-
 }

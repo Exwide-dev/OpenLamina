@@ -5,7 +5,6 @@
 #include <string_view>
 
 namespace lmx::utf8 {
-
 struct DecodeResult {
     char32_t codepoint = 0;
     size_t bytes = 0;
@@ -168,5 +167,4 @@ struct DecodeResult {
 [[nodiscard]] inline size_t bom_length(std::string_view text) {
     return has_bom(text) ? 3 : 0;
 }
-
 }

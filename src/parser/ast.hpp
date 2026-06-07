@@ -5,7 +5,6 @@
 #include <string>
 
 namespace lmx {
-
 /**
  * @struct UseItem
  * @brief use 语句中的导入项，包含名称和别名
@@ -13,13 +12,14 @@ namespace lmx {
 struct UseItem {
     std::string name;  ///< 原始名称
     std::string alias; ///< 别名
-    
+
     /**
      * @brief 构造函数
      * @param n 名称
      * @param a 别名
      */
-    UseItem(std::string n, std::string a) : name(std::move(n)), alias(std::move(a)) {}
+    UseItem(std::string n, std::string a) : name(std::move(n)), alias(std::move(a)) {
+    }
 };
 
 /**
@@ -27,8 +27,8 @@ struct UseItem {
  * @brief 值类别，区分左值和右值
  */
 enum class ValueCategory {
-    LVALUE,  ///< 左值，可以出现在赋值语句左侧
-    RVALUE   ///< 右值，只能出现在赋值语句右侧
+    LVALUE, ///< 左值，可以出现在赋值语句左侧
+    RVALUE  ///< 右值，只能出现在赋值语句右侧
 };
 
 /**
@@ -36,8 +36,8 @@ enum class ValueCategory {
  * @brief 符号可见性
  */
 enum class Visibility {
-    Exported,  ///< 导出的，可被外部模块访问
-    Internal   ///< 内部的，仅模块内部可见
+    Exported, ///< 导出的，可被外部模块访问
+    Internal  ///< 内部的，仅模块内部可见
 };
 
 /**
@@ -45,41 +45,42 @@ enum class Visibility {
  * @brief AST 节点类型枚举
  */
 enum class ASTNodeType {
-    Unknown,        ///< 未知类型
-    BlockStmt,      ///< 块语句
-    Expr,           ///< 表达式
-    VarDecl,        ///< 变量声明
-    Assign,         ///< 赋值语句
-    FuncDecl,       ///< 函数声明
-    DoFuncDecl,     ///< do 表达式形式的函数
-    DecoratedFunc,  ///< 带装饰器的函数
-    ExternFunc,     ///< 外部函数声明
-    ReturnStmt,     ///< 返回语句
-    Loop,           ///< loop 循环
-    WhileStmt,      ///< while 循环
-    Break,          ///< break 语句
-    Continue,       ///< continue 语句
-    ForLoop,        ///< for 循环
-    IfStmt,         ///< if 语句
-    Module,         ///< 模块
-    Binary,         ///< 二元表达式
-    Unary,          ///< 一元表达式
-    Number,         ///< 数字字面量
-    Bool,           ///< 布尔字面量
-    String,         ///< 字符串字面量
-    VarRef,         ///< 变量引用
-    FuncCallExpr,   ///< 函数调用表达式
-    MemberAccess,   ///< 成员访问
-    Type,           ///< 类型节点
-    CompositeType,  ///< 复合类型
-    Program,        ///< 程序根节点
-    VMCall,         ///< VM 调用
-    Import,         ///< import 语句
-    Use,            ///< use 语句
-    Vector,         ///< 向量字面量
-    IndexAccess,    ///< 索引访问
-    Dictionary,     ///< 字典字面量
-    DictEntry       ///< 字典条目
+    Unknown,       ///< 未知类型
+    BlockStmt,     ///< 块语句
+    Expr,          ///< 表达式
+    VarDecl,       ///< 变量声明
+    Assign,        ///< 赋值语句
+    FuncDecl,      ///< 函数声明
+    DoFuncDecl,    ///< do 表达式形式的函数
+    DecoratedFunc, ///< 带装饰器的函数
+    ExternFunc,    ///< 外部函数声明
+    ReturnStmt,    ///< 返回语句
+    Loop,          ///< loop 循环
+    WhileStmt,     ///< while 循环
+    Break,         ///< break 语句
+    Continue,      ///< continue 语句
+    ForLoop,       ///< for 循环
+    IfStmt,        ///< if 语句
+    Module,        ///< 模块
+    Binary,        ///< 二元表达式
+    Unary,         ///< 一元表达式
+    Number,        ///< 数字字面量
+    Bool,          ///< 布尔字面量
+    String,        ///< 字符串字面量
+    VarRef,        ///< 变量引用
+    FuncCallExpr,  ///< 函数调用表达式
+    MemberAccess,  ///< 成员访问
+    Type,          ///< 类型节点
+    CompositeType, ///< 复合类型
+    Program,       ///< 程序根节点
+    VMCall,        ///< VM 调用
+    Import,        ///< import 语句
+    Use,           ///< use 语句
+    Vector,        ///< 向量字面量
+    IndexAccess,   ///< 索引访问
+    Dictionary,    ///< 字典字面量
+    DictEntry,     ///< 字典条目
+    StructDecl     ///< struct 类型声明
 };
 
 struct ASTNode;
@@ -91,20 +92,21 @@ struct TypeNode;
  * @brief AST 节点基类
  */
 struct ASTNode {
-    ASTNodeType kind;          ///< 节点类型
+    ASTNodeType kind;               ///< 节点类型
     std::vector<ASTNode*> children; ///< 子节点列表
-    
+
     /**
      * @brief 构造函数
      * @param t 节点类型
      */
-    explicit ASTNode(const ASTNodeType t) : kind(t) {}
-    
+    explicit ASTNode(const ASTNodeType t) : kind(t) {
+    }
+
     /**
      * @brief 默认构造函数
      */
     ASTNode() = default;
-    
+
     /**
      * @brief 析构函数，递归删除所有子节点
      */
@@ -124,13 +126,14 @@ struct ExprNode : ASTNode {
      * @brief 构造函数
      * @param t 节点类型，默认为 Expr
      */
-    explicit ExprNode(const ASTNodeType t = ASTNodeType::Expr) : ASTNode(t) {}
-    
+    explicit ExprNode(const ASTNodeType t = ASTNodeType::Expr) : ASTNode(t) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~ExprNode() override = default;
-    
+
     /**
      * @brief 获取值类别
      * @return 值类别
@@ -146,13 +149,14 @@ struct ExprNode : ASTNode {
  */
 struct TypeNode : ASTNode {
     std::string name; ///< 类型名称
-    
+
     /**
      * @brief 构造函数
      * @param n 类型名称
      */
-    explicit TypeNode(std::string n) : ASTNode(ASTNodeType::Type), name(std::move(n)) {}
-    
+    explicit TypeNode(std::string n) : ASTNode(ASTNodeType::Type), name(std::move(n)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -165,7 +169,7 @@ struct TypeNode : ASTNode {
  */
 struct CompositeTypeNode final : TypeNode {
     std::vector<TypeNode*> subtypes; ///< 子类型列表
-    
+
     /**
      * @brief 构造函数
      * @param n 类型名称
@@ -175,7 +179,7 @@ struct CompositeTypeNode final : TypeNode {
         : TypeNode(n), subtypes(std::move(subtypes)) {
         kind = ASTNodeType::CompositeType;
     }
-    
+
     /**
      * @brief 析构函数
      */
@@ -192,18 +196,19 @@ struct CompositeTypeNode final : TypeNode {
  */
 struct NumberNode final : ExprNode {
     std::string value; ///< 数字字符串表示
-    
+
     /**
      * @brief 构造函数
      * @param v 数字字符串
      */
-    explicit NumberNode(std::string v) : ExprNode(ASTNodeType::Number), value(std::move(v)) {}
-    
+    explicit NumberNode(std::string v) : ExprNode(ASTNodeType::Number), value(std::move(v)) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~NumberNode() override = default;
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -219,18 +224,19 @@ struct NumberNode final : ExprNode {
  */
 struct BoolNode final : ExprNode {
     bool value; ///< 布尔值
-    
+
     /**
      * @brief 构造函数
      * @param v 布尔值
      */
-    explicit BoolNode(const bool v) : ExprNode(ASTNodeType::Bool), value(v) {}
-    
+    explicit BoolNode(const bool v) : ExprNode(ASTNodeType::Bool), value(v) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~BoolNode() override = default;
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -246,18 +252,19 @@ struct BoolNode final : ExprNode {
  */
 struct StringNode final : ExprNode {
     std::string value; ///< 字符串值
-    
+
     /**
      * @brief 构造函数
      * @param v 字符串值
      */
-    explicit StringNode(std::string v) : ExprNode(ASTNodeType::String), value(std::move(v)) {}
-    
+    explicit StringNode(std::string v) : ExprNode(ASTNodeType::String), value(std::move(v)) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~StringNode() override = default;
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -273,14 +280,15 @@ struct StringNode final : ExprNode {
  */
 struct VectorNode final : ExprNode {
     std::vector<ASTNode*> elements; ///< 元素列表
-    
+
     /**
      * @brief 构造函数
      * @param e 元素列表
      */
-    explicit VectorNode(std::vector<ASTNode*> e) 
-        : ExprNode(ASTNodeType::Vector), elements(std::move(e)) {}
-    
+    explicit VectorNode(std::vector<ASTNode*> e)
+        : ExprNode(ASTNodeType::Vector), elements(std::move(e)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -289,7 +297,7 @@ struct VectorNode final : ExprNode {
             delete elem;
         }
     }
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -306,14 +314,15 @@ struct VectorNode final : ExprNode {
 struct DictEntryNode final : ASTNode {
     ExprNode* key;   ///< 键表达式
     ExprNode* value; ///< 值表达式
-    
+
     /**
      * @brief 构造函数
      * @param k 键表达式
      * @param v 值表达式
      */
-    DictEntryNode(ExprNode* k, ExprNode* v) : ASTNode(ASTNodeType::DictEntry), key(k), value(v) {}
-    
+    DictEntryNode(ExprNode* k, ExprNode* v) : ASTNode(ASTNodeType::DictEntry), key(k), value(v) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -329,14 +338,15 @@ struct DictEntryNode final : ASTNode {
  */
 struct DictionaryNode final : ExprNode {
     std::vector<DictEntryNode*> entries; ///< 条目列表
-    
+
     /**
      * @brief 构造函数
      * @param e 条目列表
      */
     explicit DictionaryNode(std::vector<DictEntryNode*> e)
-        : ExprNode(ASTNodeType::Dictionary), entries(std::move(e)) {}
-    
+        : ExprNode(ASTNodeType::Dictionary), entries(std::move(e)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -345,7 +355,7 @@ struct DictionaryNode final : ExprNode {
             delete entry;
         }
     }
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -361,18 +371,19 @@ struct DictionaryNode final : ExprNode {
  */
 struct VarRefNode : ExprNode {
     std::string name; ///< 变量名称
-    
+
     /**
      * @brief 构造函数
      * @param n 变量名称
      */
-    explicit VarRefNode(std::string n) : ExprNode(ASTNodeType::VarRef), name(std::move(n)) {}
-    
+    explicit VarRefNode(std::string n) : ExprNode(ASTNodeType::VarRef), name(std::move(n)) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~VarRefNode() override = default;
-    
+
     /**
      * @brief 获取值类别
      * @return LVALUE
@@ -387,24 +398,25 @@ struct VarRefNode : ExprNode {
  * @brief 一元表达式节点
  */
 struct UnaryNode final : ExprNode {
-    std::string op;     ///< 运算符
-    ExprNode* operand;  ///< 操作数
-    
+    std::string op;    ///< 运算符
+    ExprNode* operand; ///< 操作数
+
     /**
      * @brief 构造函数
      * @param o 运算符
      * @param oper 操作数
      */
     UnaryNode(std::string o, ExprNode* oper)
-        : ExprNode(ASTNodeType::Unary), op(std::move(o)), operand(oper) {}
-    
+        : ExprNode(ASTNodeType::Unary), op(std::move(o)), operand(oper) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~UnaryNode() override {
         delete operand;
     }
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -419,10 +431,10 @@ struct UnaryNode final : ExprNode {
  * @brief 二元表达式节点
  */
 struct BinaryNode : ExprNode {
-    std::string op;   ///< 运算符
-    ExprNode* left;   ///< 左操作数
-    ExprNode* right;  ///< 右操作数
-    
+    std::string op;  ///< 运算符
+    ExprNode* left;  ///< 左操作数
+    ExprNode* right; ///< 右操作数
+
     /**
      * @brief 构造函数
      * @param l 左操作数
@@ -430,8 +442,9 @@ struct BinaryNode : ExprNode {
      * @param o 运算符
      */
     BinaryNode(ExprNode* l, ExprNode* r, std::string o)
-        : ExprNode(ASTNodeType::Binary), op(std::move(o)), left(l), right(r) {}
-    
+        : ExprNode(ASTNodeType::Binary), op(std::move(o)), left(l), right(r) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -439,7 +452,7 @@ struct BinaryNode : ExprNode {
         delete left;
         delete right;
     }
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -454,17 +467,18 @@ struct BinaryNode : ExprNode {
  * @brief 函数调用表达式节点
  */
 struct FuncCallExprNode final : ExprNode {
-    ExprNode* func_expr; ///< 函数表达式
+    ExprNode* func_expr;        ///< 函数表达式
     std::vector<ASTNode*> args; ///< 参数列表
-    
+
     /**
      * @brief 构造函数
      * @param e 函数表达式
      * @param a 参数列表
      */
     FuncCallExprNode(ExprNode* e, std::vector<ASTNode*> a)
-        : ExprNode(ASTNodeType::FuncCallExpr), func_expr(e), args(std::move(a)) {}
-    
+        : ExprNode(ASTNodeType::FuncCallExpr), func_expr(e), args(std::move(a)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -474,7 +488,7 @@ struct FuncCallExprNode final : ExprNode {
             delete arg;
         }
     }
-    
+
     /**
      * @brief 获取值类别
      * @return RVALUE
@@ -489,24 +503,25 @@ struct FuncCallExprNode final : ExprNode {
  * @brief 成员访问表达式节点
  */
 struct MemberAccessNode final : ExprNode {
-    ExprNode* object;  ///< 对象表达式
+    ExprNode* object;   ///< 对象表达式
     std::string member; ///< 成员名称
-    
+
     /**
      * @brief 构造函数
      * @param obj 对象表达式
      * @param mem 成员名称
      */
     MemberAccessNode(ExprNode* obj, std::string mem)
-        : ExprNode(ASTNodeType::MemberAccess), object(obj), member(std::move(mem)) {}
-    
+        : ExprNode(ASTNodeType::MemberAccess), object(obj), member(std::move(mem)) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~MemberAccessNode() override {
         delete object;
     }
-    
+
     /**
      * @brief 获取值类别
      * @return 对象的值类别
@@ -523,15 +538,16 @@ struct MemberAccessNode final : ExprNode {
 struct IndexAccessNode final : ExprNode {
     ExprNode* object; ///< 对象表达式
     ExprNode* index;  ///< 索引表达式
-    
+
     /**
      * @brief 构造函数
      * @param obj 对象表达式
      * @param idx 索引表达式
      */
     IndexAccessNode(ExprNode* obj, ExprNode* idx)
-        : ExprNode(ASTNodeType::IndexAccess), object(obj), index(idx) {}
-    
+        : ExprNode(ASTNodeType::IndexAccess), object(obj), index(idx) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -539,7 +555,7 @@ struct IndexAccessNode final : ExprNode {
         delete object;
         delete index;
     }
-    
+
     /**
      * @brief 获取值类别
      * @return 对象的值类别
@@ -554,17 +570,18 @@ struct IndexAccessNode final : ExprNode {
  * @brief VM 内部调用节点
  */
 struct VMCallNode final : ExprNode {
-    std::string index; ///< 调用索引/名称
+    std::string index;          ///< 调用索引/名称
     std::vector<ASTNode*> args; ///< 参数列表
-    
+
     /**
      * @brief 构造函数
      * @param idx 调用索引
      * @param a 参数列表
      */
     VMCallNode(std::string idx, std::vector<ASTNode*> a)
-        : ExprNode(ASTNodeType::VMCall), index(std::move(idx)), args(std::move(a)) {}
-    
+        : ExprNode(ASTNodeType::VMCall), index(std::move(idx)), args(std::move(a)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -581,14 +598,15 @@ struct VMCallNode final : ExprNode {
  */
 struct BlockStmtNode final : ASTNode {
     std::vector<ASTNode*> stmts; ///< 语句列表
-    
+
     /**
      * @brief 构造函数
      * @param s 语句列表
      */
     explicit BlockStmtNode(std::vector<ASTNode*> s)
-        : ASTNode(ASTNodeType::BlockStmt), stmts(std::move(s)) {}
-    
+        : ASTNode(ASTNodeType::BlockStmt), stmts(std::move(s)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -604,11 +622,11 @@ struct BlockStmtNode final : ASTNode {
  * @brief 变量声明节点
  */
 struct VarDeclNode final : ASTNode {
-    std::string name;        ///< 变量名称
-    ExprNode* init;          ///< 初始化表达式
-    bool is_const;           ///< 是否为常量
-    Visibility visibility;   ///< 可见性
-    
+    std::string name;      ///< 变量名称
+    ExprNode* init;        ///< 初始化表达式
+    bool is_const;         ///< 是否为常量
+    Visibility visibility; ///< 可见性
+
     /**
      * @brief 构造函数
      * @param n 变量名称
@@ -616,11 +634,19 @@ struct VarDeclNode final : ASTNode {
      * @param is_const 是否为常量
      * @param vis 可见性
      */
-    VarDeclNode(std::string n, ExprNode* i, bool is_const = false, 
-                Visibility vis = Visibility::Exported)
-        : ASTNode(ASTNodeType::VarDecl), name(std::move(n)), init(i), 
-          is_const(is_const), visibility(vis) {}
-    
+    VarDeclNode(
+        std::string n,
+        ExprNode* i,
+        bool is_const = false,
+        Visibility vis = Visibility::Exported
+    )
+        : ASTNode(ASTNodeType::VarDecl),
+          name(std::move(n)),
+          init(i),
+          is_const(is_const),
+          visibility(vis) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -636,15 +662,16 @@ struct VarDeclNode final : ASTNode {
 struct AssignNode final : ASTNode {
     ExprNode* var;   ///< 目标变量表达式
     ExprNode* value; ///< 值表达式
-    
+
     /**
      * @brief 构造函数
      * @param n 目标变量
      * @param v 值表达式
      */
     AssignNode(ExprNode* n, ExprNode* v)
-        : ASTNode(ASTNodeType::Assign), var(n), value(v) {}
-    
+        : ASTNode(ASTNodeType::Assign), var(n), value(v) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -660,15 +687,16 @@ struct AssignNode final : ASTNode {
 struct DecoratedFuncNode final : ASTNode {
     std::vector<ExprNode*> decorators; ///< 装饰器列表
     ASTNode* target;                   ///< 目标函数
-    
+
     /**
      * @brief 构造函数
      * @param decs 装饰器列表
      * @param t 目标函数
      */
     DecoratedFuncNode(std::vector<ExprNode*> decs, ASTNode* t)
-        : ASTNode(ASTNodeType::DecoratedFunc), decorators(std::move(decs)), target(t) {}
-    
+        : ASTNode(ASTNodeType::DecoratedFunc), decorators(std::move(decs)), target(t) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -685,14 +713,14 @@ struct DecoratedFuncNode final : ASTNode {
  * @brief 函数声明节点
  */
 struct FuncDeclNode final : ASTNode {
-    std::string name;          ///< 函数名称
-    std::vector<std::string> params; ///< 参数列表
-    BlockStmtNode* body;       ///< 函数体
-    std::vector<TypeNode*> args_type; ///< 参数类型列表
-    TypeNode* ret_type{};      ///< 返回类型
-    std::vector<ExprNode*> decos; ///< 装饰器列表
+    std::string name;                             ///< 函数名称
+    std::vector<std::string> params;              ///< 参数列表
+    BlockStmtNode* body;                          ///< 函数体
+    std::vector<TypeNode*> args_type;             ///< 参数类型列表
+    TypeNode* ret_type{};                         ///< 返回类型
+    std::vector<ExprNode*> decos;                 ///< 装饰器列表
     Visibility visibility = Visibility::Exported; ///< 可见性
-    
+
     /**
      * @brief 构造函数
      * @param n 函数名称
@@ -707,13 +735,14 @@ struct FuncDeclNode final : ASTNode {
         BlockStmtNode* b,
         Visibility v = Visibility::Exported,
         const std::vector<ExprNode*>& decos = {}
-    )   : ASTNode(ASTNodeType::FuncDecl),
-          name(std::move(n)),
-          params(std::move(p)),
-          body(b),
-          decos(decos),
-          visibility(v) {}
-    
+    ) : ASTNode(ASTNodeType::FuncDecl),
+        name(std::move(n)),
+        params(std::move(p)),
+        body(b),
+        decos(decos),
+        visibility(v) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -731,22 +760,26 @@ struct FuncDeclNode final : ASTNode {
  * @brief do 表达式形式的函数声明节点
  */
 struct DoFuncDeclNode : ExprNode {
-    std::vector<std::string> params; ///< 参数列表
-    BlockStmtNode* body;       ///< 函数体
+    std::vector<std::string> params;  ///< 参数列表
+    BlockStmtNode* body;              ///< 函数体
     std::vector<TypeNode*> args_type; ///< 参数类型列表
-    TypeNode* ret_type{};      ///< 返回类型
-    std::vector<ExprNode*> decos; ///< 装饰器列表
-    
+    TypeNode* ret_type{};             ///< 返回类型
+    std::vector<ExprNode*> decos;     ///< 装饰器列表
+
     /**
      * @brief 构造函数
      * @param p 参数列表
      * @param b 函数体
      * @param decos 装饰器列表
      */
-    DoFuncDeclNode(std::vector<std::string> p, BlockStmtNode* b, 
-                   const std::vector<ExprNode*>& decos={})
-        : ExprNode(ASTNodeType::DoFuncDecl), params(std::move(p)), body(b), decos(decos) {}
-    
+    DoFuncDeclNode(
+        std::vector<std::string> p,
+        BlockStmtNode* b,
+        const std::vector<ExprNode*>& decos = {}
+    )
+        : ExprNode(ASTNodeType::DoFuncDecl), params(std::move(p)), body(b), decos(decos) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -764,13 +797,13 @@ struct DoFuncDeclNode : ExprNode {
  * @brief 外部函数声明节点（用于调用动态库函数）
  */
 struct ExternFuncNode : ASTNode {
-    std::string name;          ///< 函数名称
-    std::vector<std::string> params; ///< 参数列表
+    std::string name;                 ///< 函数名称
+    std::vector<std::string> params;  ///< 参数列表
     std::vector<TypeNode*> args_type; ///< 参数类型列表
-    StringNode* lib_name;      ///< 库名称
-    TypeNode* ret_type;        ///< 返回类型
-    std::vector<ExprNode*> decos; ///< 装饰器列表
-    
+    StringNode* lib_name;             ///< 库名称
+    TypeNode* ret_type;               ///< 返回类型
+    std::vector<ExprNode*> decos;     ///< 装饰器列表
+
     /**
      * @brief 构造函数
      * @param n 函数名称
@@ -780,12 +813,23 @@ struct ExternFuncNode : ASTNode {
      * @param r 返回类型
      * @param decos 装饰器列表
      */
-    ExternFuncNode(std::string n, std::vector<std::string> p,
-                   std::vector<TypeNode*> a, StringNode* l,
-                   TypeNode* r, const std::vector<ExprNode*>& decos = {})
-        : ASTNode(ASTNodeType::ExternFunc), name(std::move(n)), params(std::move(p)),
-          args_type(std::move(a)), lib_name(l), ret_type(r), decos(decos) {}
-    
+    ExternFuncNode(
+        std::string n,
+        std::vector<std::string> p,
+        std::vector<TypeNode*> a,
+        StringNode* l,
+        TypeNode* r,
+        const std::vector<ExprNode*>& decos = {}
+    )
+        : ASTNode(ASTNodeType::ExternFunc),
+          name(std::move(n)),
+          params(std::move(p)),
+          args_type(std::move(a)),
+          lib_name(l),
+          ret_type(r),
+          decos(decos) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -804,14 +848,15 @@ struct ExternFuncNode : ASTNode {
  */
 struct ReturnStmtNode final : ASTNode {
     ExprNode* expr; ///< 返回表达式
-    
+
     /**
      * @brief 构造函数
      * @param e 返回表达式
      */
     explicit ReturnStmtNode(ExprNode* e)
-        : ASTNode(ASTNodeType::ReturnStmt), expr(e) {}
-    
+        : ASTNode(ASTNodeType::ReturnStmt), expr(e) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -827,15 +872,16 @@ struct ReturnStmtNode final : ASTNode {
 struct LoopNode final : ASTNode {
     ExprNode* condition; ///< 循环条件
     BlockStmtNode* body; ///< 循环体
-    
+
     /**
      * @brief 构造函数
      * @param cond 循环条件
      * @param b 循环体
      */
     LoopNode(ExprNode* cond, BlockStmtNode* b)
-        : ASTNode(ASTNodeType::Loop), condition(cond), body(b) {}
-    
+        : ASTNode(ASTNodeType::Loop), condition(cond), body(b) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -853,24 +899,26 @@ struct ForLoopNode final : ASTNode {
     struct IterationItem {
         std::string var_name; ///< 迭代变量名
         ExprNode* iterable;   ///< 可迭代对象表达式
-        
+
         IterationItem(std::string name, ExprNode* iter)
-            : var_name(std::move(name)), iterable(iter) {}
-        
+            : var_name(std::move(name)), iterable(iter) {
+        }
+
         ~IterationItem() { delete iterable; }
     };
-    
+
     std::vector<IterationItem*> items; ///< 迭代项列表
     BlockStmtNode* body;               ///< 循环体
-    
+
     /**
      * @brief 构造函数
      * @param its 迭代项列表
      * @param b 循环体
      */
     ForLoopNode(std::vector<IterationItem*> its, BlockStmtNode* b)
-        : ASTNode(ASTNodeType::ForLoop), items(std::move(its)), body(b) {}
-    
+        : ASTNode(ASTNodeType::ForLoop), items(std::move(its)), body(b) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -889,15 +937,16 @@ struct ForLoopNode final : ASTNode {
 struct WhileStmtNode final : ASTNode {
     ExprNode* condition; ///< 循环条件
     BlockStmtNode* body; ///< 循环体
-    
+
     /**
      * @brief 构造函数
      * @param cond 循环条件
      * @param b 循环体
      */
     WhileStmtNode(ExprNode* cond, BlockStmtNode* b)
-        : ASTNode(ASTNodeType::WhileStmt), condition(cond), body(b) {}
-    
+        : ASTNode(ASTNodeType::WhileStmt), condition(cond), body(b) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -915,8 +964,9 @@ struct BreakNode final : ASTNode {
     /**
      * @brief 构造函数
      */
-    BreakNode() : ASTNode(ASTNodeType::Break) {}
-    
+    BreakNode() : ASTNode(ASTNodeType::Break) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -931,8 +981,9 @@ struct ContinueNode final : ASTNode {
     /**
      * @brief 构造函数
      */
-    ContinueNode() : ASTNode(ASTNodeType::Continue) {}
-    
+    ContinueNode() : ASTNode(ASTNodeType::Continue) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -944,21 +995,27 @@ struct ContinueNode final : ASTNode {
  * @brief if 语句节点
  */
 struct IfStmtNode final : ASTNode {
-    ExprNode* condition;   ///< 条件表达式
+    ExprNode* condition;       ///< 条件表达式
     BlockStmtNode* then_block; ///< then 块
     BlockStmtNode* else_block; ///< else 块
-    
+
     /**
      * @brief 构造函数
      * @param cond 条件表达式
      * @param t then 块
      * @param e else 块
      */
-    IfStmtNode(ExprNode* cond, BlockStmtNode* t,
-              BlockStmtNode* e)
-        : ASTNode(ASTNodeType::IfStmt), condition(cond),
-          then_block(t), else_block(e) {}
-    
+    IfStmtNode(
+        ExprNode* cond,
+        BlockStmtNode* t,
+        BlockStmtNode* e
+    )
+        : ASTNode(ASTNodeType::IfStmt),
+          condition(cond),
+          then_block(t),
+          else_block(e) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -978,19 +1035,19 @@ struct ModuleNode final : ASTNode {
      * @enum Types
      * @brief 模块类型
      */
-    enum class Types { 
-        ord,  ///< 普通模块
-        dyn   ///< 动态模块
+    enum class Types {
+        ord, ///< 普通模块
+        dyn  ///< 动态模块
     };
 
-    std::string name;          ///< 模块名称
-    Types type;                ///< 模块类型
-    StringNode* lib;           ///< 库名称（动态模块）
-    std::vector<VarDeclNode*> vars;       ///< 变量声明列表
-    std::vector<FuncDeclNode*> ord_funcs; ///< 普通函数列表
+    std::string name;                       ///< 模块名称
+    Types type;                             ///< 模块类型
+    StringNode* lib;                        ///< 库名称（动态模块）
+    std::vector<VarDeclNode*> vars;         ///< 变量声明列表
+    std::vector<FuncDeclNode*> ord_funcs;   ///< 普通函数列表
     std::vector<ExternFuncNode*> dyn_funcs; ///< 动态函数列表
-    std::vector<ModuleNode*> children;    ///< 子模块列表
-    
+    std::vector<ModuleNode*> children;      ///< 子模块列表
+
     /**
      * @brief 构造函数
      * @param n 模块名称
@@ -1001,15 +1058,25 @@ struct ModuleNode final : ASTNode {
      * @param d 动态函数列表
      * @param c 子模块列表
      */
-    ModuleNode(std::string n, const Types t, StringNode* l,
-              std::vector<VarDeclNode*> v,
-              std::vector<FuncDeclNode*> o,
-              std::vector<ExternFuncNode*> d,
-              std::vector<ModuleNode*> c)
-        : ASTNode(ASTNodeType::Module), name(std::move(n)), type(t), lib(l),
-          vars(std::move(v)), ord_funcs(std::move(o)), dyn_funcs(std::move(d)),
-          children(std::move(c)) {}
-    
+    ModuleNode(
+        std::string n,
+        const Types t,
+        StringNode* l,
+        std::vector<VarDeclNode*> v,
+        std::vector<FuncDeclNode*> o,
+        std::vector<ExternFuncNode*> d,
+        std::vector<ModuleNode*> c
+    )
+        : ASTNode(ASTNodeType::Module),
+          name(std::move(n)),
+          type(t),
+          lib(l),
+          vars(std::move(v)),
+          ord_funcs(std::move(o)),
+          dyn_funcs(std::move(d)),
+          children(std::move(c)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -1036,14 +1103,15 @@ struct ModuleNode final : ASTNode {
  */
 struct ProgramASTNode final : ASTNode {
     std::vector<ASTNode*> stmts; ///< 顶层语句列表
-    
+
     /**
      * @brief 构造函数
      * @param s 顶层语句列表
      */
     explicit ProgramASTNode(std::vector<ASTNode*> s)
-        : ASTNode(ASTNodeType::Program), stmts(std::move(s)) {}
-    
+        : ASTNode(ASTNodeType::Program), stmts(std::move(s)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -1061,15 +1129,16 @@ struct ProgramASTNode final : ASTNode {
 struct ImportNode final : ASTNode {
     std::vector<std::string> module_name; ///< 模块名称路径
     std::string alias;                    ///< 别名
-    
+
     /**
      * @brief 构造函数
      * @param n 模块名称路径
      * @param a 别名
      */
     ImportNode(std::vector<std::string> n, std::string a)
-        : ASTNode(ASTNodeType::Import), module_name(std::move(n)), alias(std::move(a)) {}
-    
+        : ASTNode(ASTNodeType::Import), module_name(std::move(n)), alias(std::move(a)) {
+    }
+
     /**
      * @brief 析构函数
      */
@@ -1083,19 +1152,51 @@ struct ImportNode final : ASTNode {
 struct UseNode final : ASTNode {
     std::vector<std::string> module_name; ///< 模块名称路径
     std::vector<UseItem> items;           ///< 导入项列表
-    
+
     /**
      * @brief 构造函数
      * @param n 模块名称路径
      * @param i 导入项列表
      */
     UseNode(std::vector<std::string> n, std::vector<UseItem> i)
-        : ASTNode(ASTNodeType::Use), module_name(std::move(n)), items(std::move(i)) {}
-    
+        : ASTNode(ASTNodeType::Use), module_name(std::move(n)), items(std::move(i)) {
+    }
+
     /**
      * @brief 析构函数
      */
     ~UseNode() override = default;
 };
 
+/**
+ * @struct StructField
+ * @brief struct 中的一个字段
+ */
+struct StructField {
+    std::string name;
+    std::string type_name;
+    bool has_type_annotation = false;
+    bool is_var = false;
+    ExprNode* default_init = nullptr;
+};
+
+/**
+ * @struct StructDeclNode
+ * @brief struct 声明
+ */
+struct StructDeclNode final : ASTNode {
+    std::string name;
+    bool typed = false;
+    std::vector<StructField> fields;
+
+    StructDeclNode(std::string n, bool t, std::vector<StructField> f)
+        : ASTNode(ASTNodeType::StructDecl), name(std::move(n)), typed(t), fields(std::move(f)) {
+    }
+
+    ~StructDeclNode() override {
+        for (auto& field : fields) {
+            delete field.default_init;
+        }
+    }
+};
 } // namespace lmx

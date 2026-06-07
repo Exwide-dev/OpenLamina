@@ -8,7 +8,6 @@
 #include "../parser/parser.hpp"
 
 namespace lmx {
-
 /**
  * @brief REPL 增量解析会话：跨多次输入保持词法/语法状态与全局行号
  */
@@ -31,5 +30,4 @@ private:
     Parser parser_;
     std::string cumulative_source_;
 };
-
 } // namespace lmx

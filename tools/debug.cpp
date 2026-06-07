@@ -147,6 +147,32 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             printAST(func->body, indent + 2);
             break;
         }
+        case lmx::ASTNodeType::StructDecl: {
+            const auto* st = dynamic_cast<const lmx::StructDeclNode*>(node);
+            std::cout << indent_str << "StructDecl: " << st->name
+                    << (st->typed ? " [typed]" : "") << "\n";
+            for (const auto& field : st->fields) {
+                std::cout << indent_str << "  "
+                        << (field.is_var ? "var " : "let ")
+                        << field.name;
+                if (field.has_type_annotation) {
+                    std::cout << ": " << field.type_name;
+                }
+                if (field.default_init) {
+                    std::cout << " = ";
+                    printAST(field.default_init, indent + 2);
+                } else {
+                    std::cout << "\n";
+                }
+            }
+            break;
+        }
+        case lmx::ASTNodeType::MemberAccess: {
+            const auto* mem = dynamic_cast<const lmx::MemberAccessNode*>(node);
+            std::cout << indent_str << "MemberAccess: ." << mem->member << "\n";
+            printAST(mem->object, indent + 2);
+            break;
+        }
         case lmx::ASTNodeType::FuncCallExpr: {
             const auto call = dynamic_cast<lmx::FuncCallExprNode*>(const_cast<lmx::ASTNode*>(node));
             std::cout << indent_str << "FuncCallExpr\n";
@@ -200,7 +226,9 @@ void printAST(const lmx::ASTNode* node, const int indent) {
         }
         case lmx::ASTNodeType::Vector: {
             const auto vec = dynamic_cast<lmx::VectorNode*>(const_cast<lmx::ASTNode*>(node));
-            std::cout << indent_str << "Vector: " << (vec->getValueCategory() == lmx::ValueCategory::LVALUE ? " [LVALUE]" : " [RVALUE]") << std::endl;
+            std::cout << indent_str << "Vector: " << (vec->getValueCategory() == lmx::ValueCategory::LVALUE
+                                                          ? " [LVALUE]"
+                                                          : " [RVALUE]") << std::endl;
             for (const auto& elem : vec->elements) {
                 printAST(elem, indent + 2);
             }
@@ -209,8 +237,8 @@ void printAST(const lmx::ASTNode* node, const int indent) {
         case lmx::ASTNodeType::IndexAccess: {
             const auto acc = dynamic_cast<lmx::IndexAccessNode*>(const_cast<lmx::ASTNode*>(node));
             std::cout << indent_str << "IndexAccess:"
-                      << (acc->getValueCategory() == lmx::ValueCategory::LVALUE ? " [LVALUE]" : " [RVALUE]")
-                      << std::endl;
+                    << (acc->getValueCategory() == lmx::ValueCategory::LVALUE ? " [LVALUE]" : " [RVALUE]")
+                    << std::endl;
             printAST(acc->object, indent + 2);
             printAST(acc->index, indent + 2);
             break;
@@ -234,6 +262,6 @@ void printAST(const lmx::ASTNode* node, const int indent) {
         }
         default:
             std::cout << indent_str << "Unknown Node Type: "
-                      << static_cast<size_t>(node->kind) << std::endl;
+                    << static_cast<size_t>(node->kind) << std::endl;
     }
 }
