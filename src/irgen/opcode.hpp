@@ -23,21 +23,26 @@
 #include "../tools/lang/rational.hpp"
 #include "front-end/front_end.hpp"
 
-#define COMMON(ClassName) \
-[[nodiscard]] std::string name() const { return #ClassName; } \
-[[nodiscard]] std::string stringArgs() const { \
-std::string s; \
-for (size_t i = 0; i < operands.size(); ++i) { \
-if (i > 0) s += ' '; \
-s += operands[i].toString(); \
-} \
-return s; \
-} \
-[[nodiscard]] std::string toString() const { \
-return std::format("{} {}", name(), stringArgs()); \
-} \
-std::string line; \
-int line_no = 0;
+#define OPCODE_META(ClassName) \
+    [[nodiscard]] std::string name() const { return #ClassName; } \
+    std::string line; \
+    int line_no = 0;
+
+#define OPCODE_ARGS0() \
+    [[nodiscard]] std::string stringArgs() const { return {}; } \
+    [[nodiscard]] std::string toString() const { return name(); }
+
+#define OPCODE_ARGS1(field) \
+    [[nodiscard]] std::string stringArgs() const { return std::format("{}", field); } \
+    [[nodiscard]] std::string toString() const { return std::format("{} {}", name(), field); }
+
+#define OPCODE_ARGS1V(field) \
+    [[nodiscard]] std::string stringArgs() const { return field.toString(); } \
+    [[nodiscard]] std::string toString() const { return std::format("{} {}", name(), field.toString()); }
+
+#define OPCODE_ARGS2(a, b) \
+    [[nodiscard]] std::string stringArgs() const { return std::format("{} {}", a, b); } \
+    [[nodiscard]] std::string toString() const { return std::format("{} {} {}", name(), a, b); }
 
 namespace irgen {
 struct StructObject;
@@ -1224,8 +1229,8 @@ struct StructObject {
  */
 class ITER_NEW {
 public:
-    COMMON(ITER_NEW)
-    std::vector<Value> operands;
+    OPCODE_META(ITER_NEW)
+    OPCODE_ARGS0()
 
     ITER_NEW() = default;
 
@@ -1242,8 +1247,8 @@ public:
  */
 class ITER_NEXT {
 public:
-    COMMON(ITER_NEXT)
-    std::vector<Value> operands;
+    OPCODE_META(ITER_NEXT)
+    OPCODE_ARGS0()
 
     ITER_NEXT() = default;
 
@@ -1259,8 +1264,8 @@ public:
  */
 class ITER_END {
 public:
-    COMMON(ITER_END)
-    std::vector<Value> operands;
+    OPCODE_META(ITER_END)
+    OPCODE_ARGS0()
 
     ITER_END() = default;
 
@@ -1611,12 +1616,11 @@ public:
  */
 class PUSH {
 public:
-    COMMON(PUSH)
-    std::vector<Value> operands;
+    OPCODE_META(PUSH)
+    Value val;
+    OPCODE_ARGS1V(val)
 
-    explicit PUSH(const Value& v) {
-        operands.push_back(v);
-    }
+    explicit PUSH(const Value& v) : val(v) {}
 
     void emit(VM& vm) const;
 };
@@ -1630,8 +1634,8 @@ public:
  */
 class ADD {
 public:
-    COMMON(ADD)
-    std::vector<Value> operands;
+    OPCODE_META(ADD)
+    OPCODE_ARGS0()
 
     ADD() = default;
 
@@ -1639,7 +1643,7 @@ public:
 };
 
 /**
- * MUL — 二元乘法。
+ * MUL — 二元乘法.
  *
  * 作用：弹出 b、a，压入 a * b（大整数经 lammp::Number）。
  * 何时使用：乘法表达式、部分代数化简路径。
@@ -1647,8 +1651,8 @@ public:
  */
 class MUL {
 public:
-    COMMON(MUL)
-    std::vector<Value> operands;
+    OPCODE_META(MUL)
+    OPCODE_ARGS0()
 
     MUL() = default;
 
@@ -1656,7 +1660,7 @@ public:
 };
 
 /**
- * SUB — 二元减法。
+ * SUB — 二元减法.
  *
  * 作用：弹出 b、a，压入 a - b。
  * 何时使用：减法表达式、循环/索引中的递减。
@@ -1664,8 +1668,8 @@ public:
  */
 class SUB {
 public:
-    COMMON(SUB)
-    std::vector<Value> operands;
+    OPCODE_META(SUB)
+    OPCODE_ARGS0()
 
     SUB() = default;
 
@@ -1673,7 +1677,7 @@ public:
 };
 
 /**
- * DIV — 二元除法。
+ * DIV — 二元除法.
  *
  * 作用：弹出 b、a，压入 a / b（整数除法或 Number 语义由 Value 定义）。
  * 何时使用：除法表达式。
@@ -1681,8 +1685,8 @@ public:
  */
 class DIV {
 public:
-    COMMON(DIV)
-    std::vector<Value> operands;
+    OPCODE_META(DIV)
+    OPCODE_ARGS0()
 
     DIV() = default;
 
@@ -1690,7 +1694,7 @@ public:
 };
 
 /**
- * NEG — 一元取负。
+ * NEG — 一元取负.
  *
  * 作用：弹出栈顶，压入其相反数。
  * 何时使用：前缀 - 表达式。
@@ -1698,8 +1702,8 @@ public:
  */
 class NEG {
 public:
-    COMMON(NEG)
-    std::vector<Value> operands;
+    OPCODE_META(NEG)
+    OPCODE_ARGS0()
 
     NEG() = default;
 
@@ -1707,7 +1711,7 @@ public:
 };
 
 /**
- * DEREF — 解引用。
+ * DEREF — 解引用.
  *
  * 作用：若栈顶为 Reference，则替换为所指向的实际 Value；否则保持不变。
  * 何时使用：读取变量值（LOAD / LOAD_FAST 之后）、需要 RVALUE 的表达式位置。
@@ -1715,8 +1719,8 @@ public:
  */
 class DEREF {
 public:
-    COMMON(DEREF)
-    std::vector<Value> operands;
+    OPCODE_META(DEREF)
+    OPCODE_ARGS0()
 
     DEREF() = default;
 
@@ -1724,7 +1728,7 @@ public:
 };
 
 /**
- * NOT — 逻辑非。
+ * NOT — 逻辑非.
  *
  * 作用：弹出栈顶，压入布尔取反。
  * 何时使用：前缀 ! 、条件取反。
@@ -1732,8 +1736,8 @@ public:
  */
 class NOT {
 public:
-    COMMON(NOT)
-    std::vector<Value> operands;
+    OPCODE_META(NOT)
+    OPCODE_ARGS0()
 
     NOT() = default;
 
@@ -1741,7 +1745,7 @@ public:
 };
 
 /**
- * AND — 逻辑与。
+ * AND — 逻辑与.
  *
  * 作用：弹出 b、a，压入 a && b 的布尔结果。
  * 何时使用：&& 表达式（若未完全在 codegen 层短路）。
@@ -1749,8 +1753,8 @@ public:
  */
 class AND {
 public:
-    COMMON(AND)
-    std::vector<Value> operands;
+    OPCODE_META(AND)
+    OPCODE_ARGS0()
 
     AND() = default;
 
@@ -1758,7 +1762,7 @@ public:
 };
 
 /**
- * OR — 逻辑或。
+ * OR — 逻辑或.
  *
  * 作用：弹出 b、a，压入 a || b 的布尔结果。
  * 何时使用：|| 表达式。
@@ -1766,8 +1770,8 @@ public:
  */
 class OR {
 public:
-    COMMON(OR)
-    std::vector<Value> operands;
+    OPCODE_META(OR)
+    OPCODE_ARGS0()
 
     OR() = default;
 
@@ -1775,7 +1779,7 @@ public:
 };
 
 /**
- * EQ — 相等比较。
+ * EQ — 相等比较.
  *
  * 作用：弹出 b、a，压入 (a == b) 的布尔值。
  * 何时使用：== 表达式、条件判断。
@@ -1783,8 +1787,8 @@ public:
  */
 class EQ {
 public:
-    COMMON(EQ)
-    std::vector<Value> operands;
+    OPCODE_META(EQ)
+    OPCODE_ARGS0()
 
     EQ() = default;
 
@@ -1792,7 +1796,7 @@ public:
 };
 
 /**
- * NEQ — 不等比较。
+ * NEQ — 不等比较.
  *
  * 作用：弹出 b、a，压入 (a != b)。
  * 何时使用：!= 表达式。
@@ -1800,8 +1804,8 @@ public:
  */
 class NEQ {
 public:
-    COMMON(NEQ)
-    std::vector<Value> operands;
+    OPCODE_META(NEQ)
+    OPCODE_ARGS0()
 
     NEQ() = default;
 
@@ -1809,7 +1813,7 @@ public:
 };
 
 /**
- * LT — 小于比较。
+ * LT — 小于比较.
  *
  * 作用：弹出 b、a，压入 (a < b)。
  * 何时使用：< 表达式、排序与循环边界。
@@ -1817,8 +1821,8 @@ public:
  */
 class LT {
 public:
-    COMMON(LT)
-    std::vector<Value> operands;
+    OPCODE_META(LT)
+    OPCODE_ARGS0()
 
     LT() = default;
 
@@ -1826,7 +1830,7 @@ public:
 };
 
 /**
- * LTE — 小于等于比较。
+ * LTE — 小于等于比较.
  *
  * 作用：弹出 b、a，压入 (a <= b)。
  * 何时使用：<= 表达式（如 fib、while 条件）。
@@ -1834,8 +1838,8 @@ public:
  */
 class LTE {
 public:
-    COMMON(LTE)
-    std::vector<Value> operands;
+    OPCODE_META(LTE)
+    OPCODE_ARGS0()
 
     LTE() = default;
 
@@ -1843,7 +1847,7 @@ public:
 };
 
 /**
- * GT — 大于比较。
+ * GT — 大于比较.
  *
  * 作用：弹出 b、a，压入 (a > b)。
  * 何时使用：> 表达式。
@@ -1851,8 +1855,8 @@ public:
  */
 class GT {
 public:
-    COMMON(GT)
-    std::vector<Value> operands;
+    OPCODE_META(GT)
+    OPCODE_ARGS0()
 
     GT() = default;
 
@@ -1860,7 +1864,7 @@ public:
 };
 
 /**
- * GTE — 大于等于比较。
+ * GTE — 大于等于比较.
  *
  * 作用：弹出 b、a，压入 (a >= b)。
  * 何时使用：>= 表达式。
@@ -1868,8 +1872,8 @@ public:
  */
 class GTE {
 public:
-    COMMON(GTE)
-    std::vector<Value> operands;
+    OPCODE_META(GTE)
+    OPCODE_ARGS0()
 
     GTE() = default;
 
@@ -1877,7 +1881,7 @@ public:
 };
 
 /**
- * STORE — 通过引用槽写入变量。
+ * STORE — 通过引用槽写入变量.
  *
  * 作用：栈顶为 ref_slot，次顶为 data；将 data 写入 ref 指向的单元（遵守 const 约束）。
  * 何时使用：模块级 let 赋值、NEW_VAR 后的首次绑定、BIND_FAST 前的中间步骤。
@@ -1885,8 +1889,8 @@ public:
  */
 class STORE {
 public:
-    COMMON(STORE)
-    std::vector<Value> operands;
+    OPCODE_META(STORE)
+    OPCODE_ARGS0()
 
     STORE() = default;
 
@@ -1894,21 +1898,20 @@ public:
 };
 
 /**
- * LOAD — 按名字加载变量引用。
+ * LOAD — 按名字加载变量引用.
  *
- * 作用：operands[0] 为变量名（编译后变为 string pool id）；在 cache、
+ * 作用：var_id 为变量名（编译后变为 string pool id）；在 cache、
  *       symbol_stack（含闭包捕获层）、main_module 中查找，压入 Reference。
  * 何时使用：读取模块/闭包变量、外层捕获的 fast 参数（经 BIND_FAST 注册后）。
  * 意义：名字解析的运行时入口；读值需再跟 DEREF。
  */
 class LOAD {
 public:
-    COMMON(LOAD)
-    std::vector<Value> operands;
+    OPCODE_META(LOAD)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit LOAD(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit LOAD(const std::string& name);
 
     void emit(VM& vm) const;
 };
@@ -1922,16 +1925,11 @@ public:
  */
 class LABEL {
 public:
-    COMMON(LABEL)
-    std::vector<Value> operands;
+    OPCODE_META(LABEL)
+    size_t label_id;
+    OPCODE_ARGS1(label_id)
 
-    explicit LABEL(const size_t label_id) {
-        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
-    }
-
-    explicit LABEL(const Value& label_id) {
-        operands.emplace_back(label_id);
-    }
+    explicit LABEL(size_t label_id) : label_id(label_id) {}
 
     void emit(VM& vm);
 
@@ -1939,7 +1937,7 @@ public:
 };
 
 /**
- * GOTO — 无条件跳转。
+ * GOTO — 无条件跳转.
  *
  * 作用：将 PC 设为 label_table[label_id]。
  * 何时使用：跳过函数体、循环回边、if 结束汇合、程序初始化跳转到 main 段。
@@ -1947,22 +1945,17 @@ public:
  */
 class GOTO {
 public:
-    COMMON(GOTO)
-    std::vector<Value> operands;
+    OPCODE_META(GOTO)
+    size_t label_id;
+    OPCODE_ARGS1(label_id)
 
-    explicit GOTO(size_t label_id) {
-        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
-    }
-
-    explicit GOTO(const Value& label_id) {
-        operands.emplace_back(label_id);
-    }
+    explicit GOTO(size_t label_id) : label_id(label_id) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * GOTOIF — 条件为真时跳转。
+ * GOTOIF — 条件为真时跳转.
  *
  * 作用：弹出栈顶条件；若为真则跳到 label_id，否则 fall-through。
  * 何时使用：if/while/for 分支、短路逻辑、循环退出判断。
@@ -1970,16 +1963,11 @@ public:
  */
 class GOTOIF {
 public:
-    COMMON(IFTRUEGOTO)
-    std::vector<Value> operands;
+    OPCODE_META(GOTOIF)
+    size_t label_id;
+    OPCODE_ARGS1(label_id)
 
-    explicit GOTOIF(size_t label_id) {
-        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
-    }
-
-    explicit GOTOIF(const Value& label_id) {
-        operands.emplace_back(label_id);
-    }
+    explicit GOTOIF(size_t label_id) : label_id(label_id) {}
 
     void emit(VM& vm) const;
 };
@@ -1989,22 +1977,17 @@ public:
  */
 class GOTOIFNOT {
 public:
-    COMMON(GOTOIFNOT)
-    std::vector<Value> operands;
+    OPCODE_META(GOTOIFNOT)
+    size_t label_id;
+    OPCODE_ARGS1(label_id)
 
-    explicit GOTOIFNOT(size_t label_id) {
-        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
-    }
-
-    explicit GOTOIFNOT(const Value& label_id) {
-        operands.emplace_back(label_id);
-    }
+    explicit GOTOIFNOT(size_t label_id) : label_id(label_id) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * ENTER_SCOPE — 进入词法作用域。
+ * ENTER_SCOPE — 进入词法作用域.
  *
  * 作用：在 symbol_stack 与 locals_stack 各压入一层新表，cache 进入子作用域。
  * 何时使用：函数体、块语句、需要隔离局部绑定的区域。
@@ -2012,8 +1995,8 @@ public:
  */
 class ENTER_SCOPE {
 public:
-    COMMON(ENTER_SCOPE)
-    std::vector<Value> operands;
+    OPCODE_META(ENTER_SCOPE)
+    OPCODE_ARGS0()
 
     ENTER_SCOPE() = default;
 
@@ -2021,7 +2004,7 @@ public:
 };
 
 /**
- * LEAVE_SCOPE — 离开词法作用域。
+ * LEAVE_SCOPE — 离开词法作用域.
  *
  * 作用：弹出 symbol_stack 与 locals_stack 栈顶一层，cache 离开子作用域。
  * 何时使用：块结束、函数 RET 之后（或 RET_THEN_LEAVE_SCOPE 内）。
@@ -2029,8 +2012,8 @@ public:
  */
 class LEAVE_SCOPE {
 public:
-    COMMON(LEAVE_SCOPE)
-    std::vector<Value> operands;
+    OPCODE_META(LEAVE_SCOPE)
+    OPCODE_ARGS0()
 
     LEAVE_SCOPE() = default;
 
@@ -2038,9 +2021,9 @@ public:
 };
 
 /**
- * CALL — 调用函数。
+ * CALL — 调用函数.
  *
- * 作用：栈顶为 callable；弹出实参（个数由 operands 指定）后执行。
+ * 作用：栈顶为 callable；弹出实参（个数由 arg_count 指定）后执行。
  *       用户函数：压入闭包 scope、跳转至 FunctionObject::location；
  *       内建函数：直接 C++ 回调并压回返回值。
  * 何时使用：调用表达式、装饰器包装（decos.log(func)）、方法调用链末端。
@@ -2048,23 +2031,17 @@ public:
  */
 class CALL {
 public:
-    COMMON(CALL)
-    std::vector<Value> operands;
+    OPCODE_META(CALL)
+    size_t arg_count;
+    OPCODE_ARGS1(arg_count)
 
-    explicit CALL(const std::string& name, const size_t arg_count) {
-        operands.emplace_back(name);
-        operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
-    }
-
-    explicit CALL(const size_t arg_count) {
-        operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
-    }
+    explicit CALL(size_t arg_count) : arg_count(arg_count) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * RET — 从用户函数返回。
+ * RET — 从用户函数返回.
  *
  * 作用：栈顶（或约定位置）为返回值；恢复 call_stack 中的 PC，弹出闭包 scope。
  * 何时使用：return 语句、do 表达式返回内部函数对象（无 LEAVE 的 RET）。
@@ -2072,8 +2049,8 @@ public:
  */
 class RET {
 public:
-    COMMON(RET)
-    std::vector<Value> operands;
+    OPCODE_META(RET)
+    OPCODE_ARGS0()
 
     RET() = default;
 
@@ -2081,45 +2058,43 @@ public:
 };
 
 /**
- * FINDMOD — 按名导入/查找子模块。
+ * FINDMOD — 按名导入/查找子模块.
  *
- * 作用：operands[0] 为模块名字符串；通过 main_module->import 加载 .lm 并压入 ModuleObject。
+ * 作用：module_id 为模块名字符串；通过 main_module->import 加载 .lm 并压入 ModuleObject。
  * 何时使用：import 语句、访问 std 等子模块前的模块解析（若 codegen 生成）。
  * 意义：模块系统的运行时链接点；与 GETATTR 组合实现 std.decos.log 等路径。
  */
 class FINDMOD {
 public:
-    COMMON(FINDMOD)
-    std::vector<Value> operands;
+    OPCODE_META(FINDMOD)
+    size_t module_id;
+    OPCODE_ARGS1(module_id)
 
-    explicit FINDMOD(const Value& val) {
-        operands.emplace_back(val);
-    };
+    explicit FINDMOD(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * GETATTR — 读取对象属性。
+ * GETATTR — 读取对象属性.
  *
  * 作用：栈顶为对象（Module、字典等），弹出后按属性名取成员并压栈。
  * 何时使用：后缀 .name、模块成员访问（如 std.decos）。
- * 意义：面向对象/模块访问的 IR 原语；名字在 operands 中（编译期入 string pool）。
+ * 意义：面向对象/模块访问的 IR 原语；名字在 name_id 中（编译期入 string pool）。
  */
 class GETATTR {
 public:
-    COMMON(GETATTR)
-    std::vector<Value> operands;
+    OPCODE_META(GETATTR)
+    size_t name_id;
+    OPCODE_ARGS1(name_id)
 
-    explicit GETATTR(const Value& attr_name) {
-        operands.emplace_back(attr_name);
-    }
+    explicit GETATTR(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * VEC_NEW — 构造向量字面量。
+ * VEC_NEW — 构造向量字面量.
  *
  * 作用：从栈上弹出 n 个元素（操作数指定个数），组装 Vector 并压回。
  * 何时使用：向量字面量 [a, b, c] 的 codegen。
@@ -2127,18 +2102,17 @@ public:
  */
 class VEC_NEW {
 public:
-    COMMON(VEC_NEW)
-    std::vector<Value> operands;
+    OPCODE_META(VEC_NEW)
+    size_t count;
+    OPCODE_ARGS1(count)
 
-    explicit VEC_NEW(const size_t element_count) {
-        operands.emplace_back(static_cast<ptrdiff_t>(element_count));
-    }
+    explicit VEC_NEW(size_t count) : count(count) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * DICT_NEW — 构造字典字面量。
+ * DICT_NEW — 构造字典字面量.
  *
  * 作用：从栈上弹出成对的 key/value（个数由操作数指定），构建 Dictionary。
  * 何时使用：字典字面量 { k: v, ... }。
@@ -2146,18 +2120,17 @@ public:
  */
 class DICT_NEW {
 public:
-    COMMON(DICT_NEW)
-    std::vector<Value> operands;
+    OPCODE_META(DICT_NEW)
+    size_t count;
+    OPCODE_ARGS1(count)
 
-    explicit DICT_NEW(const size_t entry_count) {
-        operands.emplace_back(static_cast<ptrdiff_t>(entry_count));
-    }
+    explicit DICT_NEW(size_t count) : count(count) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * INDEX — 下标/索引访问。
+ * INDEX — 下标/索引访问.
  *
  * 作用：弹出 index、container，将 container[index] 压栈（向量、字符串等）。
  * 何时使用：a[i]、字符串字符访问（若语言支持）。
@@ -2165,8 +2138,8 @@ public:
  */
 class INDEX {
 public:
-    COMMON(INDEX)
-    std::vector<Value> operands;
+    OPCODE_META(INDEX)
+    OPCODE_ARGS0()
 
     INDEX() = default;
 
@@ -2182,18 +2155,17 @@ public:
  */
 class STORE_ARG {
 public:
-    COMMON(STORE_ARG)
-    std::vector<Value> operands;
+    OPCODE_META(STORE_ARG)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit STORE_ARG(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit STORE_ARG(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * NEW_VAR — 在当前作用域创建可变变量引用槽。
+ * NEW_VAR — 在当前作用域创建可变变量引用槽.
  *
  * 作用：分配空 Reference，注册到 symbol_stack，并将 ref 压栈供后续 STORE。
  * 何时使用：模块级 let、export 函数名绑定（func 声明后的 STORE）。
@@ -2201,18 +2173,17 @@ public:
  */
 class NEW_VAR {
 public:
-    COMMON(NEW_VAR)
-    std::vector<Value> operands;
+    OPCODE_META(NEW_VAR)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit NEW_VAR(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit NEW_VAR(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * NEW_CONST — 在当前作用域创建常量引用槽。
+ * NEW_CONST — 在当前作用域创建常量引用槽.
  *
  * 作用：与 NEW_VAR 类似，但标记为 constant，后续 STORE 若已有值可拒绝修改。
  * 何时使用：const 声明、不可重新绑定的模块级名字。
@@ -2220,18 +2191,17 @@ public:
  */
 class NEW_CONST {
 public:
-    COMMON(NEW_CONST)
-    std::vector<Value> operands;
+    OPCODE_META(NEW_CONST)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit NEW_CONST(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit NEW_CONST(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * NEW_INTERN_VAR — 在函数/块内创建内部可变绑定。
+ * NEW_INTERN_VAR — 在函数/块内创建内部可变绑定.
  *
  * 作用：在当前 ENTER_SCOPE 层注册 intern 变量 ref，并压栈 ref。
  * 何时使用：函数内 let、for 循环迭代器槽位名、需在 symbol 表可见的 intern 名。
@@ -2239,18 +2209,17 @@ public:
  */
 class NEW_INTERN_VAR {
 public:
-    COMMON(NEW_INTERN_VAR)
-    std::vector<Value> operands;
+    OPCODE_META(NEW_INTERN_VAR)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit NEW_INTERN_VAR(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit NEW_INTERN_VAR(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * NEW_INTERN_CONST — 在函数/块内创建内部常量绑定。
+ * NEW_INTERN_CONST — 在函数/块内创建内部常量绑定.
  *
  * 作用：同 NEW_INTERN_VAR，但 constants 标记为 true。
  * 何时使用：块内 const、循环中不可改的迭代名（若语言区分）。
@@ -2258,18 +2227,17 @@ public:
  */
 class NEW_INTERN_CONST {
 public:
-    COMMON(NEW_INTERN_CONST)
-    std::vector<Value> operands;
+    OPCODE_META(NEW_INTERN_CONST)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit NEW_INTERN_CONST(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit NEW_INTERN_CONST(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * NEW_VAR_OR_LOAD — 若已存在则加载引用，否则创建新变量。
+ * NEW_VAR_OR_LOAD — 若已存在则加载引用，否则创建新变量.
  *
  * 作用：在 cache/symbol 中查找名字；找到则压入已有 ref，未找到则创建并注册。
  * 何时使用：赋值语句左侧（可能首次赋值）、需要「读-改-写」同一名字的场景。
@@ -2277,18 +2245,17 @@ public:
  */
 class NEW_VAR_OR_LOAD {
 public:
-    COMMON(NEW_VAR_OR_LOAD)
-    std::vector<Value> operands;
+    OPCODE_META(NEW_VAR_OR_LOAD)
+    size_t var_id;
+    OPCODE_ARGS1(var_id)
 
-    explicit NEW_VAR_OR_LOAD(const std::string& name) {
-        operands.emplace_back(name);
-    }
+    explicit NEW_VAR_OR_LOAD(const std::string& name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * RET_THEN_LEAVE_SCOPE — 返回并弹出当前作用域。
+ * RET_THEN_LEAVE_SCOPE — 返回并弹出当前作用域.
  *
  * 作用：依次执行 RET 与 LEAVE_SCOPE（函数 return 的标准尾声）。
  * 何时使用：带返回值的 func 声明体结束、需要同时归还调用方并销毁函数帧。
@@ -2296,8 +2263,8 @@ public:
  */
 class RET_THEN_LEAVE_SCOPE {
 public:
-    COMMON(RET_THEN_LEAVE_SCOPE)
-    std::vector<Value> operands;
+    OPCODE_META(RET_THEN_LEAVE_SCOPE)
+    OPCODE_ARGS0()
 
     RET_THEN_LEAVE_SCOPE() = default;
 
@@ -2305,58 +2272,55 @@ public:
 };
 
 /**
- * LOAD_FAST — 按槽位读取当前帧局部变量。
+ * LOAD_FAST — 按槽位读取当前帧局部变量.
  *
- * 作用：从 locals_stack 顶层按 slot_index 取值，以 Reference 形式压栈（非 ref 则包装）。
+ * 作用：从 locals_stack 顶层按 slot 取值，以 Reference 形式压栈（非 ref 则包装）。
  * 何时使用：函数参数、块内 let、当前帧内的 VarRef（非闭包捕获的外层名）。
  * 意义：O(1) 局部访问；闭包捕获的外层变量应走 LOAD(name)+DEREF 而非本指令。
  */
 class LOAD_FAST {
 public:
-    COMMON(LOAD_FAST)
-    std::vector<Value> operands;
+    OPCODE_META(LOAD_FAST)
+    size_t slot;
+    OPCODE_ARGS1(slot)
 
-    explicit LOAD_FAST(size_t slot_index) {
-        operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
-    }
+    explicit LOAD_FAST(size_t slot) : slot(slot) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * STORE_FAST — 按槽位写入当前帧局部变量。
+ * STORE_FAST — 按槽位写入当前帧局部变量.
  *
- * 作用：弹出栈顶值写入 locals_stack 顶层的 slot_index。
+ * 作用：弹出栈顶值写入 locals_stack 顶层的 slot。
  * 何时使用：参数接收（CALL 后）、let 初始化、for 循环迭代变量更新。
  * 意义：函数帧的主力存储；参数绑定后常跟 BIND_FAST 以支持闭包与 LOAD 按名查找。
  */
 class STORE_FAST {
 public:
-    COMMON(STORE_FAST)
-    std::vector<Value> operands;
+    OPCODE_META(STORE_FAST)
+    size_t slot;
+    OPCODE_ARGS1(slot)
 
-    explicit STORE_FAST(size_t slot_index) {
-        operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
-    }
+    explicit STORE_FAST(size_t slot) : slot(slot) {}
 
     void emit(VM& vm) const;
 };
 
 /**
- * STRUCT_NEW — 按已注册的 struct 类型构造实例。
+ * STRUCT_NEW — 按已注册的 struct 类型构造实例.
  *
  * 作用：弹出 n 个 positional 实参，与 struct 字段顺序对齐；缺省字段用默认值。
  * 何时使用：A(1, 2) 且 A 为 struct 名（由 codegen 根据全局 struct 注册表生成）。
  */
 class STRUCT_NEW {
 public:
-    COMMON(STRUCT_NEW)
-    std::vector<Value> operands;
+    OPCODE_META(STRUCT_NEW)
+    size_t struct_id;
+    size_t arg_count;
+    OPCODE_ARGS2(struct_id, arg_count)
 
-    STRUCT_NEW(const std::string& struct_name, size_t arg_count) {
-        operands.emplace_back(struct_name);
-        operands.emplace_back(static_cast<ptrdiff_t>(arg_count));
-    }
+    STRUCT_NEW(const std::string& struct_name, size_t arg_count);
 
     void emit(VM& vm) const;
 };
@@ -2369,18 +2333,17 @@ public:
  */
 class SET_FIELD {
 public:
-    COMMON(SET_FIELD)
-    std::vector<Value> operands;
+    OPCODE_META(SET_FIELD)
+    size_t name_id;
+    OPCODE_ARGS1(name_id)
 
-    explicit SET_FIELD(const std::string& field_name) {
-        operands.emplace_back(field_name);
-    }
+    explicit SET_FIELD(const std::string& field_name);
 
     void emit(VM& vm) const;
 };
 
 /**
- * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定。
+ * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定.
  *
  * 作用：把 locals_stack 某槽与 symbol_stack 顶层的 var_id 指向同一 ref 单元
  *       （非 ref 槽会先包装为 ref 再注册）。
@@ -2389,13 +2352,12 @@ public:
  */
 class BIND_FAST {
 public:
-    COMMON(BIND_FAST)
-    std::vector<Value> operands;
+    OPCODE_META(BIND_FAST)
+    size_t slot;
+    size_t var_id;
+    OPCODE_ARGS2(slot, var_id)
 
-    BIND_FAST(size_t slot_index, const std::string& name) {
-        operands.emplace_back(static_cast<ptrdiff_t>(slot_index));
-        operands.emplace_back(name);
-    }
+    BIND_FAST(size_t slot, const std::string& name);
 
     void emit(VM& vm) const;
 };
@@ -2512,7 +2474,7 @@ inline StringPool g_string_pool{}; ///< 全局字符串池
 class VM {
 public:
     Stack<Value> op_stack{};                              ///< 操作数栈
-    Stack<Value> call_stack{};                            ///< 调用栈
+    std::vector<size_t> call_stack{};                     ///< 返回地址栈
     std::string source_filename = "<unknown>";            ///< 当前执行的源文件名
     std::vector<std::shared_ptr<FunctionObject>> call_func_stack{}; ///< 函数调用栈
     std::vector<Opcode> code{};                           ///< IR指令序列
@@ -2546,7 +2508,7 @@ public:
             std::visit(
                 [&]<typename VT>(VT& op) -> void {
                     if constexpr (std::is_same_v<std::decay_t<VT>, LABEL>) {
-                        label_table[static_cast<size_t>(op.operands[0].asInt())] = i;
+                        label_table[op.label_id] = i;
                     }
                 },
                 code[i]

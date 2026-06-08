@@ -185,24 +185,7 @@ public:
      * @brief 将字符串操作数替换为字符串池ID
      * @param codes 字节码向量
      */
-    static void replace_string(std::vector<::irgen::Opcode>& codes) {
-        for (auto& code : codes) {
-            std::visit(
-                [&](auto& op) {
-                    const std::string op_name = op.name();
-                    if (op_name == "PUSH") return;
-                    for (auto& operand : op.operands) {
-                        if (operand.isString()) {
-                            const std::string name = operand.asString();
-                            const size_t id = ::irgen::g_string_pool.add(name);
-                            operand = ::irgen::Value(id);
-                        }
-                    }
-                },
-                code
-            );
-        }
-    }
+    static void replace_string(std::vector<::irgen::Opcode>&) {}
 };
 
 /**

@@ -698,7 +698,7 @@ std::vector<::irgen::Opcode> gen_code(
         std::string store_name = import_node->alias.empty()
                                      ? import_node->module_name.back()
                                      : import_node->alias;
-        push_op(code, src, src_line_no, ::irgen::FINDMOD(::irgen::Value(full_module_name)));
+        push_op(code, src, src_line_no, ::irgen::FINDMOD(full_module_name));
         push_op(code, src, src_line_no, ::irgen::NEW_VAR(store_name));
         push_op(code, src, src_line_no, ::irgen::STORE());
     } else if (node->kind == lmx::ASTNodeType::Use) {
@@ -708,9 +708,9 @@ std::vector<::irgen::Opcode> gen_code(
             if (i > 0) full_module_name += ".";
             full_module_name += use_node->module_name[i];
         }
-        push_op(code, src, src_line_no, ::irgen::FINDMOD(::irgen::Value(full_module_name)));
+        push_op(code, src, src_line_no, ::irgen::FINDMOD(full_module_name));
         for (const auto& item : use_node->items) {
-            push_op(code, src, src_line_no, ::irgen::GETATTR(::irgen::Value(item.name)));
+            push_op(code, src, src_line_no, ::irgen::GETATTR(item.name));
             std::string alias = item.alias.empty() ? item.name : item.alias;
             push_op(code, src, src_line_no, ::irgen::NEW_VAR(alias));
             push_op(code, src, src_line_no, ::irgen::STORE());
@@ -719,7 +719,7 @@ std::vector<::irgen::Opcode> gen_code(
         const auto* member_node = dynamic_cast<lmx::MemberAccessNode*>(node);
         auto obj_code = gen_code(member_node->object, loop_stack, local_scope_stack, func_context_stack, source_lines);
         code.insert(code.end(), obj_code.begin(), obj_code.end());
-        push_op(code, src, src_line_no, ::irgen::GETATTR(::irgen::Value(member_node->member)));
+        push_op(code, src, src_line_no, ::irgen::GETATTR(member_node->member));
     } else if (node->kind == lmx::ASTNodeType::IndexAccess) {
         const auto* index_node = dynamic_cast<lmx::IndexAccessNode*>(node);
         auto obj_code = gen_code(index_node->object, loop_stack, local_scope_stack, func_context_stack, source_lines);
@@ -782,13 +782,7 @@ void print_code(const std::vector<::irgen::Opcode>& code) {
                     "{} | {} {}",
                     i,
                     op.name(),
-                    [&]()-> std::string {
-                        std::string str;
-                        for (const auto& operand : op.operands) {
-                            str.append(operand.toString() + " ");
-                        }
-                        return str;
-                    }()
+                    op.stringArgs()
                 ) << std::endl;
             },
             c

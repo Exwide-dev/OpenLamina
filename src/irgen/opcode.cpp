@@ -39,8 +39,8 @@ namespace {
     std::vector<TraceFrame> frames;
     frames.reserve(vm.call_stack.size());
     size_t i = 0;
-    for (const Value& ret_pc : vm.call_stack) {
-        TraceFrame frame = vm_opcode_site(vm, static_cast<size_t>(ret_pc.asInt()));
+    for (const size_t ret_pc : vm.call_stack) {
+        TraceFrame frame = vm_opcode_site(vm, ret_pc);
         if (i == 0) {
             frame.scope = "global-scope";
         } else if (i - 1 < vm.call_func_stack.size()) {
@@ -145,12 +145,14 @@ bool SymbolTable::is_constant(const size_t id) const noexcept {
 // 初始化内置函数
 VM::VM() {
     symbol_stack.reserve(256);
+    call_stack.reserve(256);
     main_module = std::make_shared<ModuleObject>("__main__", this);
     init_builtins();
 }
 
 VM::VM(std::vector<Opcode> c) : code(std::move(c)) {
     symbol_stack.reserve(256);
+    call_stack.reserve(256);
     main_module = std::make_shared<ModuleObject>("__main__", this);
     init_builtins();
 }
@@ -215,8 +217,33 @@ void VM::set_symbol(const std::string& name, const Value& value) {
     main_module->set_attr(name, value);
 }
 
+LOAD::LOAD(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+STORE_ARG::STORE_ARG(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+NEW_VAR::NEW_VAR(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+NEW_CONST::NEW_CONST(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+NEW_INTERN_VAR::NEW_INTERN_VAR(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+NEW_INTERN_CONST::NEW_INTERN_CONST(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+NEW_VAR_OR_LOAD::NEW_VAR_OR_LOAD(const std::string& name) : var_id(g_string_pool.add(name)) {}
+
+FINDMOD::FINDMOD(const std::string& name) : module_id(g_string_pool.add(name)) {}
+
+GETATTR::GETATTR(const std::string& name) : name_id(g_string_pool.add(name)) {}
+
+SET_FIELD::SET_FIELD(const std::string& field_name) : name_id(g_string_pool.add(field_name)) {}
+
+STRUCT_NEW::STRUCT_NEW(const std::string& struct_name, const size_t arg_count)
+    : struct_id(g_string_pool.add(struct_name)), arg_count(arg_count) {}
+
+BIND_FAST::BIND_FAST(const size_t slot, const std::string& name)
+    : slot(slot), var_id(g_string_pool.add(name)) {}
+
 inline void PUSH::emit(VM& vm) const {
-    const Value& val = operands[0];
     if (val.getType() == Value::Type::Function) {
         try {
             auto func = val.asFunctionObject();
@@ -371,7 +398,6 @@ inline void STORE::emit(VM& vm) const {
 }
 
 inline void LOAD::emit(VM& vm) const {
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
     const std::string& var_name = g_string_pool.get_string(var_id);
 
     LOG("LOAD: var_id=" << var_id << ", var_name=\"" << var_name << "\"");
@@ -440,7 +466,6 @@ inline void LABEL::emit(VM&) {
 }
 
 inline void GOTO::emit(VM& vm) const {
-    const auto label_id = static_cast<size_t>(operands[0].asInt());
     if (not vm.label_table.contains(label_id)) {
         VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
     }
@@ -453,13 +478,19 @@ inline void GOTO::emit(VM& vm) const {
 
 inline void GOTOIF::emit(VM& vm) const {
     if (vm.op_stack.popValue().asBool()) {
-        GOTO(operands[0]).emit(vm);
+        if (not vm.label_table.contains(label_id)) {
+            VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
+        }
+        vm.pc = vm.label_table[label_id];
     }
 }
 
 inline void GOTOIFNOT::emit(VM& vm) const {
     if (!vm.op_stack.popValue().asBool()) {
-        GOTO(operands[0]).emit(vm);
+        if (not vm.label_table.contains(label_id)) {
+            VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
+        }
+        vm.pc = vm.label_table[label_id];
     }
 }
 
@@ -491,8 +522,6 @@ inline void CALL::emit(VM& vm) const {
         VM_RUNTIME_ERROR(vm,"Not a function");
     }
 
-    const auto arg_count = operands[0].asInt();
-
     if (func.isUserFunction()) {
         auto func_obj = func.asFunctionObject();
 
@@ -502,21 +531,21 @@ inline void CALL::emit(VM& vm) const {
 
         if (func_obj->owner_vm == &vm) {
             vm.call_func_stack.push_back(func_obj);
-            vm.call_stack.push(Value(vm.pc));
+            vm.call_stack.push_back(vm.pc);
 
             if (arg_count > 1) {
                 if (arg_count <= 8) {
                     Value arg_buf[8];
-                    for (ptrdiff_t i = arg_count - 1; i >= 0; --i) {
+                    for (ptrdiff_t i = static_cast<ptrdiff_t>(arg_count) - 1; i >= 0; --i) {
                         arg_buf[i] = vm.op_stack.popValue();
                     }
-                    for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                    for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
                         vm.op_stack.push(arg_buf[i]);
                     }
                 } else {
                     std::vector<Value> args;
                     args.reserve(static_cast<size_t>(arg_count));
-                    for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                    for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
                         args.emplace_back(vm.op_stack.popValue());
                     }
                     for (auto& arg : std::ranges::reverse_view(args)) {
@@ -538,8 +567,8 @@ inline void CALL::emit(VM& vm) const {
             vm.pc = label_it->second;
         } else {
             std::vector<Value> args;
-            args.reserve(static_cast<size_t>(arg_count));
-            for (ptrdiff_t i = 0; i < arg_count; ++i) {
+            args.reserve(arg_count);
+            for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
                 args.emplace_back(vm.op_stack.popValue());
             }
             Value result = func_obj->call(vm, args);
@@ -547,8 +576,8 @@ inline void CALL::emit(VM& vm) const {
         }
     } else {
         std::vector<Value> args;
-        args.reserve(static_cast<size_t>(arg_count));
-        for (ptrdiff_t i = 0; i < arg_count; ++i) {
+        args.reserve(arg_count);
+        for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
             args.emplace_back(vm.op_stack.popValue());
         }
 
@@ -561,9 +590,8 @@ inline void CALL::emit(VM& vm) const {
 inline void RET::emit(VM& vm) {
     LOG("RET: call_stack size=" << vm.call_stack.size() << ", call_func_stack size=" << vm.call_func_stack.size());
     if (!vm.call_stack.empty()) {
-        auto return_addr = vm.call_stack.popValue().asInt();
-        LOG("RET: return_addr=" << return_addr << ", current pc=" << vm.pc);
-        vm.pc = static_cast<size_t>(return_addr);
+        vm.pc = vm.call_stack.back();
+        vm.call_stack.pop_back();
         if (!vm.call_func_stack.empty()) {
             const auto& func = vm.call_func_stack.back();
             if (!func->closure.empty()) {
@@ -581,7 +609,7 @@ inline void RET::emit(VM& vm) {
 }
 
 inline void FINDMOD::emit(VM& vm) const {
-    const std::string& module_name = g_string_pool.get_string(operands[0].asInt());
+    const std::string& module_name = g_string_pool.get_string(module_id);
 
     if (module_name.empty()) {
         VM_RUNTIME_ERROR(vm,"Empty module name");
@@ -593,7 +621,7 @@ inline void FINDMOD::emit(VM& vm) const {
 
 
 inline void GETATTR::emit(VM& vm) const {
-    const std::string& attr_name = g_string_pool.get_string(operands[0].asInt());
+    const std::string& attr_name = g_string_pool.get_string(name_id);
 
     Value obj = vm.op_stack.popValue();
     const Value& val = obj.deref();
@@ -617,8 +645,7 @@ inline void GETATTR::emit(VM& vm) const {
 }
 
 void STRUCT_NEW::emit(VM& vm) const {
-    const std::string& struct_name = g_string_pool.get_string(operands[0].asInt());
-    const auto arg_count = static_cast<size_t>(operands[1].asInt());
+    const std::string& struct_name = g_string_pool.get_string(struct_id);
 
     std::vector<Value> args;
     args.reserve(arg_count);
@@ -631,7 +658,7 @@ void STRUCT_NEW::emit(VM& vm) const {
 }
 
 void SET_FIELD::emit(VM& vm) const {
-    const std::string& field_name = g_string_pool.get_string(operands[0].asInt());
+    const std::string& field_name = g_string_pool.get_string(name_id);
     Value value = vm.op_stack.popValue();
     Value obj = vm.op_stack.popValue();
     struct_set_field(obj, field_name, value);
@@ -639,7 +666,7 @@ void SET_FIELD::emit(VM& vm) const {
 }
 
 inline void VEC_NEW::emit(VM& vm) const {
-    const auto element_count = static_cast<size_t>(operands[0].asInt());
+    const auto element_count = count;
     std::vector<std::shared_ptr<Value>> elements;
     elements.reserve(element_count);
 
@@ -651,7 +678,7 @@ inline void VEC_NEW::emit(VM& vm) const {
 }
 
 inline void DICT_NEW::emit(VM& vm) const {
-    auto entry_count = static_cast<size_t>(operands[0].asInt());
+    auto entry_count = count;
     std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> dict;
 
     for (size_t i = 0; i < entry_count; ++i) {
@@ -698,7 +725,6 @@ inline void INDEX::emit(VM& vm) const {
 
 inline void STORE_ARG::emit(VM& vm) const {
     const Value value = vm.op_stack.popValue();
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
 
     const auto value_ptr = std::make_shared<Value>(value);
     vm.symbol_stack.back().set(var_id, value_ptr);
@@ -708,7 +734,6 @@ inline void STORE_ARG::emit(VM& vm) const {
 
 void NEW_VAR::emit(VM& vm) const {
     Value var = Value::makeEmptyRef();
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -720,7 +745,6 @@ void NEW_VAR::emit(VM& vm) const {
 
 void NEW_CONST::emit(VM& vm) const {
     Value var = Value::makeEmptyRef();
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -732,7 +756,6 @@ void NEW_CONST::emit(VM& vm) const {
 
 void NEW_INTERN_VAR::emit(VM& vm) const {
     Value var = Value::makeEmptyRef();
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -744,7 +767,6 @@ void NEW_INTERN_VAR::emit(VM& vm) const {
 
 void NEW_INTERN_CONST::emit(VM& vm) const {
     Value var = Value::makeEmptyRef();
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -755,7 +777,6 @@ void NEW_INTERN_CONST::emit(VM& vm) const {
 }
 
 void NEW_VAR_OR_LOAD::emit(VM& vm) const {
-    const auto var_id = static_cast<size_t>(operands[0].asInt());
     const std::string& var_name = g_string_pool.get_string(var_id);
 
     LOG("NEW_VAR_OR_LOAD: var_id=" << var_id << ", var_name=\"" << var_name << "\"");
@@ -773,7 +794,7 @@ void NEW_VAR_OR_LOAD::emit(VM& vm) const {
     }
 
     if (!vm.symbol_stack.empty()) {
-        auto found = vm.symbol_stack.back().get(var_id);
+        const auto found = vm.symbol_stack.back().get(var_id);
         if (found.has_value()) {
             LOG("NEW_VAR_OR_LOAD: Found in symbol stack");
             vm.op_stack.push(Value::makeRef(*found));
@@ -798,24 +819,22 @@ void RET_THEN_LEAVE_SCOPE::emit(VM& vm) const {
 }
 
 inline void LOAD_FAST::emit(VM& vm) const {
-    const auto slot_index = static_cast<size_t>(operands[0].asInt());
-    LOG("LOAD_FAST: slot_index=" << slot_index);
+    LOG("LOAD_FAST: slot_index=" << slot);
 
     if (vm.locals_stack.empty()) {
         VM_RUNTIME_ERROR(vm,"LOAD_FAST: No locals scope available");
     }
 
     auto& locals = vm.locals_stack.back();
-    if (slot_index >= locals.size()) {
-        VM_RUNTIME_ERROR(vm,"LOAD_FAST: slot index out of range: " + std::to_string(slot_index));
+    if (slot >= locals.size()) {
+        VM_RUNTIME_ERROR(vm,"LOAD_FAST: slot index out of range: " + std::to_string(slot));
     }
 
-    vm.op_stack.push(locals[slot_index]);
+    vm.op_stack.push(locals[slot]);
 }
 
 inline void STORE_FAST::emit(VM& vm) const {
-    const auto slot_index = static_cast<size_t>(operands[0].asInt());
-    LOG("STORE_FAST: slot_index=" << slot_index);
+    LOG("STORE_FAST: slot_index=" << slot);
 
     if (vm.locals_stack.empty()) {
         VM_RUNTIME_ERROR(vm,"STORE_FAST: No locals scope available");
@@ -824,10 +843,10 @@ inline void STORE_FAST::emit(VM& vm) const {
     Value value = vm.op_stack.popValue();
     auto& locals = vm.locals_stack.back();
 
-    if (slot_index >= locals.size()) {
-        locals.resize(slot_index + 1);
+    if (slot >= locals.size()) {
+        locals.resize(slot + 1);
     }
-    locals[slot_index] = value;
+    locals[slot] = value;
 }
 
 void BIND_FAST::emit(VM& vm) const {
@@ -838,19 +857,16 @@ void BIND_FAST::emit(VM& vm) const {
         }
     }
 
-    const auto slot_index = static_cast<size_t>(operands[0].asInt());
-    const auto var_id = static_cast<size_t>(operands[1].asInt());
-
     if (vm.locals_stack.empty() || vm.symbol_stack.empty()) {
         VM_RUNTIME_ERROR(vm,"BIND_FAST: No scope available");
     }
 
     auto& locals = vm.locals_stack.back();
-    if (slot_index >= locals.size()) {
+    if (slot >= locals.size()) {
         VM_RUNTIME_ERROR(vm,"BIND_FAST: slot index out of range");
     }
 
-    Value& local = locals[slot_index];
+    Value& local = locals[slot];
     std::shared_ptr<Value> value_ptr;
     if (local.isReference()) {
         value_ptr = local.asReference().value_ptr;
@@ -946,7 +962,7 @@ Value ModuleObject::import(const std::string& module_name) {
 
 
 inline void LABEL::set_label(VM& vm, const std::optional<size_t> on) const {
-    vm.label_table[static_cast<size_t>(operands[0].asInt())] = on.value_or(vm.pc);
+    vm.label_table[label_id] = on.value_or(vm.pc);
 }
 
 Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
@@ -962,7 +978,7 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         target_vm.op_stack.push(args[i - 1]);
     }
 
-    target_vm.call_stack.push(Value(target_vm.code.size()));
+    target_vm.call_stack.push_back(target_vm.code.size());
 
     for (const auto& scope : closure) {
         target_vm.symbol_stack.push_back(scope);
@@ -983,7 +999,7 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
     }
 
     if (!target_vm.call_stack.empty()) {
-        target_vm.call_stack.pop();
+        target_vm.call_stack.pop_back();
     }
 
     target_vm.pc = old_pc;
