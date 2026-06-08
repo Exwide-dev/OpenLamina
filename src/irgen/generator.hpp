@@ -211,4 +211,10 @@ public:
  * @return 执行结果
  */
 ::irgen::Value execute(const lmx::ProgramASTNode* program);
+
+/**
+ *
+ * @param code 字节码序列
+ */
+void print_code(const std::vector<::irgen::Opcode>& code);
 }

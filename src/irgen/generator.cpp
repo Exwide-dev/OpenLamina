@@ -773,6 +773,30 @@ std::vector<::irgen::Opcode> Generator::gen() const {
     return code;
 }
 
+void print_code(const std::vector<::irgen::Opcode>& code) {
+    int i = 0;
+    for (const auto& c : code) {
+        std::visit(
+            [&](const auto& op) {
+                std::cerr << std::format(
+                    "{} | {} {}",
+                    i,
+                    op.name(),
+                    [&]()-> std::string {
+                        std::string str;
+                        for (const auto& operand : op.operands) {
+                            str.append(operand.toString() + " ");
+                        }
+                        return str;
+                    }()
+                ) << std::endl;
+            },
+            c
+        );
+        i++;
+    }
+}
+
 ::irgen::Value execute(const lmx::ProgramASTNode* program) {
     if (!program) {
         std::cerr << "Error: Null program AST\n";
@@ -793,6 +817,8 @@ std::vector<::irgen::Opcode> Generator::gen() const {
         auto stmt_code = gen_code(stmt, loop_stack, local_scope_stack, func_context_stack, program->source_lines);
         code.insert(code.end(), stmt_code.begin(), stmt_code.end());
     }
+
+    print_code(code);
 
     Generator::replace_string(code);
 
