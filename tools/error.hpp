@@ -1,6 +1,19 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
+#include <vector>
+
+/**
+ * @brief 运行时错误 traceback 中的一帧
+ */
+struct TraceFrame {
+    std::string filename = "<unknown>";
+    int line = 0;
+    int column = 0;
+    std::string scope = "global-scope";
+    std::string source_line;
+};
 
 /**
  * @class SyntaxError
@@ -21,11 +34,22 @@ public:
  * @brief 运行时错误异常类
  */
 class RuntimeError final : public std::runtime_error {
+    TraceFrame error_site_;
+    std::vector<TraceFrame> traceback_;
+
 public:
-    /**
-     * @brief 构造函数
-     * @param msg 错误信息
-     */
-    explicit RuntimeError(const std::string& msg) : std::runtime_error(msg) {
+    RuntimeError(std::string msg, TraceFrame error_site = {}, std::vector<TraceFrame> traceback = {})
+        : std::runtime_error(std::move(msg)),
+          error_site_(std::move(error_site)),
+          traceback_(std::move(traceback)) {
     }
+
+    [[nodiscard]] const TraceFrame& error_site() const { return error_site_; }
+    [[nodiscard]] const std::vector<TraceFrame>& traceback() const { return traceback_; }
+
+    /** @deprecated 兼容旧接口；优先使用 error_site().source_line */
+    [[nodiscard]] const std::string& source_line() const { return error_site_.source_line; }
 };
+
+std::string format_trace_frame(const TraceFrame& frame);
+std::string format_runtime_traceback(const RuntimeError& e);

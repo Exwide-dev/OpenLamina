@@ -94,6 +94,7 @@ struct TypeNode;
 struct ASTNode {
     ASTNodeType kind;               ///< 节点类型
     std::vector<ASTNode*> children; ///< 子节点列表
+    int source_line = 0;            ///< 源码行号（1-based，0 表示未知）
 
     /**
      * @brief 构造函数
@@ -1102,7 +1103,9 @@ struct ModuleNode final : ASTNode {
  * @brief 程序根节点
  */
 struct ProgramASTNode final : ASTNode {
-    std::vector<ASTNode*> stmts; ///< 顶层语句列表
+    std::vector<ASTNode*> stmts;              ///< 顶层语句列表
+    std::vector<std::string> source_lines;    ///< 对应源码行文本
+    std::string source_filename;              ///< 源文件名（用于 traceback）
 
     /**
      * @brief 构造函数

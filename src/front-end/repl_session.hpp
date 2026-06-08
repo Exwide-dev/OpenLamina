@@ -24,6 +24,10 @@ public:
 
     [[nodiscard]] const std::string& cumulative_source() const { return cumulative_source_; }
 
+    [[nodiscard]] const std::vector<std::string>& source_lines() const {
+        return parser_.get_source_lines();
+    }
+
 private:
     std::string filename_;
     Lexer lexer_;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <utility>
 #include <vector>
 #include <string>
 #include "../lexer/lexer.hpp"
@@ -69,6 +70,16 @@ public:
      * @return 源代码行向量
      */
     [[nodiscard]] const std::vector<std::string>& get_source_lines() const { return source_lines; }
+
+    void bind_line(ASTNode* node, int line) const {
+        if (node != nullptr && line > 0) {
+            node->source_line = line;
+        }
+    }
+
+    void bind_line(ASTNode* node) const {
+        bind_line(node, current_token().line);
+    }
 
 private:
     std::string filename;                     ///< 源文件名
@@ -243,7 +254,7 @@ private:
     /**
      * @brief 解析 do 关键字之后的 (params) { body } 部分
      */
-    DoFuncDeclNode* finishDoFuncDecl(std::vector<ExprNode*> decorators);
+    DoFuncDeclNode* finishDoFuncDecl(std::vector<ExprNode*> decorators, int do_line = 0);
 
     /**
      * @brief 解析返回语句
@@ -412,5 +423,19 @@ private:
      * @return 装饰器表达式列表
      */
     std::vector<ExprNode*> parseWithDecoratorList();
+
+    template<typename T, typename... Args>
+    T* make_node(Args&&... args) {
+        T* node = new T(std::forward<Args>(args)...);
+        bind_line(node);
+        return node;
+    }
+
+    template<typename T, typename... Args>
+    T* make_node_at(const int line, Args&&... args) {
+        T* node = new T(std::forward<Args>(args)...);
+        bind_line(node, line);
+        return node;
+    }
 };
 } // namespace lmx

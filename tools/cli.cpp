@@ -30,6 +30,14 @@ Args parse_args(const int argc, char* argv[]) {
     return args;
 }
 
+namespace {
+
+void print_runtime_error(std::ostream& out, const RuntimeError& e) {
+    out << RED_BOLD << "Error: " << RESET << e.what() << "\n";
+    out << format_runtime_traceback(e);
+}
+}
+
 int run_file(const std::string& file_path, const std::vector<std::string>& args) {
     try {
         if (!std::filesystem::exists(file_path)) {
@@ -57,32 +65,14 @@ int run_file(const std::string& file_path, const std::vector<std::string>& args)
         delete ast;
 
         return 0;
+    } catch (const RuntimeError& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << format_runtime_traceback(e);
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
-}
-
-namespace {
-constexpr std::string RED_BOLD = "\033[1;31m";
-constexpr std::string GREEN = "\033[0;32m";
-constexpr std::string YELLOW = "\033[0;33m";
-constexpr std::string BLUE = "\033[0;34m";
-constexpr std::string MAGENTA = "\033[0;35m";
-constexpr std::string CYAN = "\033[0;36m";
-constexpr std::string RESET = "\033[0m";
-
-std::string format_traceback(const std::vector<std::string>& traceback) {
-    if (traceback.empty()) return "";
-
-    std::string result = "\n" + YELLOW + "Traceback (most recent call last):" + RESET + "\n";
-    int indent = 0;
-    for (const auto& it : std::ranges::reverse_view(traceback)) {
-        result += "  " + std::string(indent, ' ') + "-> " + BLUE + it + RESET + "\n";
-        indent += 2;
-    }
-    return result;
-}
 }
 
 int run_repl() {
@@ -165,11 +155,9 @@ Contact OpenLamina-Developing for more information)",
 
             needs_more_input = if_need_more;
         } catch (const RuntimeError& e) {
-            std::cout << "\n" << RED_BOLD << "Error: " << RESET << e.what() << "\n";
-            std::cout << format_traceback(repl_instance.vm.traceback);
+            print_runtime_error(std::cout, e);
 
             repl_instance.vm.pc = repl_instance.vm.code.size();
-            repl_instance.vm.traceback.clear();
             repl_instance.vm.op_stack.clear();
             needs_more_input = false;
             line_number++;

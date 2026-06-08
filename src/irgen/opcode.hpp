@@ -35,7 +35,9 @@ return s; \
 } \
 [[nodiscard]] std::string toString() const { \
 return std::format("{} {}", name(), stringArgs()); \
-}
+} \
+std::string line; \
+int line_no = 0;
 
 namespace irgen {
 struct StructObject;
@@ -66,6 +68,7 @@ class LOAD;
 class LABEL;
 class GOTO;
 class GOTOIF;
+class GOTOIFNOT;
 class ENTER_SCOPE;
 class LEAVE_SCOPE;
 class CALL;
@@ -348,6 +351,7 @@ using Opcode = std::variant<
     LABEL,
     GOTO,
     GOTOIF,
+    GOTOIFNOT,
     ENTER_SCOPE,
     LEAVE_SCOPE,
     CALL,
@@ -384,6 +388,7 @@ struct FunctionObject {
     VM* owner_vm = nullptr;           ///< 所属虚拟机
     std::vector<SymbolTable> closure; ///< 闭包捕获的变量
     bool needs_closure = false;       ///< 是否需要闭包
+    bool needs_symbol_bind = false;   ///< 是否需将 fast 局部绑定到符号表（供嵌套闭包 LOAD）
 
     /**
      * @brief 调用函数
@@ -1550,9 +1555,10 @@ public:
      */
     [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const {
         const auto& scope = scopes.back();
-        const auto it = scope.id_to_index.find(id);
-        if (it != scope.id_to_index.end()) {
-            return scope.slots[it->second].second;
+        for (const auto& [slot_id, val] : scope.slots) {
+            if (slot_id == id) {
+                return val;
+            }
         }
         return std::nullopt;
     }
@@ -1979,6 +1985,25 @@ public:
 };
 
 /**
+ * GOTOIFNOT — 条件为假时跳转。
+ */
+class GOTOIFNOT {
+public:
+    COMMON(GOTOIFNOT)
+    std::vector<Value> operands;
+
+    explicit GOTOIFNOT(size_t label_id) {
+        operands.emplace_back(static_cast<ptrdiff_t>(label_id));
+    }
+
+    explicit GOTOIFNOT(const Value& label_id) {
+        operands.emplace_back(label_id);
+    }
+
+    void emit(VM& vm) const;
+};
+
+/**
  * ENTER_SCOPE — 进入词法作用域。
  *
  * 作用：在 symbol_stack 与 locals_stack 各压入一层新表，cache 进入子作用域。
@@ -2375,6 +2400,21 @@ public:
     void emit(VM& vm) const;
 };
 
+inline void set_opcode_line(Opcode& op, const std::string& line) {
+    if (line.empty()) {
+        return;
+    }
+    std::visit([&](auto& o) { o.line = line; }, op);
+}
+
+inline std::string get_opcode_line(const Opcode& op) {
+    return std::visit([](const auto& o) { return o.line; }, op);
+}
+
+inline int get_opcode_line_no(const Opcode& op) {
+    return std::visit([](const auto& o) { return o.line_no; }, op);
+}
+
 /**
  * @brief 字符串池，用于字符串的唯一化存储
  */
@@ -2473,9 +2513,10 @@ class VM {
 public:
     Stack<Value> op_stack{};                              ///< 操作数栈
     Stack<Value> call_stack{};                            ///< 调用栈
-    std::vector<std::string> traceback{};                 ///< 调用栈跟踪
-    std::vector<FunctionObject> call_func_stack{};        ///< 函数调用栈
+    std::string source_filename = "<unknown>";            ///< 当前执行的源文件名
+    std::vector<std::shared_ptr<FunctionObject>> call_func_stack{}; ///< 函数调用栈
     std::vector<Opcode> code{};                           ///< IR指令序列
+    size_t label_scan_end = 0;                            ///< 已扫描标签的 code 上界
     std::vector<SymbolTable> symbol_stack{SymbolTable()}; ///< 符号表栈
     std::vector<std::vector<Value>> locals_stack;         ///< 局部变量栈
     Cache cache{};                                        ///< 变量缓存

@@ -12,6 +12,51 @@
 #include "struct_types.hpp"
 
 namespace irgen {
+
+namespace {
+
+[[nodiscard]] std::string vm_current_scope(const VM& vm) {
+    if (vm.call_func_stack.empty()) {
+        return "global-scope";
+    }
+    return vm.call_func_stack.back()->name;
+}
+
+[[nodiscard]] TraceFrame vm_opcode_site(const VM& vm, const size_t at_pc = SIZE_MAX) {
+    TraceFrame frame;
+    frame.filename = vm.source_filename;
+    frame.column = 0;
+    frame.scope = vm_current_scope(vm);
+    const size_t pc = at_pc == SIZE_MAX ? vm.pc : at_pc;
+    if (pc < vm.code.size()) {
+        frame.line = get_opcode_line_no(vm.code[pc]);
+        frame.source_line = get_opcode_line(vm.code[pc]);
+    }
+    return frame;
+}
+
+[[nodiscard]] std::vector<TraceFrame> build_traceback(const VM& vm) {
+    std::vector<TraceFrame> frames;
+    frames.reserve(vm.call_stack.size());
+    size_t i = 0;
+    for (const Value& ret_pc : vm.call_stack) {
+        TraceFrame frame = vm_opcode_site(vm, static_cast<size_t>(ret_pc.asInt()));
+        if (i == 0) {
+            frame.scope = "global-scope";
+        } else if (i - 1 < vm.call_func_stack.size()) {
+            frame.scope = vm.call_func_stack[i - 1]->name;
+        }
+        frames.push_back(std::move(frame));
+        ++i;
+    }
+    return frames;
+}
+
+} // namespace
+
+#define VM_RUNTIME_ERROR(vm, msg) \
+    throw RuntimeError((msg), vm_opcode_site((vm)), build_traceback((vm)))
+
 std::string Value::toString() const {
     const Value& self = deref();
     switch (self.type) {
@@ -200,27 +245,27 @@ inline void PUSH::emit(VM& vm) const {
 }
 
 inline void ADD::emit(VM& vm) {
-    auto b = vm.op_stack.popValue();
-    auto a = vm.op_stack.popValue();
-    vm.op_stack.push(a.deref() + b.deref());
+    Value rhs = vm.op_stack.popValue();
+    Value lhs = vm.op_stack.popValue();
+    vm.op_stack.push(lhs.deref() + rhs.deref());
 }
 
 inline void MUL::emit(VM& vm) {
-    auto b = vm.op_stack.popValue();
-    auto a = vm.op_stack.popValue();
-    vm.op_stack.push(a.deref() * b.deref());
+    Value rhs = vm.op_stack.popValue();
+    Value lhs = vm.op_stack.popValue();
+    vm.op_stack.push(lhs.deref() * rhs.deref());
 }
 
 inline void SUB::emit(VM& vm) {
-    auto b = vm.op_stack.popValue();
-    auto a = vm.op_stack.popValue();
-    vm.op_stack.push(a.deref() - b.deref());
+    Value rhs = vm.op_stack.popValue();
+    Value lhs = vm.op_stack.popValue();
+    vm.op_stack.push(lhs.deref() - rhs.deref());
 }
 
 inline void DIV::emit(VM& vm) {
-    auto b = vm.op_stack.popValue();
-    auto a = vm.op_stack.popValue();
-    vm.op_stack.push(a.deref() / b.deref());
+    Value rhs = vm.op_stack.popValue();
+    Value lhs = vm.op_stack.popValue();
+    vm.op_stack.push(lhs.deref() / rhs.deref());
 }
 
 inline void NEG::emit(VM& vm) {
@@ -316,7 +361,7 @@ inline void STORE::emit(VM& vm) const {
         }
 
         if (is_const && has_value) {
-            throw RuntimeError("Cannot modify constant");
+            VM_RUNTIME_ERROR(vm,"Cannot modify constant");
         }
 
         ref_slot.set(data);
@@ -380,7 +425,7 @@ inline void LOAD::emit(VM& vm) const {
     // 4. 仍未找到，报错
     if (!value_ptr) {
         LOG("Still not found");
-        throw RuntimeError("Var not found: " + var_name);
+        VM_RUNTIME_ERROR(vm,"Var not found: " + var_name);
     }
 
     // 5. 压栈
@@ -397,7 +442,7 @@ inline void LABEL::emit(VM&) {
 inline void GOTO::emit(VM& vm) const {
     const auto label_id = static_cast<size_t>(operands[0].asInt());
     if (not vm.label_table.contains(label_id)) {
-        throw RuntimeError("Unknown label: " + std::to_string(label_id));
+        VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
     }
     size_t target_pc = vm.label_table[label_id];
     LOG(
@@ -408,6 +453,12 @@ inline void GOTO::emit(VM& vm) const {
 
 inline void GOTOIF::emit(VM& vm) const {
     if (vm.op_stack.popValue().asBool()) {
+        GOTO(operands[0]).emit(vm);
+    }
+}
+
+inline void GOTOIFNOT::emit(VM& vm) const {
+    if (!vm.op_stack.popValue().asBool()) {
         GOTO(operands[0]).emit(vm);
     }
 }
@@ -437,54 +488,66 @@ inline void CALL::emit(VM& vm) const {
     LOG(ITIS(,func,.toString()) << ", true val type: " << func.deref().type_name());
 
     if (!func.isFunction()) {
-        throw RuntimeError("Not a function");
+        VM_RUNTIME_ERROR(vm,"Not a function");
     }
+
+    const auto arg_count = operands[0].asInt();
 
     if (func.isUserFunction()) {
         auto func_obj = func.asFunctionObject();
-        vm.call_func_stack.emplace_back(*func_obj);
-        auto arg_count = operands[0].asInt();
-        std::vector<Value> args;
-        args.reserve(arg_count);
-        for (ptrdiff_t i = 0; i < arg_count; ++i) {
-            args.emplace_back(vm.op_stack.popValue());
-        }
 
         if (!func_obj->owner_vm) {
             func_obj->owner_vm = &vm;
         }
 
         if (func_obj->owner_vm == &vm) {
-            vm.traceback.emplace_back(func_obj->name);
+            vm.call_func_stack.push_back(func_obj);
             vm.call_stack.push(Value(vm.pc));
 
-            for (auto& arg : std::ranges::reverse_view(args)) {
-                vm.op_stack.push(arg);
-            }
-
-            LOG("CALL: Pushing " << func_obj->closure.size() << " closure scopes");
-            for (const auto& scope : func_obj->closure) {
-                vm.symbol_stack.push_back(scope);
-                LOG("  Pushed scope: " << scope.toString());
-            }
-
-            if (vm.label_table.contains(func_obj->location)) {
-                vm.pc = vm.label_table[func_obj->location];
-            } else {
-                if (!vm.traceback.empty()) {
-                    vm.traceback.pop_back();
+            if (arg_count > 1) {
+                if (arg_count <= 8) {
+                    Value arg_buf[8];
+                    for (ptrdiff_t i = arg_count - 1; i >= 0; --i) {
+                        arg_buf[i] = vm.op_stack.popValue();
+                    }
+                    for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                        vm.op_stack.push(arg_buf[i]);
+                    }
+                } else {
+                    std::vector<Value> args;
+                    args.reserve(static_cast<size_t>(arg_count));
+                    for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                        args.emplace_back(vm.op_stack.popValue());
+                    }
+                    for (auto& arg : std::ranges::reverse_view(args)) {
+                        vm.op_stack.push(arg);
+                    }
                 }
-                throw RuntimeError("Function label not found: " + std::to_string(func_obj->location));
             }
+
+            if (!func_obj->closure.empty()) {
+                for (const auto& scope : func_obj->closure) {
+                    vm.symbol_stack.push_back(scope);
+                }
+            }
+
+            const auto label_it = vm.label_table.find(func_obj->location);
+            if (label_it == vm.label_table.end()) {
+                VM_RUNTIME_ERROR(vm,"Function label not found: " + std::to_string(func_obj->location));
+            }
+            vm.pc = label_it->second;
         } else {
+            std::vector<Value> args;
+            args.reserve(static_cast<size_t>(arg_count));
+            for (ptrdiff_t i = 0; i < arg_count; ++i) {
+                args.emplace_back(vm.op_stack.popValue());
+            }
             Value result = func_obj->call(vm, args);
             vm.op_stack.push(result);
         }
     } else {
-        vm.traceback.emplace_back("<builtin>");
-        auto arg_count = operands[0].asInt();
         std::vector<Value> args;
-        args.reserve(arg_count);
+        args.reserve(static_cast<size_t>(arg_count));
         for (ptrdiff_t i = 0; i < arg_count; ++i) {
             args.emplace_back(vm.op_stack.popValue());
         }
@@ -492,9 +555,6 @@ inline void CALL::emit(VM& vm) const {
         auto builtin_func = func.asFunction();
         auto result = builtin_func(vm, args);
         vm.op_stack.push(result);
-        if (!vm.traceback.empty()) {
-            vm.traceback.pop_back();
-        }
     }
 }
 
@@ -504,28 +564,19 @@ inline void RET::emit(VM& vm) {
         auto return_addr = vm.call_stack.popValue().asInt();
         LOG("RET: return_addr=" << return_addr << ", current pc=" << vm.pc);
         vm.pc = static_cast<size_t>(return_addr);
-        if (!vm.traceback.empty()) {
-            vm.traceback.pop_back();
-        }
         if (!vm.call_func_stack.empty()) {
-            auto& func = vm.call_func_stack.back();
-            LOG(
-                "RET: func name=" << func.name << ", location=" << func.location << ", closure size=" << func.closure.
-                size()
-            );
-            LOG("RET: symbol_stack before pop=" << vm.symbol_stack.size());
-            for (size_t i = 0; i < func.closure.size(); i++) {
-                if (!vm.symbol_stack.empty()) {
-                    vm.symbol_stack.pop_back();
+            const auto& func = vm.call_func_stack.back();
+            if (!func->closure.empty()) {
+                for (size_t i = 0; i < func->closure.size(); i++) {
+                    if (!vm.symbol_stack.empty()) {
+                        vm.symbol_stack.pop_back();
+                    }
                 }
             }
-            LOG("RET: symbol_stack after pop=" << vm.symbol_stack.size());
             vm.call_func_stack.pop_back();
-        } else {
-            LOG("RET: call_func_stack is empty!");
         }
     } else {
-        throw RuntimeError("RET when call stack is empty");
+        VM_RUNTIME_ERROR(vm,"RET when call stack is empty");
     }
 }
 
@@ -533,7 +584,7 @@ inline void FINDMOD::emit(VM& vm) const {
     const std::string& module_name = g_string_pool.get_string(operands[0].asInt());
 
     if (module_name.empty()) {
-        throw RuntimeError("Empty module name");
+        VM_RUNTIME_ERROR(vm,"Empty module name");
     }
 
     Value result = vm.main_module->import(module_name);
@@ -551,7 +602,7 @@ inline void GETATTR::emit(VM& vm) const {
         return;
     }
     if (val.getType() != Value::Type::Module) {
-        throw RuntimeError("GETATTR requires a module or struct object");
+        VM_RUNTIME_ERROR(vm,"GETATTR requires a module or struct object");
     }
 
     auto module = val.asModule();
@@ -561,7 +612,7 @@ inline void GETATTR::emit(VM& vm) const {
         auto value_ptr = std::make_shared<Value>(*result);
         vm.op_stack.push(Value::makeRef(value_ptr));
     } else {
-        throw RuntimeError("Attribute not found: " + attr_name + ", in module: " + module->name);
+        VM_RUNTIME_ERROR(vm,"Attribute not found: " + attr_name + ", in module: " + module->name);
     }
 }
 
@@ -625,7 +676,7 @@ inline void INDEX::emit(VM& vm) const {
 
         auto& vec = obj_deref.asVector();
         if (idx < 0 or static_cast<size_t>(idx) >= vec.size()) {
-            throw RuntimeError("Index out of range");
+            VM_RUNTIME_ERROR(vm,"Index out of range");
         }
 
         vm.op_stack.push(Value::makeRef(vec[static_cast<size_t>(idx)]));
@@ -639,9 +690,9 @@ inline void INDEX::emit(VM& vm) const {
                 return;
             }
         }
-        throw RuntimeError("key " + key.toString() + " not found");
+        VM_RUNTIME_ERROR(vm,"key " + key.toString() + " not found");
     } else {
-        throw RuntimeError("INDEX requires a vector or dictionary object");
+        VM_RUNTIME_ERROR(vm,"INDEX requires a vector or dictionary object");
     }
 }
 
@@ -751,20 +802,15 @@ inline void LOAD_FAST::emit(VM& vm) const {
     LOG("LOAD_FAST: slot_index=" << slot_index);
 
     if (vm.locals_stack.empty()) {
-        throw RuntimeError("LOAD_FAST: No locals scope available");
+        VM_RUNTIME_ERROR(vm,"LOAD_FAST: No locals scope available");
     }
 
     auto& locals = vm.locals_stack.back();
     if (slot_index >= locals.size()) {
-        throw RuntimeError("LOAD_FAST: slot index out of range: " + std::to_string(slot_index));
+        VM_RUNTIME_ERROR(vm,"LOAD_FAST: slot index out of range: " + std::to_string(slot_index));
     }
 
-    Value value = locals[slot_index];
-    if (value.isReference()) {
-        vm.op_stack.push(value);
-    } else {
-        vm.op_stack.push(Value::makeRef(std::make_shared<Value>(value)));
-    }
+    vm.op_stack.push(locals[slot_index]);
 }
 
 inline void STORE_FAST::emit(VM& vm) const {
@@ -772,7 +818,7 @@ inline void STORE_FAST::emit(VM& vm) const {
     LOG("STORE_FAST: slot_index=" << slot_index);
 
     if (vm.locals_stack.empty()) {
-        throw RuntimeError("STORE_FAST: No locals scope available");
+        VM_RUNTIME_ERROR(vm,"STORE_FAST: No locals scope available");
     }
 
     Value value = vm.op_stack.popValue();
@@ -785,16 +831,23 @@ inline void STORE_FAST::emit(VM& vm) const {
 }
 
 void BIND_FAST::emit(VM& vm) const {
+    if (!vm.call_func_stack.empty()) {
+        const auto& func = vm.call_func_stack.back();
+        if (!func->needs_closure && !func->needs_symbol_bind) {
+            return;
+        }
+    }
+
     const auto slot_index = static_cast<size_t>(operands[0].asInt());
     const auto var_id = static_cast<size_t>(operands[1].asInt());
 
     if (vm.locals_stack.empty() || vm.symbol_stack.empty()) {
-        throw RuntimeError("BIND_FAST: No scope available");
+        VM_RUNTIME_ERROR(vm,"BIND_FAST: No scope available");
     }
 
     auto& locals = vm.locals_stack.back();
     if (slot_index >= locals.size()) {
-        throw RuntimeError("BIND_FAST: slot index out of range");
+        VM_RUNTIME_ERROR(vm,"BIND_FAST: slot index out of range");
     }
 
     Value& local = locals[slot_index];
@@ -898,7 +951,7 @@ inline void LABEL::set_label(VM& vm, const std::optional<size_t> on) const {
 
 Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
     if (!owner_vm) {
-        throw RuntimeError("Function has no owner VM");
+        VM_RUNTIME_ERROR(caller_vm, "Function has no owner VM");
     }
 
     VM& target_vm = *owner_vm;
@@ -909,10 +962,6 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         target_vm.op_stack.push(args[i - 1]);
     }
 
-    bool pushed_traceback = !target_vm.traceback.empty();
-    if (pushed_traceback) {
-        target_vm.traceback.emplace_back(name);
-    }
     target_vm.call_stack.push(Value(target_vm.code.size()));
 
     for (const auto& scope : closure) {
@@ -922,7 +971,7 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
     if (target_vm.label_table.contains(location)) {
         target_vm.pc = target_vm.label_table[location];
     } else {
-        throw RuntimeError("Function label not found: " + std::to_string(location));
+        VM_RUNTIME_ERROR(target_vm, "Function label not found: " + std::to_string(location));
     }
 
     target_vm.run();
@@ -933,8 +982,8 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         }
     }
 
-    if (pushed_traceback) {
-        target_vm.traceback.pop_back();
+    if (!target_vm.call_stack.empty()) {
+        target_vm.call_stack.pop();
     }
 
     target_vm.pc = old_pc;
@@ -1008,7 +1057,7 @@ inline void irgen::ITER_NEXT::emit(VM& vm) const {
     Value& iter_deref = iter_val.deref();
 
     if (iter_deref.getType() != Value::Type::Iterator) {
-        throw RuntimeError("ITER_NEXT requires an iterator object");
+        VM_RUNTIME_ERROR(vm,"ITER_NEXT requires an iterator object");
     }
 
     auto iter = iter_deref.asIterator();

@@ -136,6 +136,9 @@ repl::REPL::ExecResult repl::REPL::exec_input(const std::function<std::string()>
     }
 
     auto* got_ast = new lmx::ProgramASTNode(std::move(stmts));
+    got_ast->source_lines = parse_session.source_lines();
+    got_ast->source_filename = "<repl>";
+    vm.source_filename = "<repl>";
     auto code = lm::irgen::Generator(got_ast).gen();
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();

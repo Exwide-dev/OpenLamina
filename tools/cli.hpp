@@ -3,6 +3,14 @@
 #include <vector>
 #include <string>
 
+constexpr std::string RED_BOLD = "\033[1;31m";
+constexpr std::string GREEN = "\033[0;32m";
+constexpr std::string YELLOW = "\033[0;33m";
+constexpr std::string BLUE = "\033[0;34m";
+constexpr std::string MAGENTA = "\033[0;35m";
+constexpr std::string CYAN = "\033[0;36m";
+constexpr std::string RESET = "\033[0m";
+
 namespace cli {
 /**
      * @brief 命令行参数解析结果
