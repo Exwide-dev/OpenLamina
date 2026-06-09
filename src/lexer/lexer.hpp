@@ -47,6 +47,7 @@ enum class TokenType {
     OPER_MUL,   ///< 乘法运算符 *
     OPER_DIV,   ///< 除法运算符 /
     OPER_NOT,   ///< 逻辑非运算符 !
+    OPER_AMP,   ///< 取地址运算符 &
     OPER_EQ,    ///< 相等运算符 ==
     OPER_NE,    ///< 不等运算符 !=
     OPER_LT,    ///< 小于运算符 <
@@ -312,7 +313,7 @@ private:
      */
     [[nodiscard]] bool isWhitespace(const char c) const {
         const auto uc = static_cast<unsigned char>(c);
-        return (uc == ' ' || uc == '\t' || uc == '\r');
+        return uc == ' ' || uc == '\t' || uc == '\r';
     }
 };
 } // namespace lmx

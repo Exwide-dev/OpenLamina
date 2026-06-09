@@ -2,6 +2,7 @@
 
 #include "number.hpp"
 #include "../error.hpp"
+#include <cmath>
 #include <string>
 
 namespace lang::lammp {
@@ -109,6 +110,14 @@ public:
     Number toNumber() const {
         return numerator_ / denominator_;
     }
+
+    /** @brief 转换为浮点数（用于超越函数等） */
+    [[nodiscard]] long double toLongDouble() const {
+        return std::stold(numerator_.toString()) / std::stold(denominator_.toString());
+    }
+
+    /** @brief 从浮点近似构造最简分数 */
+    [[nodiscard]] static Rational fromDouble(long double x, long double epsilon = 1e-12L);
 
     /**
      * @brief 转换为字符串（分数形式）

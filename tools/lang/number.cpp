@@ -324,7 +324,7 @@ int Number::compare_big(const BigNum& a, const BigNum& b) {
         return a.is_negative ? -1 : 1;
     }
     if (a.size != b.size) {
-        return a.is_negative ? (a.size > b.size ? -1 : 1) : (a.size > b.size ? 1 : -1);
+        return a.is_negative ? (a.size > b.size ? -1 : 1) : a.size > b.size ? 1 : -1;
     }
     int cmp = lmmp_cmp_(a.data.get(), b.data.get(), a.size);
     if (a.is_negative) {
@@ -435,7 +435,7 @@ Number Number::operator*(const Number& other) const {
         }
 
         uint64_t prod = abs_x * abs_y;
-        bool neg = (x < 0) != (y < 0);
+        bool neg = x < 0 != y < 0;
 
         if (prod > INT64_MAX) {
             return Number(mul_big(BigNum(x), BigNum(y)));
@@ -587,7 +587,7 @@ Number Number::pow(const Number& exponent) const {
     Number result(1LL);
 
     while (!exp.isZero()) {
-        if (exp.is_small() ? (exp.get_small() & 1) : (exp.get_big().data[0] & 1)) {
+        if (exp.is_small() ? exp.get_small() & 1 : exp.get_big().data[0] & 1) {
             result = result * base;
         }
         base = base * base;

@@ -111,6 +111,123 @@ std::vector<::irgen::Opcode> gen_code(
     Stack<LocalScope>& local_scope_stack,
     std::vector<FunctionContext>& func_context_stack,
     const std::vector<std::string>& source_lines
+);
+
+std::vector<::irgen::Opcode> gen_lvalue_code(
+    lmx::ExprNode* node,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+);
+
+std::vector<::irgen::Opcode> gen_lvalue_code(
+    lmx::ExprNode* node,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+) {
+    std::vector<::irgen::Opcode> code;
+    const std::string src = line_text(node, source_lines);
+    const int src_line_no = node != nullptr ? node->source_line : 0;
+
+    if (node->kind == lmx::ASTNodeType::VarRef) {
+        const auto* var_ref_node = dynamic_cast<lmx::VarRefNode*>(node);
+        const std::string& var_name = var_ref_node->name;
+
+        bool found_in_local = false;
+        size_t slot = 0;
+        size_t define_depth = 0;
+        const auto& container = local_scope_stack.get_container();
+        for (int i = static_cast<int>(container.size()) - 1; i >= 0; --i) {
+            const auto& scope = container[static_cast<size_t>(i)];
+            auto loc_opt = scope.get_location(var_name);
+            if (loc_opt.has_value()) {
+                slot = loc_opt->slot;
+                define_depth = loc_opt->define_depth;
+                found_in_local = true;
+                break;
+            }
+        }
+
+        bool use_closure_load = false;
+        if (found_in_local) {
+            if (!func_context_stack.empty()) {
+                const size_t func_depth = func_context_stack.back().func_depth;
+                if (define_depth < func_depth) {
+                    func_context_stack.back().needs_closure = true;
+                    use_closure_load = true;
+                    for (auto& ctx : func_context_stack) {
+                        if (ctx.func_depth == define_depth) {
+                            ctx.needs_symbol_bind = true;
+                        }
+                    }
+                }
+            }
+            if (!use_closure_load) {
+                push_op(code, src, src_line_no, ::irgen::LOAD_FAST(slot));
+            }
+        }
+        if (!found_in_local || use_closure_load) {
+            push_op(code, src, src_line_no, ::irgen::LOAD(var_name));
+        }
+    } else if (node->kind == lmx::ASTNodeType::IndexAccess) {
+        const auto* index_node = dynamic_cast<lmx::IndexAccessNode*>(node);
+        auto obj_code = gen_code(index_node->object, loop_stack, local_scope_stack, func_context_stack, source_lines);
+        auto index_code = gen_code(index_node->index, loop_stack, local_scope_stack, func_context_stack, source_lines);
+        code.insert(code.end(), obj_code.begin(), obj_code.end());
+        code.insert(code.end(), index_code.begin(), index_code.end());
+        push_op(code, src, src_line_no, ::irgen::INDEX());
+    } else if (node->kind == lmx::ASTNodeType::Unary) {
+        const auto* unary_node = dynamic_cast<lmx::UnaryNode*>(node);
+        if (unary_node->op == "*") {
+            auto ptr_code = gen_code(unary_node->operand, loop_stack, local_scope_stack, func_context_stack, source_lines);
+            code.insert(code.end(), ptr_code.begin(), ptr_code.end());
+            push_op(code, src, src_line_no, ::irgen::PTR_TO_REF());
+        } else {
+            throw RuntimeError("Invalid lvalue for address-of or assignment");
+        }
+    } else {
+        throw RuntimeError("Expression is not an assignable lvalue");
+    }
+
+    return code;
+}
+
+bool is_slot_lvalue_receiver(const lmx::ExprNode* object) {
+    if (object == nullptr || object->getValueCategory() != lmx::ValueCategory::LVALUE) {
+        return false;
+    }
+    if (object->kind == lmx::ASTNodeType::VarRef || object->kind == lmx::ASTNodeType::IndexAccess) {
+        return true;
+    }
+    if (object->kind == lmx::ASTNodeType::Unary) {
+        const auto* unary = dynamic_cast<const lmx::UnaryNode*>(object);
+        return unary != nullptr && unary->op == "*";
+    }
+    return false;
+}
+
+std::vector<::irgen::Opcode> gen_member_receiver_code(
+    lmx::ExprNode* object,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+) {
+    if (is_slot_lvalue_receiver(object)) {
+        return gen_lvalue_code(object, loop_stack, local_scope_stack, func_context_stack, source_lines);
+    }
+    return gen_code(object, loop_stack, local_scope_stack, func_context_stack, source_lines);
+}
+
+std::vector<::irgen::Opcode> gen_code(
+    lmx::ASTNode* node,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
 ) {
     std::vector<::irgen::Opcode> code;
     const std::string src = line_text(node, source_lines);
@@ -180,13 +297,34 @@ std::vector<::irgen::Opcode> gen_code(
         }
     } else if (node->kind == lmx::ASTNodeType::Unary) {
         const auto* unary_node = dynamic_cast<lmx::UnaryNode*>(node);
-        auto operand_code = gen_code(unary_node->operand, loop_stack, local_scope_stack, func_context_stack, source_lines);
-        code.insert(code.end(), operand_code.begin(), operand_code.end());
 
-        if (unary_node->op == "-") {
-            push_op(code, src, src_line_no, ::irgen::NEG());
-        } else if (unary_node->op == "!") {
-            push_op(code, src, src_line_no, ::irgen::NOT());
+        if (unary_node->op == "&") {
+            auto lvalue_code = gen_lvalue_code(
+                unary_node->operand,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), lvalue_code.begin(), lvalue_code.end());
+            push_op(code, src, src_line_no, ::irgen::ADDR_OF());
+        } else {
+            auto operand_code = gen_code(
+                unary_node->operand,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), operand_code.begin(), operand_code.end());
+
+            if (unary_node->op == "-") {
+                push_op(code, src, src_line_no, ::irgen::NEG());
+            } else if (unary_node->op == "!") {
+                push_op(code, src, src_line_no, ::irgen::NOT());
+            } else if (unary_node->op == "*") {
+                push_op(code, src, src_line_no, ::irgen::DEREF_PTR());
+            }
         }
     } else if (node->kind == lmx::ASTNodeType::VarRef) {
         const auto* var_ref_node = dynamic_cast<lmx::VarRefNode*>(node);
@@ -234,6 +372,22 @@ std::vector<::irgen::Opcode> gen_code(
         for (auto arg : std::ranges::reverse_view(func_call_node->args)) {
             auto bcode = gen_code(arg, loop_stack, local_scope_stack, func_context_stack, source_lines);
             code.insert(code.end(), bcode.begin(), bcode.end());
+        }
+
+        if (func_call_node->func_expr->kind == lmx::ASTNodeType::MemberAccess) {
+            const auto* member_callee =
+                    dynamic_cast<const lmx::MemberAccessNode*>(func_call_node->func_expr);
+            auto receiver_code = gen_member_receiver_code(
+                member_callee->object,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), receiver_code.begin(), receiver_code.end());
+            push_op(code, src, src_line_no, ::irgen::GETATTR(member_callee->member));
+            push_op(code, src, src_line_no, ::irgen::CALL(func_call_node->args.size()));
+            return code;
         }
 
         if (func_call_node->func_expr->kind == lmx::ASTNodeType::VarRef) {
@@ -339,6 +493,21 @@ std::vector<::irgen::Opcode> gen_code(
                 push_op(code, src, src_line_no, ::irgen::NEW_VAR_OR_LOAD(var_name));
                 push_op(code, src, src_line_no, ::irgen::STORE());
             }
+        } else if (assign_node->var->kind == lmx::ASTNodeType::Unary) {
+            const auto* unary_node = dynamic_cast<const lmx::UnaryNode*>(assign_node->var);
+            if (unary_node->op != "*") {
+                throw RuntimeError("Left-hand side of assignment must be an lvalue");
+            }
+            auto ptr_code = gen_code(
+                unary_node->operand,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), ptr_code.begin(), ptr_code.end());
+            push_op(code, src, src_line_no, ::irgen::PTR_TO_REF());
+            push_op(code, src, src_line_no, ::irgen::STORE());
         } else {
             auto var_code = gen_code(assign_node->var, loop_stack, local_scope_stack, func_context_stack, source_lines);
             code.insert(code.end(), var_code.begin(), var_code.end());
@@ -717,8 +886,14 @@ std::vector<::irgen::Opcode> gen_code(
         }
     } else if (node->kind == lmx::ASTNodeType::MemberAccess) {
         const auto* member_node = dynamic_cast<lmx::MemberAccessNode*>(node);
-        auto obj_code = gen_code(member_node->object, loop_stack, local_scope_stack, func_context_stack, source_lines);
-        code.insert(code.end(), obj_code.begin(), obj_code.end());
+        auto receiver_code = gen_member_receiver_code(
+            member_node->object,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines
+        );
+        code.insert(code.end(), receiver_code.begin(), receiver_code.end());
         push_op(code, src, src_line_no, ::irgen::GETATTR(member_node->member));
     } else if (node->kind == lmx::ASTNodeType::IndexAccess) {
         const auto* index_node = dynamic_cast<lmx::IndexAccessNode*>(node);

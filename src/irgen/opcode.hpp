@@ -60,6 +60,9 @@ class SUB;
 class DIV;
 class NEG;
 class DEREF;
+class ADDR_OF;
+class DEREF_PTR;
+class PTR_TO_REF;
 class NOT;
 class AND;
 class OR;
@@ -340,6 +343,9 @@ using Opcode = std::variant<
     DIV,
     NEG,
     DEREF,
+    ADDR_OF,
+    DEREF_PTR,
+    PTR_TO_REF,
     NOT,
     AND,
     OR,
@@ -411,21 +417,16 @@ struct FunctionObject {
 using FunctionType = std::function<Value(VM&, const std::vector<Value>&)>;
 
 /**
- * @brief 引用类型，用于值的间接引用
+ * @brief 槽位引用：变量绑定（透明）或地址引用（& 产生，不透明）
  */
 struct Ref {
-    std::shared_ptr<Value> value_ptr; ///< 指向实际值的智能指针
+    std::shared_ptr<Value> value_ptr; ///< 指向池内槽位
+    bool opaque = false;              ///< true = 地址视图（print 为 pointer，* 穿透一层）
 
-    /**
-     * @brief 构造函数
-     * @param ptr 值的智能指针
-     */
-    explicit Ref(std::shared_ptr<Value> ptr);
+    explicit Ref(std::shared_ptr<Value> ptr, const bool is_opaque = false);
 
-    /**
-     * @brief 获取引用指向的值
-     * @return 值的引用
-     */
+    [[nodiscard]] bool isAddress() const { return opaque; }
+
     Value& get() {
         if (!value_ptr) {
             throw RuntimeError("Null reference");
@@ -433,10 +434,6 @@ struct Ref {
         return *value_ptr;
     }
 
-    /**
-     * @brief 获取引用指向的值（const版本）
-     * @return 值的const引用
-     */
     [[nodiscard]] const Value& get() const {
         if (!value_ptr) {
             throw RuntimeError("Null reference");
@@ -483,7 +480,7 @@ public:
         Module,      ///< 模块
         Vector,      ///< 向量/列表
         Dictionary,  ///< 字典/映射
-        Reference,   ///< 引用
+        Reference,   ///< 槽位引用（绑定或地址）
         Rational,    ///< 有理数
         Iterator,    ///< 迭代器
         StructObject ///< 用户定义的 struct 实例
@@ -704,8 +701,11 @@ public:
     /**
      * @brief 创建空引用
      */
-    static Value makeEmptyRef() {
-        return Value(Ref(std::make_shared<Value>()));
+    static Value makeEmptyRef();
+
+    /** @brief 创建地址槽引用（&expr 的结果，指向已有槽位） */
+    static Value makeAddressRef(std::shared_ptr<Value> slot) {
+        return Value(Ref(std::move(slot), true));
     }
 
     /**
@@ -730,7 +730,11 @@ public:
      */
     [[nodiscard]] Type getType() const {
         if (type == Type::Reference) {
-            return asReference().get().getType();
+            const Ref& ref = asReference();
+            if (ref.opaque) {
+                return Type::Reference;
+            }
+            return ref.get().getType();
         }
         return type;
     }
@@ -762,7 +766,7 @@ public:
             case Type::StructObject:
                 return "Struct";
             case Type::Reference:
-                return "Reference";
+                return asReference().opaque ? "Address" : "Reference";
             default:
                 return "<Unknown_Type>";
         }
@@ -897,6 +901,11 @@ return std::get<CppType>(data); \
             throw RuntimeError("Value is not a reference");
         }
         return std::get<Ref>(data);
+    }
+
+    /** @brief 是否为地址槽引用（& 产生） */
+    [[nodiscard]] bool isAddressRef() const {
+        return type == Type::Reference && asReference().opaque;
     }
 
     std::shared_ptr<Value> getRefValuePtr() {
@@ -1051,6 +1060,16 @@ return std::get<CppType>(data); \
     bool operator==(const Value& other) {
         const Value& a = deref();
         const Value& b = other.deref();
+        if (a.type == Type::Reference && a.asReference().opaque &&
+            b.type == Type::Reference && b.asReference().opaque) {
+            return a.asReference().value_ptr.get() == b.asReference().value_ptr.get();
+        }
+        if (a.type == Type::Reference && a.asReference().opaque) {
+            return false;
+        }
+        if (b.type == Type::Reference && b.asReference().opaque) {
+            return false;
+        }
         if (a.type == Type::Number && b.type == Type::Number) {
             return a.asNumber() == b.asNumber();
         }
@@ -1068,6 +1087,16 @@ return std::get<CppType>(data); \
     Value operator!=(const Value& other) const {
         const Value& a = deref();
         const Value& b = other.deref();
+        if (a.type == Type::Reference && a.asReference().opaque &&
+            b.type == Type::Reference && b.asReference().opaque) {
+            return Value(a.asReference().value_ptr.get() != b.asReference().value_ptr.get());
+        }
+        if (a.type == Type::Reference && a.asReference().opaque) {
+            return Value(true);
+        }
+        if (b.type == Type::Reference && b.asReference().opaque) {
+            return Value(true);
+        }
         if (a.type == Type::Number && b.type == Type::Number) {
             return Value(a.asNumber() != b.asNumber());
         }
@@ -1147,22 +1176,37 @@ return std::get<CppType>(data); \
         if (type != Type::Reference) {
             throw RuntimeError("Cannot set a non-reference value");
         }
-        *std::get<Ref>(data).value_ptr = value.deref();
+        if (value.type == Type::Reference && value.asReference().opaque) {
+            *std::get<Ref>(data).value_ptr = value;
+        } else {
+            *std::get<Ref>(data).value_ptr = value.deref();
+        }
     }
 
     [[nodiscard]] const Value& deref() const {
         if (type == Type::Reference) {
-            return std::get<Ref>(data).value_ptr->deref();
+            const Ref& ref = std::get<Ref>(data);
+            if (ref.opaque) {
+                return *this;
+            }
+            return ref.value_ptr->deref();
         }
         return *this;
     }
 
     Value& deref() {
-        auto current = this;
-        while (current->type == Type::Reference) {
-            current = std::get<Ref>(current->data).value_ptr.get();
+        if (type == Type::Reference) {
+            Ref& ref = std::get<Ref>(data);
+            if (ref.opaque) {
+                return *this;
+            }
+            auto current = ref.value_ptr.get();
+            while (current->type == Type::Reference) {
+                current = std::get<Ref>(current->data).value_ptr.get();
+            }
+            return *current;
         }
-        return *current;
+        return *this;
     }
 
     Value& safe_deref() {
@@ -1273,8 +1317,9 @@ public:
     void emit(VM& vm) const;
 };
 
-inline Ref::Ref(std::shared_ptr<Value> ptr) : value_ptr(std::move(ptr)) {
-    if (value_ptr->isReference()) {
+inline Ref::Ref(std::shared_ptr<Value> ptr, const bool is_opaque)
+    : value_ptr(std::move(ptr)), opaque(is_opaque) {
+    if (!opaque && value_ptr->isReference()) {
         value_ptr = std::make_shared<Value>(value_ptr->deref());
     }
 }
@@ -1729,6 +1774,45 @@ public:
 };
 
 /**
+ * ADDR_OF — 取左值地址，生成地址槽引用.
+ */
+class ADDR_OF {
+public:
+    OPCODE_META(ADDR_OF)
+    OPCODE_ARGS0()
+
+    ADDR_OF() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * DEREF_PTR — 读取指针指向的值（RVALUE）.
+ */
+class DEREF_PTR {
+public:
+    OPCODE_META(DEREF_PTR)
+    OPCODE_ARGS0()
+
+    DEREF_PTR() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * PTR_TO_REF — 将地址槽引用转为可 STORE 的绑定槽.
+ */
+class PTR_TO_REF {
+public:
+    OPCODE_META(PTR_TO_REF)
+    OPCODE_ARGS0()
+
+    PTR_TO_REF() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
  * NOT — 逻辑非.
  *
  * 作用：弹出栈顶，压入布尔取反。
@@ -2077,11 +2161,9 @@ public:
 };
 
 /**
- * GETATTR — 读取对象属性.
+ * GETATTR — 读取成员：模块/struct 字段，或内置类型方法绑定.
  *
- * 作用：栈顶为对象（Module、字典等），弹出后按属性名取成员并压栈。
- * 何时使用：后缀 .name、模块成员访问（如 std.decos）。
- * 意义：面向对象/模块访问的 IR 原语；名字在 name_id 中（编译期入 string pool）。
+ * 栈顶为接收者：绑定 Reference（左值槽位）或 rvalue 对象。
  */
 class GETATTR {
 public:

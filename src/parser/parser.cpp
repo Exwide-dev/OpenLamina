@@ -381,7 +381,9 @@ ASTNode* Parser::parseStatement() {
     if (current == TokenType::IDENTIFIER || current == TokenType::NUM_LITERAL ||
         current == TokenType::STRING_LITERAL || current == TokenType::LPAREN ||
         current == TokenType::LBRACKET || current == TokenType::KW_DO ||
-        current == TokenType::LBRACE) {
+        current == TokenType::LBRACE || current == TokenType::OPER_MUL ||
+        current == TokenType::OPER_AMP || current == TokenType::OPER_MINUS ||
+        current == TokenType::OPER_NOT) {
         ExprNode* expr = parseExpression();
 
         while (true) {
@@ -463,7 +465,7 @@ ASTNode* Parser::parseVarDecl() {
 
 ASTNode* Parser::parseAssignStmt() {
     LOG("Parsing assign_stmt");
-    ExprNode* left = parsePostfixExpr(false);
+    ExprNode* left = parseUnaryExpr();
     const int assign_line = current_token().line;
     consume(TokenType::ASSIGN);
     ExprNode* right = parseExpression();
@@ -508,12 +510,12 @@ bool Parser::looksLikeDecoratedDoDecl() {
 }
 
 bool Parser::looksLikeAssignStmt() {
-    if (!check(TokenType::IDENTIFIER)) {
+    if (!check(TokenType::IDENTIFIER) && !check(TokenType::OPER_MUL)) {
         return false;
     }
 
     const ParserState saved = save_state();
-    parsePostfixExpr(false);
+    parseUnaryExpr();
     const bool is_assign = check(TokenType::ASSIGN);
     restore_state(saved);
     return is_assign;
@@ -948,6 +950,20 @@ ExprNode* Parser::parseUnaryExpr() {
         match(TokenType::OPER_MINUS);
         ExprNode* operand = parseUnaryExpr();
         return make_node_at<UnaryNode>(op_line, "-", operand);
+    }
+
+    if (check(TokenType::OPER_MUL)) {
+        const int op_line = current_token().line;
+        match(TokenType::OPER_MUL);
+        ExprNode* operand = parseUnaryExpr();
+        return make_node_at<UnaryNode>(op_line, "*", operand);
+    }
+
+    if (check(TokenType::OPER_AMP)) {
+        const int op_line = current_token().line;
+        match(TokenType::OPER_AMP);
+        ExprNode* operand = parseUnaryExpr();
+        return make_node_at<UnaryNode>(op_line, "&", operand);
     }
 
     return parsePostfixExpr();

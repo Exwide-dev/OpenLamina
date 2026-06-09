@@ -24,6 +24,28 @@
     }
 
 namespace lang {
+namespace {
+
+using lammp::Number;
+using lammp::Rational;
+
+long double math_arg_as_long_double(const Value& arg) {
+    const Value& val = arg.deref();
+    if (val.isRational()) {
+        return val.asRational().toLongDouble();
+    }
+    if (val.isNumber()) {
+        return std::stold(val.asNumber().toString());
+    }
+    throw RuntimeError("math functions require a number or rational argument");
+}
+
+Value math_unary_real(const long double arg, long double (*fn)(long double)) {
+    return Value(Rational::fromDouble(fn(arg)));
+}
+
+} // namespace
+
 Value floatstring(VM&, const std::vector<Value>& args) {
     arg_at_least("floatstring", 1);
 
@@ -74,39 +96,36 @@ Value to_float(VM&, const std::vector<Value>& args) {
 
 Value math_sin(VM&, const std::vector<Value>& args) {
     arg_must("sin", 1);
-    auto num = args[0].asNumber();
-    auto val = static_cast<long double>(num.toInt64());
-    return Value(static_cast<int64_t>(std::sin(val)));
+    return math_unary_real(math_arg_as_long_double(args[0]), std::sin);
 }
 
 Value math_cos(VM&, const std::vector<Value>& args) {
     arg_must("cos", 1);
-    auto num = args[0].asNumber();
-    auto val = static_cast<long double>(num.toInt64());
-    return Value(static_cast<int64_t>(std::cos(val)));
+    return math_unary_real(math_arg_as_long_double(args[0]), std::cos);
 }
 
 Value math_tan(VM&, const std::vector<Value>& args) {
     arg_must("tan", 1);
-    const auto num = args[0].asNumber();
-    const auto val = static_cast<long double>(num.toInt64());
-    return Value(static_cast<int64_t>(std::tan(val)));
+    return math_unary_real(math_arg_as_long_double(args[0]), std::tan);
 }
 
 Value math_sqrt(VM&, const std::vector<Value>& args) {
     arg_must("sqrt", 1);
-    auto num = args[0].asNumber();
-    auto val = static_cast<long double>(num.toInt64());
-    return Value(static_cast<int64_t>(std::sqrt(val)));
+    return math_unary_real(math_arg_as_long_double(args[0]), std::sqrt);
 }
 
 Value math_abs(VM&, const std::vector<Value>& args) {
     arg_must("abs", 1);
-    auto num = args[0].asNumber();
-    if (num.toInt64() < 0) {
-        return Value(-num.toInt64());
+    const Value& val = args[0].deref();
+    if (val.isRational()) {
+        const Rational& r = val.asRational();
+        return r.numerator().isNegative() ? Value(-r) : Value(r);
     }
-    return Value(num.toInt64());
+    if (val.isNumber()) {
+        const Number& n = val.asNumber();
+        return n.isNegative() ? Value(Rational(-n)) : Value(Rational(n));
+    }
+    throw RuntimeError("abs requires a number or rational");
 }
 
 Value len(VM&, const std::vector<Value>& args) {
@@ -183,7 +202,14 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "\nSyntax examples:\n";
     std::cout << "  let x = 42\n";
     std::cout << "  let arr = vec[1, 2, 3]\n";
+    std::cout << "  let a = []\n";
+    std::cout << "  a.append(1)\n";
     std::cout << "  let obj = {\"key\": value}\n";
+    std::cout << "\nType methods (call on mutable lvalue):\n";
+    std::cout << "  vector: append, extend, pop, clear, len, contains, reverse\n";
+    std::cout << "  dict: get, set, pop, clear, len, contains/has, keys, values, update\n";
+    std::cout << "  string: upper, lower, strip, split, contains, startswith, endswith, len\n";
+    std::cout << "  number: abs\n";
     std::cout << "  func add(a, b) { return a + b }\n";
     std::cout << "  std.decos.debug func my_func(x) { return x * 2 }\n";
     std::cout << "  std.decos.timer do(x) { return x + 1 }\n";
@@ -283,7 +309,9 @@ irgen::ModuleObject math_mod = [] {
     );
     math_symbols[irgen::g_string_pool.add("abs")] = std::make_shared<
         irgen::Value>(Value(irgen::FunctionType(math_abs)));
-    math_symbols[irgen::g_string_pool.add("pi")] = std::make_shared<irgen::Value>(Value(3141592653));
+    math_symbols[irgen::g_string_pool.add("pi")] = std::make_shared<irgen::Value>(
+        Value(Rational::fromDouble(3.14159265358979323846L))
+    );
 
     return irgen::ModuleObject(irgen::SymbolTable(math_symbols));
 }();

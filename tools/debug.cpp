@@ -30,7 +30,7 @@ void printAST(const lmx::ASTNode* node, const int indent) {
         }
         case lmx::ASTNodeType::Binary: {
             const auto bin = dynamic_cast<lmx::BinaryNode*>(const_cast<lmx::ASTNode*>(node));
-            std::string category = (bin->getValueCategory() == lmx::ValueCategory::LVALUE) ? " [LVALUE]" : " [RVALUE]";
+            std::string category = bin->getValueCategory() == lmx::ValueCategory::LVALUE ? " [LVALUE]" : " [RVALUE]";
             std::cout << indent_str << "Binary: " << bin->op << category << "\n";
             std::cout << indent_str << "  Left:\n";
             printAST(bin->left, indent + 2);
@@ -40,13 +40,13 @@ void printAST(const lmx::ASTNode* node, const int indent) {
         }
         case lmx::ASTNodeType::Number: {
             const auto num = dynamic_cast<lmx::NumberNode*>(const_cast<lmx::ASTNode*>(node));
-            std::string category = (num->getValueCategory() == lmx::ValueCategory::LVALUE) ? " [LVALUE]" : " [RVALUE]";
+            std::string category = num->getValueCategory() == lmx::ValueCategory::LVALUE ? " [LVALUE]" : " [RVALUE]";
             std::cout << indent_str << "Number: " << num->value << category << "\n";
             break;
         }
         case lmx::ASTNodeType::VarRef: {
             const auto var = dynamic_cast<lmx::VarRefNode*>(const_cast<lmx::ASTNode*>(node));
-            std::string category = (var->getValueCategory() == lmx::ValueCategory::LVALUE) ? " [LVALUE]" : " [RVALUE]";
+            std::string category = var->getValueCategory() == lmx::ValueCategory::LVALUE ? " [LVALUE]" : " [RVALUE]";
             std::cout << indent_str << "VarRef: " << var->name << category << "\n";
             break;
         }

@@ -420,9 +420,12 @@ struct UnaryNode final : ExprNode {
 
     /**
      * @brief 获取值类别
-     * @return RVALUE
+     * @return 解引用 * 为 LVALUE，其余为 RVALUE
      */
     [[nodiscard]] ValueCategory getValueCategory() const override {
+        if (op == "*") {
+            return ValueCategory::LVALUE;
+        }
         return ValueCategory::RVALUE;
     }
 };

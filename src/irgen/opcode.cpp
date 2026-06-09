@@ -3,7 +3,9 @@
 #include <algorithm>
 
 #include "../tools/lang/builtins.hpp"
+#include "../tools/lang/type_methods.hpp"
 #include "../tools/debug.hpp"
+#include "cell_pool.hpp"
 #include <fstream>
 #include <filesystem>
 #include <ranges>
@@ -57,12 +59,22 @@ namespace {
 #define VM_RUNTIME_ERROR(vm, msg) \
     throw RuntimeError((msg), vm_opcode_site((vm)), build_traceback((vm)))
 
+Value Value::makeEmptyRef() {
+    return Value(Ref(CellPool::instance().allocate()));
+}
+
 std::string Value::toString() const {
+    if (type == Type::Reference && asReference().opaque) {
+        return std::format(
+            "<pointer to 0x{:x}>",
+            reinterpret_cast<uintptr_t>(asReference().value_ptr.get())
+        );
+    }
     const Value& self = deref();
     switch (self.type) {
         case Type::None: return "None";
         case Type::Number: return asNumber().toString();
-        case Type::Bool: return (asBool() ? "true" : "false");
+        case Type::Bool: return asBool() ? "true" : "false";
         case Type::String: return "\"" + asString() + "\"";
         case Type::Function: return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
         case Type::Rational: return asRational().toString();
@@ -303,6 +315,32 @@ inline void NEG::emit(VM& vm) {
 inline void DEREF::emit(VM& vm) {
     const Value ref = vm.op_stack.popValue();
     vm.op_stack.push(Value(ref.deref()));
+}
+
+inline void ADDR_OF::emit(VM& vm) const {
+    const Value ref_slot = vm.op_stack.popValue();
+    if (!ref_slot.isReference()) {
+        VM_RUNTIME_ERROR(vm, "address-of requires an lvalue");
+    }
+    vm.op_stack.push(Value::makeAddressRef(ref_slot.asReference().value_ptr));
+}
+
+inline void DEREF_PTR::emit(VM& vm) const {
+    const Value ptr_val = vm.op_stack.popValue();
+    const Value& slot = ptr_val.deref();
+    if (!slot.isAddressRef()) {
+        VM_RUNTIME_ERROR(vm, "dereference requires a pointer");
+    }
+    vm.op_stack.push(Value(*slot.asReference().value_ptr));
+}
+
+inline void PTR_TO_REF::emit(VM& vm) const {
+    const Value ptr_val = vm.op_stack.popValue();
+    const Value& slot = ptr_val.deref();
+    if (!slot.isAddressRef()) {
+        VM_RUNTIME_ERROR(vm, "dereference requires a pointer");
+    }
+    vm.op_stack.push(Value::makeRef(slot.asReference().value_ptr));
 }
 
 inline void NOT::emit(VM& vm) {
@@ -622,26 +660,59 @@ inline void FINDMOD::emit(VM& vm) const {
 
 inline void GETATTR::emit(VM& vm) const {
     const std::string& attr_name = g_string_pool.get_string(name_id);
+    Value receiver = vm.op_stack.popValue();
 
-    Value obj = vm.op_stack.popValue();
-    const Value& val = obj.deref();
+    const auto push_module_attr = [&](const std::shared_ptr<ModuleObject>& module) {
+        const auto result = module->get_attr(attr_name);
+        if (result.has_value()) {
+            vm.op_stack.push(Value::makeRef(std::make_shared<Value>(*result)));
+            return;
+        }
+        VM_RUNTIME_ERROR(vm, "Attribute not found: " + attr_name + ", in module: " + module->name);
+    };
+
+    if (receiver.isReference() && !receiver.asReference().opaque) {
+        const std::shared_ptr<Value> cell = receiver.asReference().value_ptr;
+        const Value& val = cell->deref();
+
+        if (auto method = lang::bind_method(cell, attr_name)) {
+            vm.op_stack.push(Value(*method));
+            return;
+        }
+        if (val.getType() == Value::Type::StructObject) {
+            vm.op_stack.push(struct_get_field(Value(*cell), attr_name));
+            return;
+        }
+        if (val.getType() == Value::Type::Module) {
+            push_module_attr(val.asModule());
+            return;
+        }
+        VM_RUNTIME_ERROR(
+            vm,
+            std::format("Attribute '{}' not found on {}", attr_name, val.type_name())
+        );
+    }
+
+    const Value& val = receiver.deref();
     if (val.getType() == Value::Type::StructObject) {
-        vm.op_stack.push(struct_get_field(obj, attr_name));
+        vm.op_stack.push(struct_get_field(receiver, attr_name));
         return;
     }
-    if (val.getType() != Value::Type::Module) {
-        VM_RUNTIME_ERROR(vm,"GETATTR requires a module or struct object");
+    if (val.getType() == Value::Type::Module) {
+        push_module_attr(val.asModule());
+        return;
     }
 
-    auto module = val.asModule();
-    auto result = module->get_attr(attr_name);
-
-    if (result.has_value()) {
-        auto value_ptr = std::make_shared<Value>(*result);
-        vm.op_stack.push(Value::makeRef(value_ptr));
-    } else {
-        VM_RUNTIME_ERROR(vm,"Attribute not found: " + attr_name + ", in module: " + module->name);
+    const auto temp = std::make_shared<Value>(val);
+    if (auto method = lang::bind_method(temp, attr_name)) {
+        vm.op_stack.push(Value(*method));
+        return;
     }
+
+    VM_RUNTIME_ERROR(
+        vm,
+        std::format("Attribute '{}' not found on {}", attr_name, val.type_name())
+    );
 }
 
 void STRUCT_NEW::emit(VM& vm) const {
@@ -777,7 +848,9 @@ void NEW_INTERN_CONST::emit(VM& vm) const {
 }
 
 void NEW_VAR_OR_LOAD::emit(VM& vm) const {
+#ifdef DEBUG
     const std::string& var_name = g_string_pool.get_string(var_id);
+#endif
 
     LOG("NEW_VAR_OR_LOAD: var_id=" << var_id << ", var_name=\"" << var_name << "\"");
 

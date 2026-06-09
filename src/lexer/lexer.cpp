@@ -103,6 +103,7 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::OPER_MUL: return "*";
         case TokenType::OPER_DIV: return "/";
         case TokenType::OPER_NOT: return "!";
+        case TokenType::OPER_AMP: return "&";
         case TokenType::OPER_EQ: return "==";
         case TokenType::OPER_NE: return "!=";
         case TokenType::OPER_LT: return "<";
@@ -136,6 +137,7 @@ std::vector<TokenPattern> Lexer::initPatterns() {
         {R"(\*)", TokenType::OPER_MUL},
         {R"(/)", TokenType::OPER_DIV},
         {R"(!)", TokenType::OPER_NOT},
+        {R"(&)", TokenType::OPER_AMP},
         {R"(<)", TokenType::OPER_LT},
         {R"(>)", TokenType::OPER_GT},
         {R"(,)", TokenType::OPER_COMMA},

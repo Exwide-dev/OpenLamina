@@ -17,6 +17,8 @@ set(OPENLAMINA_CORE_SOURCES
     tools/utf8_io.hpp
     tools/lang/builtins.cpp
     tools/lang/builtins.hpp
+    tools/lang/type_methods.cpp
+    tools/lang/type_methods.hpp
     tools/lang/number.cpp
     tools/lang/number.hpp
     tools/lang/rational.cpp
@@ -33,6 +35,7 @@ set(OPENLAMINA_CORE_SOURCES
     src/front-end/repl_session.hpp
     src/parser/ast.hpp
     src/irgen/opcode.cpp
+    src/irgen/cell_pool.cpp
     src/irgen/opcode.hpp
     src/irgen/struct_types.cpp
     src/irgen/struct_types.hpp
@@ -49,12 +52,14 @@ set(OPENLAMINA_TEST_SOURCES
     tools/lang/builtins.cpp
     tools/lang/number.cpp
     tools/lang/rational.cpp
+    tools/lang/type_methods.cpp
     src/irgen/generator.cpp
     src/lexer/lexer.cpp
     src/parser/parser.cpp
     src/front-end/front_end.cpp
     src/front-end/repl_session.cpp
     src/irgen/opcode.cpp
+    src/irgen/cell_pool.cpp
     src/irgen/struct_types.cpp
 )
 
