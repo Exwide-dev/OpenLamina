@@ -9,58 +9,58 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(BUILD_SHARED_LIBS ON)
 
 set(OPENLAMINA_CORE_SOURCES
-    tools/debug.cpp
-    tools/debug.hpp
-    tools/error.cpp
-    tools/error.hpp
-    tools/utf8_io.cpp
-    tools/utf8_io.hpp
-    tools/lang/builtins.cpp
-    tools/lang/builtins.hpp
-    tools/lang/type_methods.cpp
-    tools/lang/type_methods.hpp
-    tools/lang/number.cpp
-    tools/lang/number.hpp
-    tools/lang/rational.cpp
-    tools/lang/rational.hpp
-    src/irgen/generator.cpp
-    src/irgen/generator.hpp
-    src/lexer/lexer.cpp
-    src/lexer/lexer.hpp
-    src/parser/parser.cpp
-    src/parser/parser.hpp
-    src/front-end/front_end.cpp
-    src/front-end/front_end.hpp
-    src/front-end/repl_session.cpp
-    src/front-end/repl_session.hpp
-    src/parser/ast.hpp
-    src/irgen/opcode.cpp
-    src/irgen/cell_pool.cpp
-    src/irgen/opcode.hpp
-    src/irgen/struct_types.cpp
-    src/irgen/struct_types.hpp
-    src/repl/repl.cpp
-    src/repl/repl.hpp
-    tools/cli.cpp
-    tools/cli.hpp
+        tools/debug.cpp
+        tools/debug.hpp
+        tools/error.cpp
+        tools/error.hpp
+        tools/utf8_io.cpp
+        tools/utf8_io.hpp
+        tools/lang/builtins.cpp
+        tools/lang/builtins.hpp
+        tools/lang/type_methods.cpp
+        tools/lang/type_methods.hpp
+        tools/lang/number.cpp
+        tools/lang/number.hpp
+        tools/lang/rational.cpp
+        tools/lang/rational.hpp
+        src/irgen/generator.cpp
+        src/irgen/generator.hpp
+        src/lexer/lexer.cpp
+        src/lexer/lexer.hpp
+        src/parser/parser.cpp
+        src/parser/parser.hpp
+        src/front-end/front_end.cpp
+        src/front-end/front_end.hpp
+        src/front-end/repl_session.cpp
+        src/front-end/repl_session.hpp
+        src/parser/ast.hpp
+        src/irgen/opcode.cpp
+        src/irgen/cell_pool.cpp
+        src/irgen/opcode.hpp
+        src/irgen/struct_types.cpp
+        src/irgen/struct_types.hpp
+        src/repl/repl.cpp
+        src/repl/repl.hpp
+        tools/cli.cpp
+        tools/cli.hpp
 )
 
 set(OPENLAMINA_TEST_SOURCES
-    tools/debug.cpp
-    tools/error.cpp
-    tools/utf8_io.cpp
-    tools/lang/builtins.cpp
-    tools/lang/number.cpp
-    tools/lang/rational.cpp
-    tools/lang/type_methods.cpp
-    src/irgen/generator.cpp
-    src/lexer/lexer.cpp
-    src/parser/parser.cpp
-    src/front-end/front_end.cpp
-    src/front-end/repl_session.cpp
-    src/irgen/opcode.cpp
-    src/irgen/cell_pool.cpp
-    src/irgen/struct_types.cpp
+        tools/debug.cpp
+        tools/error.cpp
+        tools/utf8_io.cpp
+        tools/lang/builtins.cpp
+        tools/lang/number.cpp
+        tools/lang/rational.cpp
+        tools/lang/type_methods.cpp
+        src/irgen/generator.cpp
+        src/lexer/lexer.cpp
+        src/parser/parser.cpp
+        src/front-end/front_end.cpp
+        src/front-end/repl_session.cpp
+        src/irgen/opcode.cpp
+        src/irgen/cell_pool.cpp
+        src/irgen/struct_types.cpp
 )
 
 add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})
@@ -68,7 +68,7 @@ add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})
 option(BUILD_TESTS "Build OpenLamina test runner" ON)
 if (BUILD_TESTS)
     add_executable(OpenLaminaTests test/main.cpp ${OPENLAMINA_TEST_SOURCES})
-endif()
+endif ()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     if (MSVC)
@@ -97,7 +97,7 @@ if (BUILD_TESTS)
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
-endif()
+endif ()
 
 target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
@@ -123,47 +123,23 @@ if (FETCH_LAMMP)
 
     if (TARGET LammpCore AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(LammpCore PRIVATE m)
-    endif()
+    endif ()
 
-    if (TARGET LammpCore)
+    if (WIN32 AND TARGET LammpCore)
         add_custom_command(TARGET OpenLamina POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$<TARGET_FILE:LammpCore>"
                 "$<TARGET_FILE_DIR:OpenLamina>"
-                COMMENT "Copying LammpCore shared library to output directory"
+                COMMENT "Copying LammpCore.dll to output directory"
         )
         if (BUILD_TESTS)
             add_custom_command(TARGET OpenLaminaTests POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "$<TARGET_FILE:LammpCore>"
                     "$<TARGET_FILE_DIR:OpenLaminaTests>"
-                    COMMENT "Copying LammpCore shared library to test output directory"
+                    COMMENT "Copying LammpCore.dll to test output directory"
             )
-        endif()
-
-        if (APPLE)
-            set_target_properties(OpenLamina PROPERTIES
-                    BUILD_RPATH "@loader_path"
-                    INSTALL_RPATH "@loader_path"
-            )
-            if (BUILD_TESTS)
-                set_target_properties(OpenLaminaTests PROPERTIES
-                        BUILD_RPATH "@loader_path"
-                        INSTALL_RPATH "@loader_path"
-                )
-            endif()
-        elseif (UNIX)
-            set_target_properties(OpenLamina PROPERTIES
-                    BUILD_RPATH "$ORIGIN"
-                    INSTALL_RPATH "$ORIGIN"
-            )
-            if (BUILD_TESTS)
-                set_target_properties(OpenLaminaTests PROPERTIES
-                        BUILD_RPATH "$ORIGIN"
-                        INSTALL_RPATH "$ORIGIN"
-                )
-            endif()
-        endif()
+        endif ()
     endif ()
 
     target_include_directories(OpenLamina PRIVATE
@@ -173,16 +149,16 @@ if (FETCH_LAMMP)
         target_include_directories(OpenLaminaTests PRIVATE
                 ${LAMMP_SOURCE_DIR}/include
         )
-    endif()
+    endif ()
 
     target_link_libraries(OpenLamina PRIVATE LammpCore)
     if (BUILD_TESTS)
         target_link_libraries(OpenLaminaTests PRIVATE LammpCore)
-    endif()
-else()
+    endif ()
+else ()
     message(STATUS "Try to use local LAMMP")
     target_link_libraries(OpenLamina PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/libLammpCore.dll")
     if (BUILD_TESTS)
         target_link_libraries(OpenLaminaTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/libLammpCore.dll")
-    endif()
-endif()
+    endif ()
+endif ()
