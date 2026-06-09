@@ -6,8 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+
 env:
   BUILD_TYPE: Release
+  # libc++ experimental features (requires latest Clang)
+  CXX_FLAGS: -fexperimental-library
 
 jobs:
   build:
@@ -21,9 +24,34 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Configure CMake
+    - name: Install Ninja (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+    - name: Install latest Clang (Linux/Windows)
+      if: runner.os != 'macOS'
+      uses: egor-tensin/setup-clang@v2
+      with:
+        version: latest
+
+    - name: Install latest Clang (macOS)
+      if: runner.os == 'macOS'
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DFETCH_LAMMP=ON
+        brew install llvm ninja
+        echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+    - name: Configure CMake
+      shell: bash
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE="${{ env.BUILD_TYPE }}" \
+          -DFETCH_LAMMP=ON \
+          -DCMAKE_C_COMPILER=clang \
+          -DCMAKE_CXX_COMPILER=clang++ \
+          -DCMAKE_CXX_STANDARD=23 \
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+          -DCMAKE_CXX_EXTENSIONS=OFF \
+          -DCMAKE_CXX_FLAGS="${{ env.CXX_FLAGS }}"
 
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }}
@@ -33,7 +61,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: OpenLamina-windows
-        path: build/Release/OpenLamina.exe
+        path: build/OpenLamina.exe
 
     - name: Upload artifacts (Linux)
       if: runner.os == 'Linux'

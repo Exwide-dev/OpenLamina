@@ -116,6 +116,10 @@ if (FETCH_LAMMP)
 
     FetchContent_MakeAvailable(LAMMP)
 
+    if (TARGET LammpCore AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(LammpCore PRIVATE m)
+    endif()
+
     if (WIN32 AND TARGET LammpCore)
         add_custom_command(TARGET OpenLamina POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
