@@ -13,10 +13,20 @@ env:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: macos-latest
+            shell: bash
+          - os: windows-latest
+            shell: msys2 {0}
 
     steps:
     - name: Checkout repository
@@ -26,8 +36,20 @@ jobs:
       if: runner.os == 'Linux'
       run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-    - name: Install latest Clang (Linux/Windows)
-      if: runner.os != 'macOS'
+    - name: Install MSYS2 MinGW Clang (Windows)
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          git
+          mingw-w64-x86_64-clang
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+
+    - name: Install latest Clang (Linux)
+      if: runner.os == 'Linux'
       uses: egor-tensin/setup-clang@v2
       with:
         version: latest
@@ -39,7 +61,6 @@ jobs:
         echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
     - name: Configure CMake
-      shell: bash
       run: |
         EXTRA_CXX_FLAGS=""
         if [[ "${{ runner.os }}" != "Windows" ]]; then
