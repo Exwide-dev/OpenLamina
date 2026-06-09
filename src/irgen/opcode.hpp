@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_set>
 #include <initializer_list>
 

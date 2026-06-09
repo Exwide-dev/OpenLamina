@@ -9,8 +9,6 @@ on:
 
 env:
   BUILD_TYPE: Release
-  # libc++ experimental features (requires latest Clang)
-  CXX_FLAGS: -fexperimental-library
 
 jobs:
   build:
@@ -43,6 +41,10 @@ jobs:
     - name: Configure CMake
       shell: bash
       run: |
+        EXTRA_CXX_FLAGS=""
+        if [[ "${{ runner.os }}" != "Windows" ]]; then
+          EXTRA_CXX_FLAGS="-fexperimental-library"
+        fi
         cmake -B build -G Ninja \
           -DCMAKE_BUILD_TYPE="${{ env.BUILD_TYPE }}" \
           -DFETCH_LAMMP=ON \
@@ -51,7 +53,7 @@ jobs:
           -DCMAKE_CXX_STANDARD=23 \
           -DCMAKE_CXX_STANDARD_REQUIRED=ON \
           -DCMAKE_CXX_EXTENSIONS=OFF \
-          -DCMAKE_CXX_FLAGS="${{ env.CXX_FLAGS }}"
+          -DCMAKE_CXX_FLAGS="${EXTRA_CXX_FLAGS}"
 
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }}

@@ -4,6 +4,7 @@
 #include <format>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 
 namespace lmx {
 Parser::Parser(std::string filename)
