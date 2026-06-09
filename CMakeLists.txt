@@ -125,20 +125,44 @@ if (FETCH_LAMMP)
         target_link_libraries(LammpCore PRIVATE m)
     endif()
 
-    if (WIN32 AND TARGET LammpCore)
+    if (TARGET LammpCore)
         add_custom_command(TARGET OpenLamina POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "$<TARGET_FILE:LammpCore>"
                 "$<TARGET_FILE_DIR:OpenLamina>"
-                COMMENT "Copying LammpCore.dll to output directory"
+                COMMENT "Copying LammpCore shared library to output directory"
         )
         if (BUILD_TESTS)
             add_custom_command(TARGET OpenLaminaTests POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "$<TARGET_FILE:LammpCore>"
                     "$<TARGET_FILE_DIR:OpenLaminaTests>"
-                    COMMENT "Copying LammpCore.dll to test output directory"
+                    COMMENT "Copying LammpCore shared library to test output directory"
             )
+        endif()
+
+        if (APPLE)
+            set_target_properties(OpenLamina PROPERTIES
+                    BUILD_RPATH "@loader_path"
+                    INSTALL_RPATH "@loader_path"
+            )
+            if (BUILD_TESTS)
+                set_target_properties(OpenLaminaTests PROPERTIES
+                        BUILD_RPATH "@loader_path"
+                        INSTALL_RPATH "@loader_path"
+                )
+            endif()
+        elseif (UNIX)
+            set_target_properties(OpenLamina PROPERTIES
+                    BUILD_RPATH "$ORIGIN"
+                    INSTALL_RPATH "$ORIGIN"
+            )
+            if (BUILD_TESTS)
+                set_target_properties(OpenLaminaTests PROPERTIES
+                        BUILD_RPATH "$ORIGIN"
+                        INSTALL_RPATH "$ORIGIN"
+                )
+            endif()
         endif()
     endif ()
 

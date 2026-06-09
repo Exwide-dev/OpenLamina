@@ -84,18 +84,24 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: OpenLamina-windows
-        path: build/OpenLamina.exe
+        path: |
+          build/OpenLamina.exe
+          build/libLammpCore.dll
 
     - name: Upload artifacts (Linux)
       if: runner.os == 'Linux'
       uses: actions/upload-artifact@v4
       with:
         name: OpenLamina-linux
-        path: build/OpenLamina
+        path: |
+          build/OpenLamina
+          build/libLammpCore.so
 
     - name: Upload artifacts (macOS)
       if: runner.os == 'macOS'
       uses: actions/upload-artifact@v4
       with:
         name: OpenLamina-macos
-        path: build/OpenLamina
+        path: |
+          build/OpenLamina
+          build/libLammpCore.dylib
