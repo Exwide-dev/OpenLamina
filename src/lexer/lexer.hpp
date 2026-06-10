@@ -41,6 +41,7 @@ enum class TokenType {
     KW_IN,       ///< in 关键字
     KW_STRUCT,   ///< struct 关键字
     KW_TYPED,    ///< typed 关键字（启用 struct 字段类型检查）
+    PLACEHOLDER, ///< 管道占位符 _
 
     OPER_PLUS,  ///< 加法运算符 +
     OPER_MINUS, ///< 减法运算符 -
@@ -57,6 +58,7 @@ enum class TokenType {
     OPER_COMMA, ///< 逗号 ,
     OPER_DOT,   ///< 点号 .
     OPER_COLON, ///< 冒号 :
+    OPER_PIPE,  ///< 管道运算符 |>
     ASSIGN,     ///< 赋值运算符 =
 
     LPAREN,   ///< 左圆括号 (

@@ -5,8 +5,198 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 namespace lmx {
+namespace {
+
+ExprNode* cloneExpr(const ExprNode* node) {
+    if (node == nullptr) {
+        return nullptr;
+    }
+
+    switch (node->kind) {
+        case ASTNodeType::Number:
+            return new NumberNode(dynamic_cast<const NumberNode*>(node)->value);
+        case ASTNodeType::String:
+            return new StringNode(dynamic_cast<const StringNode*>(node)->value);
+        case ASTNodeType::Bool:
+            return new BoolNode(dynamic_cast<const BoolNode*>(node)->value);
+        case ASTNodeType::VarRef: {
+            const auto* ref = dynamic_cast<const VarRefNode*>(node);
+            return new VarRefNode(ref->name);
+        }
+        case ASTNodeType::Unary: {
+            const auto* unary = dynamic_cast<const UnaryNode*>(node);
+            return new UnaryNode(unary->op, cloneExpr(unary->operand));
+        }
+        case ASTNodeType::Binary: {
+            const auto* binary = dynamic_cast<const BinaryNode*>(node);
+            return new BinaryNode(cloneExpr(binary->left), cloneExpr(binary->right), binary->op);
+        }
+        case ASTNodeType::FuncCallExpr: {
+            const auto* call = dynamic_cast<const FuncCallExprNode*>(node);
+            std::vector<ASTNode*> args;
+            args.reserve(call->args.size());
+            for (const auto arg : call->args) {
+                args.push_back(cloneExpr(dynamic_cast<ExprNode*>(arg)));
+            }
+            return new FuncCallExprNode(cloneExpr(call->func_expr), std::move(args));
+        }
+        case ASTNodeType::MemberAccess: {
+            const auto* access = dynamic_cast<const MemberAccessNode*>(node);
+            return new MemberAccessNode(cloneExpr(access->object), access->member);
+        }
+        case ASTNodeType::IndexAccess: {
+            const auto* access = dynamic_cast<const IndexAccessNode*>(node);
+            return new IndexAccessNode(cloneExpr(access->object), cloneExpr(access->index));
+        }
+        case ASTNodeType::Vector: {
+            const auto* vec = dynamic_cast<const VectorNode*>(node);
+            std::vector<ASTNode*> elements;
+            elements.reserve(vec->elements.size());
+            for (const auto element : vec->elements) {
+                elements.push_back(cloneExpr(dynamic_cast<ExprNode*>(element)));
+            }
+            return new VectorNode(std::move(elements));
+        }
+        case ASTNodeType::Dictionary: {
+            const auto* dict = dynamic_cast<const DictionaryNode*>(node);
+            std::vector<DictEntryNode*> entries;
+            entries.reserve(dict->entries.size());
+            for (const auto entry : dict->entries) {
+                entries.push_back(new DictEntryNode(
+                    cloneExpr(entry->key),
+                    cloneExpr(entry->value)
+                ));
+            }
+            return new DictionaryNode(std::move(entries));
+        }
+        default:
+            throw std::runtime_error("unsupported expression in pipeline placeholder substitution");
+    }
+}
+
+ExprNode* substitutePipelinePlaceholder(ExprNode* expr, const ExprNode* value) {
+    if (expr == nullptr) {
+        return nullptr;
+    }
+
+    if (expr->kind == ASTNodeType::Placeholder) {
+        delete expr;
+        return cloneExpr(value);
+    }
+
+    switch (expr->kind) {
+        case ASTNodeType::Unary: {
+            auto* unary = dynamic_cast<UnaryNode*>(expr);
+            unary->operand = substitutePipelinePlaceholder(unary->operand, value);
+            return expr;
+        }
+        case ASTNodeType::Binary: {
+            auto* binary = dynamic_cast<BinaryNode*>(expr);
+            binary->left = substitutePipelinePlaceholder(binary->left, value);
+            binary->right = substitutePipelinePlaceholder(binary->right, value);
+            return expr;
+        }
+        case ASTNodeType::FuncCallExpr: {
+            auto* call = dynamic_cast<FuncCallExprNode*>(expr);
+            call->func_expr = substitutePipelinePlaceholder(call->func_expr, value);
+            for (auto& arg : call->args) {
+                arg = substitutePipelinePlaceholder(dynamic_cast<ExprNode*>(arg), value);
+            }
+            return expr;
+        }
+        case ASTNodeType::MemberAccess: {
+            auto* access = dynamic_cast<MemberAccessNode*>(expr);
+            access->object = substitutePipelinePlaceholder(access->object, value);
+            return expr;
+        }
+        case ASTNodeType::IndexAccess: {
+            auto* access = dynamic_cast<IndexAccessNode*>(expr);
+            access->object = substitutePipelinePlaceholder(access->object, value);
+            access->index = substitutePipelinePlaceholder(access->index, value);
+            return expr;
+        }
+        case ASTNodeType::Vector: {
+            auto* vec = dynamic_cast<VectorNode*>(expr);
+            for (auto& element : vec->elements) {
+                element = substitutePipelinePlaceholder(dynamic_cast<ExprNode*>(element), value);
+            }
+            return expr;
+        }
+        case ASTNodeType::Dictionary: {
+            auto* dict = dynamic_cast<DictionaryNode*>(expr);
+            for (const auto entry : dict->entries) {
+                entry->key = substitutePipelinePlaceholder(entry->key, value);
+                entry->value = substitutePipelinePlaceholder(entry->value, value);
+            }
+            return expr;
+        }
+        default:
+            return expr;
+    }
+}
+
+bool containsPlaceholder(const ExprNode* expr) {
+    if (expr == nullptr) {
+        return false;
+    }
+
+    if (expr->kind == ASTNodeType::Placeholder) {
+        return true;
+    }
+
+    switch (expr->kind) {
+        case ASTNodeType::Unary:
+            return containsPlaceholder(dynamic_cast<const UnaryNode*>(expr)->operand);
+        case ASTNodeType::Binary: {
+            const auto* binary = dynamic_cast<const BinaryNode*>(expr);
+            return containsPlaceholder(binary->left) || containsPlaceholder(binary->right);
+        }
+        case ASTNodeType::FuncCallExpr: {
+            const auto* call = dynamic_cast<const FuncCallExprNode*>(expr);
+            if (containsPlaceholder(call->func_expr)) {
+                return true;
+            }
+            for (const auto arg : call->args) {
+                if (containsPlaceholder(dynamic_cast<const ExprNode*>(arg))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        case ASTNodeType::MemberAccess:
+            return containsPlaceholder(dynamic_cast<const MemberAccessNode*>(expr)->object);
+        case ASTNodeType::IndexAccess: {
+            const auto* access = dynamic_cast<const IndexAccessNode*>(expr);
+            return containsPlaceholder(access->object) || containsPlaceholder(access->index);
+        }
+        case ASTNodeType::Vector: {
+            const auto* vec = dynamic_cast<const VectorNode*>(expr);
+            for (const auto element : vec->elements) {
+                if (containsPlaceholder(dynamic_cast<const ExprNode*>(element))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        case ASTNodeType::Dictionary: {
+            const auto* dict = dynamic_cast<const DictionaryNode*>(expr);
+            for (const auto entry : dict->entries) {
+                if (containsPlaceholder(entry->key) || containsPlaceholder(entry->value)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+} // namespace
+
 Parser::Parser(std::string filename)
     : filename(std::move(filename)) {
 }
@@ -94,6 +284,7 @@ std::string Parser::getTokenTypeName(const TokenType type) {
         case TokenType::OPER_COMMA: return "','";
         case TokenType::OPER_DOT: return "'.'";
         case TokenType::OPER_COLON: return "':'";
+        case TokenType::OPER_PIPE: return "'|>'";
         case TokenType::ASSIGN: return "'='";
         case TokenType::LPAREN: return "'('";
         case TokenType::RPAREN: return "')'";
@@ -102,6 +293,7 @@ std::string Parser::getTokenTypeName(const TokenType type) {
         case TokenType::LBRACKET: return "'['";
         case TokenType::RBRACKET: return "']'";
         case TokenType::NEWLINE: return "newline";
+        case TokenType::PLACEHOLDER: return "'_'";
         case TokenType::MISMATCH: return "mismatch";
         default: return "unknown";
     }
@@ -854,14 +1046,63 @@ ASTNode* Parser::parseUseStmt() {
 }
 
 ExprNode* Parser::parseExpression() {
-    return parseComparisonExpr();
+    return parsePipelineExpr();
+}
+
+bool Parser::atPipelineStepBoundary() const {
+    if (!pipeline_step_mode_) {
+        return false;
+    }
+    if (check(TokenType::NEWLINE) || check(TokenType::END)) {
+        return true;
+    }
+    return check(TokenType::OPER_PIPE) && current_token().line == pipeline_step_line_;
+}
+
+ExprNode* Parser::parsePipelineExpr() {
+    LOG("Parsing pipeline_expr");
+    ExprNode* expr = parseComparisonExpr();
+
+    while (true) {
+        while (match(TokenType::NEWLINE)) {
+            LOG("Skipping NEWLINE before pipeline step");
+        }
+
+        if (!check(TokenType::OPER_PIPE)) {
+            break;
+        }
+
+        const Token pipe_tok = current_token();
+        const int pipe_line = pipe_tok.line;
+        advance();
+
+        if (check(TokenType::NEWLINE) || check(TokenType::END)) {
+            throw_error_at("pipeline operator '|>' requires an expression on the same line", pipe_tok);
+        }
+        if (current_token().line != pipe_line) {
+            throw_error_at("pipeline operator '|>' and its expression must be on the same line", pipe_tok);
+        }
+
+        pipeline_step_mode_ = true;
+        pipeline_step_line_ = pipe_line;
+        ExprNode* step = parseComparisonExpr();
+        pipeline_step_mode_ = false;
+
+        if (!containsPlaceholder(step)) {
+            throw_error_at("pipeline step must contain placeholder '_'", pipe_tok);
+        }
+
+        expr = substitutePipelinePlaceholder(step, expr);
+    }
+
+    return expr;
 }
 
 ExprNode* Parser::parseComparisonExpr() {
     LOG("Parsing comparison_expr");
     ExprNode* left = parseAdditiveExpr();
 
-    while (true) {
+    while (!atPipelineStepBoundary()) {
         const TokenType op_type = current_token().type;
         if (op_type != TokenType::OPER_EQ && op_type != TokenType::OPER_NE &&
             op_type != TokenType::OPER_LT && op_type != TokenType::OPER_GT &&
@@ -899,7 +1140,7 @@ ExprNode* Parser::parseAdditiveExpr() {
     LOG("Parsing additive_expr");
     ExprNode* left = parseMultiplicativeExpr();
 
-    while (true) {
+    while (!atPipelineStepBoundary()) {
         const TokenType op_type = current_token().type;
         if (op_type != TokenType::OPER_PLUS && op_type != TokenType::OPER_MINUS) {
             break;
@@ -919,7 +1160,7 @@ ExprNode* Parser::parseMultiplicativeExpr() {
     LOG("Parsing multiplicative_expr");
     ExprNode* left = parseUnaryExpr();
 
-    while (true) {
+    while (!atPipelineStepBoundary()) {
         TokenType op_type = current_token().type;
         if (op_type != TokenType::OPER_MUL && op_type != TokenType::OPER_DIV) {
             break;
@@ -937,6 +1178,10 @@ ExprNode* Parser::parseMultiplicativeExpr() {
 
 ExprNode* Parser::parseUnaryExpr() {
     LOG("Parsing unary_expr");
+
+    if (atPipelineStepBoundary()) {
+        throw_error("expected pipeline step expression after '|>'");
+    }
 
     if (check(TokenType::OPER_NOT)) {
         const int op_line = current_token().line;
@@ -974,6 +1219,10 @@ ExprNode* Parser::parsePostfixExpr(const bool parse_do_suffix) {
     ExprNode* expr = parseFactor();
 
     while (true) {
+        if (atPipelineStepBoundary()) {
+            break;
+        }
+
         if (check(TokenType::LPAREN)) {
             const int line = current_token().line;
             match(TokenType::LPAREN);
@@ -989,7 +1238,7 @@ ExprNode* Parser::parsePostfixExpr(const bool parse_do_suffix) {
         } else if (check(TokenType::LBRACKET)) {
             const int line = current_token().line;
             match(TokenType::LBRACKET);
-            ExprNode* index = parseExpression();
+            ExprNode* index = pipeline_step_mode_ ? parseComparisonExpr() : parseExpression();
             consume(TokenType::RBRACKET);
             expr = make_node_at<IndexAccessNode>(line, expr, index);
         } else if (parse_do_suffix && check(TokenType::KW_DO)) {
@@ -1022,6 +1271,15 @@ ExprNode* Parser::parseFactor() {
         return make_node_at<StringNode>(line, value);
     }
 
+    if (check(TokenType::PLACEHOLDER)) {
+        if (!pipeline_step_mode_) {
+            throw_error("placeholder '_' is only valid in pipeline steps");
+        }
+        const int line = current_token().line;
+        advance();
+        return make_node_at<PlaceholderNode>(line);
+    }
+
     if (check(TokenType::IDENTIFIER)) {
         const int line = current_token().line;
         std::string value = current_token().value;
@@ -1030,7 +1288,7 @@ ExprNode* Parser::parseFactor() {
     }
 
     if (match(TokenType::LPAREN)) {
-        ExprNode* expr = parseExpression();
+        ExprNode* expr = pipeline_step_mode_ ? parseComparisonExpr() : parseExpression();
         consume(TokenType::RPAREN);
         return expr;
     }

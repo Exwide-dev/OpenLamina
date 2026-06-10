@@ -132,9 +132,9 @@ void Number::upgrade_to_big(int64_t val) {
 }
 
 Number::BigNum Number::add_big(const BigNum& a, const BigNum& b) {
-    BigNum result;
     if (a.is_negative == b.is_negative) {
-        mp_size_t max_size = LMMP_MAX(a.size, b.size);
+        BigNum result;
+        const mp_size_t max_size = LMMP_MAX(a.size, b.size);
         result.allocate(max_size + 1);
         mp_limb_t carry = lmmp_add_n_(result.data.get(), a.data.get(), b.data.get(), LMMP_MIN(a.size, b.size));
         if (a.size > b.size) {

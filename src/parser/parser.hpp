@@ -87,6 +87,10 @@ private:
     std::vector<Token> tokens;                ///< token 列表
     std::vector<ParserContext> context_stack; ///< 上下文栈
     size_t current_pos = 0;                   ///< 当前解析位置
+    bool pipeline_step_mode_ = false;         ///< 正在解析管道步骤（单行表达式）
+    int pipeline_step_line_ = 0;              ///< 当前管道步骤所在行
+
+    [[nodiscard]] bool atPipelineStepBoundary() const;
 
     /**
      * @brief 解析器快照，用于预测分析时的状态保存与回退
@@ -327,6 +331,12 @@ private:
      * @return 表达式节点
      */
     ExprNode* parseExpression();
+
+    /**
+     * @brief 解析管道表达式
+     * @return 表达式节点
+     */
+    ExprNode* parsePipelineExpr();
 
     /**
      * @brief 解析比较表达式

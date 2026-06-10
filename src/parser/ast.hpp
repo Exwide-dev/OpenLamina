@@ -68,6 +68,7 @@ enum class ASTNodeType {
     Bool,          ///< 布尔字面量
     String,        ///< 字符串字面量
     VarRef,        ///< 变量引用
+    Placeholder,   ///< 管道占位符 _
     FuncCallExpr,  ///< 函数调用表达式
     MemberAccess,  ///< 成员访问
     Type,          ///< 类型节点
@@ -391,6 +392,21 @@ struct VarRefNode : ExprNode {
      */
     [[nodiscard]] ValueCategory getValueCategory() const override {
         return ValueCategory::LVALUE;
+    }
+};
+
+/**
+ * @struct PlaceholderNode
+ * @brief 管道占位符 _ 节点（仅在管道步骤中合法）
+ */
+struct PlaceholderNode final : ExprNode {
+    PlaceholderNode() : ExprNode(ASTNodeType::Placeholder) {
+    }
+
+    ~PlaceholderNode() override = default;
+
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
     }
 };
 

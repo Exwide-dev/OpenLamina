@@ -24,7 +24,7 @@ using irgen::VM;
     const Value& key
 ) {
     const Value& key_deref = key.deref();
-    for (const auto& [tkey, _] : dict) {
+    for (const auto& tkey : dict | std::views::keys) {
         if (*tkey == key_deref) {
             return tkey;
         }
@@ -40,6 +40,19 @@ std::optional<irgen::FunctionType> bind_method(
 ) {
     if (!receiver) {
         return std::nullopt;
+    }
+
+    if (method_name == "displayString") {
+        return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            (void)args;
+            return Value(slot_value(receiver).deref().displayString());
+        };
+    }
+    if (method_name == "printString") {
+        return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            (void)args;
+            return Value(slot_value(receiver).deref().printString());
+        };
     }
 
     Value& self = *receiver;
@@ -213,7 +226,7 @@ std::optional<irgen::FunctionType> bind_method(
             return [receiver](VM&, const std::vector<Value>& args) -> Value {
                 (void)args;
                 std::vector<std::shared_ptr<Value>> keys;
-                for (const auto& [k, _] : slot_value(receiver).asDictionary()) {
+                for (const auto& k : slot_value(receiver).asDictionary() | std::views::keys) {
                     keys.push_back(std::make_shared<Value>(*k));
                 }
                 return Value(std::move(keys));
@@ -223,7 +236,7 @@ std::optional<irgen::FunctionType> bind_method(
             return [receiver](VM&, const std::vector<Value>& args) -> Value {
                 (void)args;
                 std::vector<std::shared_ptr<Value>> values;
-                for (const auto& [_, v] : slot_value(receiver).asDictionary()) {
+                for (const auto& v : slot_value(receiver).asDictionary() | std::views::values) {
                     values.push_back(std::make_shared<Value>(*v));
                 }
                 return Value(std::move(values));

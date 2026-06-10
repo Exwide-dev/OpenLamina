@@ -98,6 +98,7 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_IN: return "in";
         case TokenType::KW_STRUCT: return "struct";
         case TokenType::KW_TYPED: return "typed";
+        case TokenType::PLACEHOLDER: return "_";
         case TokenType::OPER_PLUS: return "+";
         case TokenType::OPER_MINUS: return "-";
         case TokenType::OPER_MUL: return "*";
@@ -113,6 +114,7 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::OPER_COMMA: return ",";
         case TokenType::OPER_DOT: return ".";
         case TokenType::OPER_COLON: return ":";
+        case TokenType::OPER_PIPE: return "|>";
         case TokenType::ASSIGN: return "=";
         case TokenType::LPAREN: return "(";
         case TokenType::RPAREN: return ")";
@@ -132,6 +134,7 @@ std::vector<TokenPattern> Lexer::initPatterns() {
         {R"(!=)", TokenType::OPER_NE},
         {R"(<=)", TokenType::OPER_LE},
         {R"(>=)", TokenType::OPER_GE},
+        {R"(\|>)", TokenType::OPER_PIPE},
         {R"(\+)", TokenType::OPER_PLUS},
         {R"(-)", TokenType::OPER_MINUS},
         {R"(\*)", TokenType::OPER_MUL},
@@ -268,6 +271,7 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"in", TokenType::KW_IN},
         {"struct", TokenType::KW_STRUCT},
         {"typed", TokenType::KW_TYPED},
+        {"_", TokenType::PLACEHOLDER},
     };
 
     const auto it = keywords.find(value);

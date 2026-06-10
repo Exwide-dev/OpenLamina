@@ -22,7 +22,6 @@
 #include "../tools/error.hpp"
 #include "../tools/lang/number.hpp"
 #include "../tools/lang/rational.hpp"
-#include "front-end/front_end.hpp"
 
 #define OPCODE_META(ClassName) \
     [[nodiscard]] std::string name() const { return #ClassName; } \
@@ -773,7 +772,19 @@ public:
     }
 
     /**
-     * @brief 转换为字符串表示
+     * @brief 控制台显示用字符串（如 REPL 求值结果；字符串带引号）
+     * @return 字符串表示
+     */
+    [[nodiscard]] std::string displayString() const;
+
+    /**
+     * @brief print/str 等输出用字符串（字符串为原始内容，不带引号）
+     * @return 字符串表示
+     */
+    [[nodiscard]] std::string printString() const;
+
+    /**
+     * @brief 转换为字符串表示（同 displayString，供调试与错误信息使用）
      * @return 字符串表示
      */
     [[nodiscard]] std::string toString() const;
@@ -1226,7 +1237,7 @@ return std::get<CppType>(data); \
     }
 
     friend std::ostream& operator<<(std::ostream& os, const Value& value) {
-        os << value.toString();
+        os << value.displayString();
         return os;
     }
 

@@ -63,7 +63,7 @@ Value Value::makeEmptyRef() {
     return Value(Ref(CellPool::instance().allocate()));
 }
 
-std::string Value::toString() const {
+std::string Value::displayString() const {
     if (type == Type::Reference && asReference().opaque) {
         return std::format(
             "<pointer to 0x{:x}>",
@@ -83,7 +83,7 @@ std::string Value::toString() const {
             const auto& elements = asVector();
             for (size_t i = 0; i < elements.size(); ++i) {
                 if (i > 0) result += ", ";
-                result += elements[i]->toString();
+                result += elements[i]->displayString();
             }
             result += "]";
             return result;
@@ -94,7 +94,7 @@ std::string Value::toString() const {
             size_t i = 0;
             for (const auto& [key, value] : entries) {
                 if (i > 0) result += ", ";
-                result.append(key->toString() + ": " + value->toString());
+                result.append(key->displayString() + ": " + value->displayString());
                 ++i;
             }
             result += "}";
@@ -102,7 +102,7 @@ std::string Value::toString() const {
         }
         case Type::Reference: {
             auto t = asReference();
-            return t.get().toString();
+            return t.get().displayString();
         }
         case Type::StructObject: {
             const auto inst = asStruct();
@@ -111,7 +111,7 @@ std::string Value::toString() const {
                 if (i > 0) {
                     result += ", ";
                 }
-                result += inst->type->fields[i].name + "=" + inst->slots[i].toString();
+                result += inst->type->fields[i].name + "=" + inst->slots[i].displayString();
             }
             result += "}";
             return result;
@@ -124,7 +124,7 @@ std::string Value::toString() const {
                 [&] -> std::string {
                     std::string result;
                     for (const auto& [a, b] : t->exports) {
-                        result.append(std::format("  {}: {}\n", a, b.toString()));
+                        result.append(std::format("  {}: {}\n", a, b.displayString()));
                     }
                     return result + "}";
                 }()
@@ -132,6 +132,78 @@ std::string Value::toString() const {
         }
         default: return "<__UNKNOWN_Value>";
     }
+}
+
+std::string Value::printString() const {
+    if (type == Type::Reference && asReference().opaque) {
+        return displayString();
+    }
+    const Value& self = deref();
+    switch (self.type) {
+        case Type::None: return "None";
+        case Type::Number: return asNumber().toString();
+        case Type::Bool: return asBool() ? "true" : "false";
+        case Type::String: return asString();
+        case Type::Function: return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
+        case Type::Rational: return asRational().toString();
+        case Type::Vector: {
+            std::string result = "vec[";
+            const auto& elements = asVector();
+            for (size_t i = 0; i < elements.size(); ++i) {
+                if (i > 0) result += ", ";
+                result += elements[i]->printString();
+            }
+            result += "]";
+            return result;
+        }
+        case Type::Dictionary: {
+            std::string result = "{";
+            const auto& entries = asDictionary();
+            size_t i = 0;
+            for (const auto& [key, value] : entries) {
+                if (i > 0) result += ", ";
+                result.append(key->printString() + ": " + value->printString());
+                ++i;
+            }
+            result += "}";
+            return result;
+        }
+        case Type::Reference: {
+            auto t = asReference();
+            return t.get().printString();
+        }
+        case Type::StructObject: {
+            const auto inst = asStruct();
+            std::string result = inst->type->name + "{";
+            for (size_t i = 0; i < inst->slots.size(); ++i) {
+                if (i > 0) {
+                    result += ", ";
+                }
+                result += inst->type->fields[i].name + "=" + inst->slots[i].printString();
+            }
+            result += "}";
+            return result;
+        }
+        case Type::Module: {
+            const auto t = asModule();
+            return std::format(
+                "Module {}: {{ \n{}",
+                t->full_name,
+                [&] -> std::string {
+                    std::string result;
+                    for (const auto& [a, b] : t->exports) {
+                        result.append(std::format("  {}: {}\n", a, b.printString()));
+                    }
+                    return result + "}";
+                }()
+            );
+        }
+        default: return "<__UNKNOWN_Value>";
+    }
+}
+
+std::string Value::toString() const {
+    return displayString();
 }
 
 std::optional<std::shared_ptr<Value>> SymbolTable::get(const size_t id) const noexcept {
@@ -898,7 +970,7 @@ inline void LOAD_FAST::emit(VM& vm) const {
         VM_RUNTIME_ERROR(vm,"LOAD_FAST: No locals scope available");
     }
 
-    auto& locals = vm.locals_stack.back();
+    const auto& locals = vm.locals_stack.back();
     if (slot >= locals.size()) {
         VM_RUNTIME_ERROR(vm,"LOAD_FAST: slot index out of range: " + std::to_string(slot));
     }

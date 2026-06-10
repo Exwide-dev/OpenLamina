@@ -70,7 +70,7 @@ Value floatstring(VM&, const std::vector<Value>& args) {
 
 Value print(VM& vm, const std::vector<Value>& args) {
     for (auto const& elem : args) {
-        std::cout << elem << " ";
+        std::cout << elem.deref().printString() << " ";
     }
     std::cout << std::endl;
     return {};
@@ -79,7 +79,7 @@ Value print(VM& vm, const std::vector<Value>& args) {
 Value input(VM& vm, const std::vector<Value>& args) {
     arg_must("input", 1);
     std::string input;
-    std::cout << args[0];
+    std::cout << args[0].deref().printString();
     std::getline(std::cin, input);
     return Value(input);
 }
@@ -148,7 +148,7 @@ Value type_of(VM&, const std::vector<Value>& args) {
 
 Value str_of(VM&, const std::vector<Value>& args) {
     arg_must("str", 1);
-    return Value(args[0].toString());
+    return Value(args[0].deref().printString());
 }
 
 Value int_of(VM&, const std::vector<Value>& args) {
@@ -175,7 +175,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  now() - Get current time\n";
     std::cout << "  len(obj) - Get length of vector/dict/string\n";
     std::cout << "  type(obj) - Get type name\n";
-    std::cout << "  str(obj) - Convert to string\n";
+    std::cout << "  str(obj) - Convert to string (uses printString)\n";
     std::cout << "  int(obj) - Convert to integer\n";
     std::cout << "  exit() - Exit the program\n";
     std::cout << "  help() - Show this help\n";
@@ -206,6 +206,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  a.append(1)\n";
     std::cout << "  let obj = {\"key\": value}\n";
     std::cout << "\nType methods (call on mutable lvalue):\n";
+    std::cout << "  all values: displayString(), printString()\n";
     std::cout << "  vector: append, extend, pop, clear, len, contains, reverse\n";
     std::cout << "  dict: get, set, pop, clear, len, contains/has, keys, values, update\n";
     std::cout << "  string: upper, lower, strip, split, contains, startswith, endswith, len\n";
