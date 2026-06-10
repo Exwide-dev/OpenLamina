@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "irgen/opcode.hpp"
+#include "irgen/cell_pool.hpp"
 #include "rational.hpp"
 
 #define arg_must(funcname, num) \
@@ -167,6 +168,14 @@ Value exit(VM&, const std::vector<Value>& args) {
     return {};
 }
 
+Value gc(VM& vm, const std::vector<Value>& args) {
+    (void)args;
+    const size_t before = irgen::CellPool::instance().liveCells();
+    vm.collectGarbage();
+    const size_t after = irgen::CellPool::instance().liveCells();
+    return Value(static_cast<int64_t>(before > after ? before - after : 0));
+}
+
 Value help(VM&, const std::vector<Value>& args) {
     std::cout << "OpenLamina Programming Language\n";
     std::cout << "Built-in functions:\n";
@@ -178,6 +187,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  str(obj) - Convert to string (uses printString)\n";
     std::cout << "  int(obj) - Convert to integer\n";
     std::cout << "  exit() - Exit the program\n";
+    std::cout << "  gc() - Run mark-sweep GC on object pool; returns cells reclaimed\n";
     std::cout << "  help() - Show this help\n";
     std::cout << "  copyright() - Show copyright info\n";
     std::cout << "Dictionary functions:\n";
@@ -230,8 +240,8 @@ Value dict_create(VM&, const std::vector<Value>& args) {
     }
     std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> dict;
     for (size_t i = 0; i < args.size(); i += 2) {
-        auto key = std::make_shared<Value>(args[i].deref());
-        dict[key] = std::make_shared<Value>(args[i + 1]);
+        auto key = irgen::makePooledCell(args[i].deref());
+        dict[key] = irgen::makePooledCell(args[i + 1]);
     }
     return Value(std::move(dict));
 }
@@ -273,7 +283,7 @@ Value dict_items(VM&, const std::vector<Value>& args) {
         std::vector<std::shared_ptr<Value>> pair;
         pair.push_back(key);
         pair.push_back(value);
-        items.push_back(std::make_shared<Value>(std::move(pair)));
+        items.push_back(irgen::makePooledCell(Value(std::move(pair))));
     }
     return Value(std::move(items));
 }
@@ -284,7 +294,7 @@ Value dict_get(VM&, const std::vector<Value>& args) {
     if (!dict_val.isDictionary()) {
         throw RuntimeError("get requires a dictionary as first argument");
     }
-    auto key = std::make_shared<Value>(args[1].deref());
+    auto key = irgen::makePooledCell(args[1].deref());
     const auto& dict = dict_val.asDictionary();
     auto it = dict.find(key);
     if (it != dict.end()) {
@@ -756,6 +766,7 @@ void lang::init_builtins(irgen::SymbolTable& symbols) {
     symbols.set(irgen::g_string_pool.add("str"), Value(irgen::FunctionType(str_of)));
     symbols.set(irgen::g_string_pool.add("int"), Value(irgen::FunctionType(int_of)));
     symbols.set(irgen::g_string_pool.add("exit"), Value(irgen::FunctionType(exit)));
+    symbols.set(irgen::g_string_pool.add("gc"), Value(irgen::FunctionType(gc)));
     symbols.set(irgen::g_string_pool.add("help"), Value(irgen::FunctionType(help)));
     symbols.set(irgen::g_string_pool.add("copyright"), Value(irgen::FunctionType(copyright)));
     symbols.set(irgen::g_string_pool.add("dict"), Value(irgen::FunctionType(dict_create)));

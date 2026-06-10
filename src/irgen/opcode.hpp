@@ -462,6 +462,10 @@ struct IteratorObject {
     bool next(Value& out);
 };
 
+std::shared_ptr<Value> makePooledCell();
+std::shared_ptr<Value> makePooledCell(const Value& value);
+std::shared_ptr<Value> makePooledCell(Value&& value);
+
 /**
  * @brief 统一值类型，支持多种数据类型的存储和操作
  */
@@ -628,7 +632,7 @@ public:
         std::vector<std::shared_ptr<Value>> vec;
         vec.reserve(init.size());
         for (const auto& val : init) {
-            vec.push_back(std::make_shared<Value>(val));
+            vec.push_back(makePooledCell(val));
         }
         data = std::move(vec);
     }
@@ -680,14 +684,14 @@ public:
      * @brief 创建指向值的引用（移动语义）
      */
     static Value makeRef(Value&& val) {
-        return Value(Ref(std::make_shared<Value>(std::move(val))));
+        return Value(Ref(makePooledCell(std::move(val))));
     }
 
     /**
      * @brief 创建指向值的引用（复制语义）
      */
     static Value makeRef(const Value& val) {
-        return Value(Ref(std::make_shared<Value>(val)));
+        return Value(Ref(makePooledCell(val)));
     }
 
     /**
@@ -1331,7 +1335,7 @@ public:
 inline Ref::Ref(std::shared_ptr<Value> ptr, const bool is_opaque)
     : value_ptr(std::move(ptr)), opaque(is_opaque) {
     if (!opaque && value_ptr->isReference()) {
-        value_ptr = std::make_shared<Value>(value_ptr->deref());
+        value_ptr = makePooledCell(value_ptr->deref());
     }
 }
 
@@ -1504,6 +1508,11 @@ public:
         data.clear();
     }
 
+    /** @brief 只读访问底层元素（供 GC 根扫描等） */
+    [[nodiscard]] const std::vector<Stackable>& items() const {
+        return data;
+    }
+
     auto begin() { return data.begin(); }
     auto end() { return data.end(); }
     [[nodiscard]] auto begin() const { return data.begin(); }
@@ -1655,6 +1664,19 @@ public:
     void clear() {
         scopes.clear();
         scopes.emplace_back();
+    }
+
+    /** @brief 收集所有作用域中缓存的槽位指针（供 GC 根扫描） */
+    [[nodiscard]] std::vector<std::pair<size_t, std::shared_ptr<Value>>> allEntries() const {
+        std::vector<std::pair<size_t, std::shared_ptr<Value>>> out;
+        for (const Scope& scope : scopes) {
+            for (const auto& [slot_id, val] : scope.slots) {
+                if (slot_id != 0 && val) {
+                    out.emplace_back(slot_id, val);
+                }
+            }
+        }
+        return out;
     }
 };
 
@@ -2614,6 +2636,9 @@ public:
      * @brief 执行IR指令序列
      */
     void run();
+
+    /** @brief 触发标记-清除 GC，回收不可达槽位 */
+    void collectGarbage();
 
     /**
      * @brief 获取符号值

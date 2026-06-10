@@ -5,20 +5,38 @@
 namespace irgen {
 
 class Value;
+class VM;
 
 /**
- * @brief 槽位对象池（第 2 期：统一从池分配 Value 槽位，shared_ptr 归零回池）
- *
- * 当前为占位实现，仍使用 std::make_shared；后续在此接入空闲链表与标记-清除 GC。
+ * @brief 槽位对象池：预分配 Value 单元，shared_ptr 自定义 deleter 回收到空闲链表；
+ *        标记-清除 GC 回收循环引用等 refcount 无法释放的单元。
  */
 class CellPool {
 public:
-    static CellPool& instance() {
-        static CellPool pool;
-        return pool;
-    }
+    using CellPtr = std::shared_ptr<Value>;
 
-    std::shared_ptr<Value> allocate();
+    static CellPool& instance();
+
+    [[nodiscard]] CellPtr allocate() const;
+    [[nodiscard]] CellPtr allocateCopy(const Value& value) const;
+    CellPtr allocateValue(Value&& value) const;
+    void collectGarbage(const VM& vm) const;
+    void setActiveVm(VM* vm) const;
+
+    [[nodiscard]] size_t totalCells() const;
+    [[nodiscard]] size_t freeCells() const;
+    [[nodiscard]] size_t liveCells() const;
+    void releaseCell(Value* cell) const;
+
+    ~CellPool();
+    CellPool(const CellPool&) = delete;
+    CellPool& operator=(const CellPool&) = delete;
+
+private:
+    CellPool();
+
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace irgen

@@ -12,6 +12,7 @@
 
 #include "generator.hpp"
 #include "struct_types.hpp"
+#include "../front-end/front_end.hpp"
 
 namespace irgen {
 
@@ -211,7 +212,7 @@ std::optional<std::shared_ptr<Value>> SymbolTable::get(const size_t id) const no
 }
 
 void SymbolTable::set(const size_t id, const Value& value) {
-    symbols.set(id, std::make_shared<Value>(value));
+    symbols.set(id, makePooledCell(value));
 }
 
 void SymbolTable::set(const size_t id, const std::shared_ptr<Value>& value) {
@@ -259,6 +260,11 @@ void VM::run() {
 #ifdef ANALYSE
     std::unordered_map<std::string, int> callmap{};
 #endif
+    CellPool::instance().setActiveVm(this);
+    struct ActiveVmGuard {
+        ~ActiveVmGuard() { CellPool::instance().setActiveVm(nullptr); }
+    } active_vm_guard;
+    size_t ops_since_gc = 0;
     try {
         scan_labels();
         for (; pc < code.size(); pc++) {
@@ -272,6 +278,11 @@ void VM::run() {
                 },
                 code[pc]
             );
+
+            if (++ops_since_gc >= 1000000) {
+                collectGarbage();
+                ops_since_gc = 0;
+            }
         }
 
 #ifdef ANALYSE
@@ -291,6 +302,10 @@ void VM::run() {
         op_stack.clear();
         throw;
     }
+}
+
+void VM::collectGarbage() {
+    CellPool::instance().collectGarbage(*this);
 }
 
 std::optional<Value> VM::get_symbol(const std::string& name) const {
@@ -551,7 +566,7 @@ inline void LOAD::emit(VM& vm) const {
         if (vm.main_module) {
             auto attr = vm.main_module->get_attr(var_name);
             if (attr.has_value()) {
-                value_ptr = std::make_shared<Value>(*attr);
+                value_ptr = makePooledCell(*attr);
                 vm.cache.add(var_id, value_ptr);
                 LOG("Found in Module");
             }
@@ -737,7 +752,7 @@ inline void GETATTR::emit(VM& vm) const {
     const auto push_module_attr = [&](const std::shared_ptr<ModuleObject>& module) {
         const auto result = module->get_attr(attr_name);
         if (result.has_value()) {
-            vm.op_stack.push(Value::makeRef(std::make_shared<Value>(*result)));
+            vm.op_stack.push(Value::makeRef(makePooledCell(*result)));
             return;
         }
         VM_RUNTIME_ERROR(vm, "Attribute not found: " + attr_name + ", in module: " + module->name);
@@ -775,7 +790,7 @@ inline void GETATTR::emit(VM& vm) const {
         return;
     }
 
-    const auto temp = std::make_shared<Value>(val);
+    const auto temp = makePooledCell(val);
     if (auto method = lang::bind_method(temp, attr_name)) {
         vm.op_stack.push(Value(*method));
         return;
@@ -814,7 +829,7 @@ inline void VEC_NEW::emit(VM& vm) const {
     elements.reserve(element_count);
 
     for (size_t i = 0; i < element_count; ++i) {
-        elements.push_back(std::make_shared<Value>(vm.op_stack.popValue()));
+        elements.push_back(makePooledCell(vm.op_stack.popValue()));
     }
 
     vm.op_stack.push(Value(std::move(elements)));
@@ -827,7 +842,7 @@ inline void DICT_NEW::emit(VM& vm) const {
     for (size_t i = 0; i < entry_count; ++i) {
         Value value = vm.op_stack.popValue();
         Value key_val = vm.op_stack.popValue();
-        dict[std::make_shared<Value>(key_val)] = std::make_shared<Value>(value);
+        dict[makePooledCell(key_val)] = makePooledCell(value);
     }
 
     vm.op_stack.push(Value(std::move(dict)));
@@ -869,7 +884,7 @@ inline void INDEX::emit(VM& vm) const {
 inline void STORE_ARG::emit(VM& vm) const {
     const Value value = vm.op_stack.popValue();
 
-    const auto value_ptr = std::make_shared<Value>(value);
+    const auto value_ptr = makePooledCell(value);
     vm.symbol_stack.back().set(var_id, value_ptr);
     vm.cache.add(var_id, value_ptr);
     LOG("STORE_ARG Done, now " << ITIS(,vm.symbol_stack.back(),.toString()));
@@ -1016,7 +1031,7 @@ void BIND_FAST::emit(VM& vm) const {
     if (local.isReference()) {
         value_ptr = local.asReference().value_ptr;
     } else {
-        value_ptr = std::make_shared<Value>(local);
+        value_ptr = makePooledCell(local);
         local = Value::makeRef(value_ptr);
     }
 
@@ -1209,7 +1224,7 @@ bool irgen::IteratorObject::next(Value& out) {
 
 inline void irgen::ITER_NEW::emit(VM& vm) const {
     Value iterable = vm.op_stack.popValue();
-    auto iter_obj = std::make_shared<irgen::IteratorObject>(std::make_shared<Value>(std::move(iterable)));
+    auto iter_obj = std::make_shared<irgen::IteratorObject>(makePooledCell(std::move(iterable)));
     vm.op_stack.push(Value(iter_obj));
 }
 

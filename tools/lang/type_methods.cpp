@@ -64,7 +64,7 @@ std::optional<irgen::FunctionType> bind_method(
                     throw RuntimeError("append requires 1 argument");
                 }
                 auto& vec = slot_value(receiver).asVector();
-                vec.push_back(std::make_shared<Value>(args[0].deref()));
+                vec.push_back(irgen::makePooledCell(args[0].deref()));
                 return {};
             };
         }
@@ -79,7 +79,7 @@ std::optional<irgen::FunctionType> bind_method(
                 }
                 auto& vec = slot_value(receiver).asVector();
                 for (const auto& elem : other.asVector()) {
-                    vec.push_back(std::make_shared<Value>(*elem));
+                    vec.push_back(irgen::makePooledCell(*elem));
                 }
                 return {};
             };
@@ -175,7 +175,7 @@ std::optional<irgen::FunctionType> bind_method(
                 if (auto existing = dict_find_key_ptr(dict, key)) {
                     *dict[existing] = args[1].deref();
                 } else {
-                    dict[std::make_shared<Value>(key)] = std::make_shared<Value>(args[1].deref());
+                    dict[irgen::makePooledCell(key)] = irgen::makePooledCell(args[1].deref());
                 }
                 return {};
             };
@@ -227,7 +227,7 @@ std::optional<irgen::FunctionType> bind_method(
                 (void)args;
                 std::vector<std::shared_ptr<Value>> keys;
                 for (const auto& k : slot_value(receiver).asDictionary() | std::views::keys) {
-                    keys.push_back(std::make_shared<Value>(*k));
+                    keys.push_back(irgen::makePooledCell(*k));
                 }
                 return Value(std::move(keys));
             };
@@ -237,7 +237,7 @@ std::optional<irgen::FunctionType> bind_method(
                 (void)args;
                 std::vector<std::shared_ptr<Value>> values;
                 for (const auto& v : slot_value(receiver).asDictionary() | std::views::values) {
-                    values.push_back(std::make_shared<Value>(*v));
+                    values.push_back(irgen::makePooledCell(*v));
                 }
                 return Value(std::move(values));
             };
@@ -256,7 +256,7 @@ std::optional<irgen::FunctionType> bind_method(
                     if (auto existing = dict_find_key_ptr(dict, *k)) {
                         *dict[existing] = *v;
                     } else {
-                        dict[std::make_shared<Value>(*k)] = std::make_shared<Value>(*v);
+                        dict[irgen::makePooledCell(*k)] = irgen::makePooledCell(*v);
                     }
                 }
                 return {};
@@ -317,10 +317,10 @@ std::optional<irgen::FunctionType> bind_method(
                 while (pos <= s.size()) {
                     const size_t found = s.find(sep, pos);
                     if (found == std::string::npos) {
-                        parts.push_back(std::make_shared<Value>(s.substr(pos)));
+                        parts.push_back(irgen::makePooledCell(Value(s.substr(pos))));
                         break;
                     }
-                    parts.push_back(std::make_shared<Value>(s.substr(pos, found - pos)));
+                    parts.push_back(irgen::makePooledCell(Value(s.substr(pos, found - pos))));
                     pos = found + sep.size();
                 }
                 return Value(std::move(parts));
