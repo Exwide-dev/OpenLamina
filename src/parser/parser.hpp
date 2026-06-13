@@ -273,6 +273,22 @@ private:
     ASTNode* parseIfStmt();
 
     /**
+     * @brief 解析 match 语句
+     * @return match 语句节点
+     */
+    ASTNode* parseMatchStmt();
+
+    MatchPatternNode* parseMatchPattern();
+
+    MatchPatternNode* parseMatchPatternUnit();
+
+    MatchPatternNode* parseMatchValuePattern();
+
+    MatchPatternNode* parseMatchVectorPattern();
+
+    MatchPatternNode* parseMatchVectorElement();
+
+    /**
      * @brief 解析 loop 循环语句
      * @return loop 语句节点
      */
@@ -382,21 +398,36 @@ private:
 
     /**
      * @brief 解析参数列表
-     * @return 参数名称列表
+     * @return 形参列表（可含默认值）
      */
-    std::vector<std::string> parseParamList();
+    std::vector<FuncParam> parseParamList();
 
     /**
-     * @brief 解析参数列表
-     * @return 参数表达式列表
+     * @brief 解析函数调用实参列表
+     * @return 实参列表（可具名）
      */
-    std::vector<ASTNode*> parseArgList();
+    std::vector<CallArgument> parseArgList();
 
     /**
      * @brief 解析向量元素列表
      * @return 元素表达式列表
      */
     std::vector<ASTNode*> parseVecElementList();
+
+    /**
+     * @brief 解析向量推导式（已消费 for 关键字）
+     */
+    ExprNode* finishComprehensionAfterFor(ExprNode* result_expr, int line);
+
+    /**
+     * @brief 解析 struct 内部方法
+     */
+    FuncDeclNode* parseStructMethod();
+
+    /**
+     * @brief 解析推导式绑定列表 (a in b, ...)
+     */
+    std::vector<ForLoopNode::IterationItem*> parseComprehensionBindings();
 
     /**
      * @brief 解析字典条目列表

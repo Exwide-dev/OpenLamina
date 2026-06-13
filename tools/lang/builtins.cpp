@@ -7,7 +7,6 @@
 #include <unordered_map>
 
 #include "irgen/opcode.hpp"
-#include "irgen/cell_pool.hpp"
 #include "rational.hpp"
 
 #define arg_must(funcname, num) \
@@ -129,6 +128,61 @@ Value math_abs(VM&, const std::vector<Value>& args) {
     throw RuntimeError("abs requires a number or rational");
 }
 
+Value math_range(VM& vm, const std::vector<Value>& args) {
+    if (args.empty() || args.size() > 3) {
+        throw RuntimeError("range requires 1 ~ 3 arguments");
+    }
+
+    auto to_int = [](const Value& v) -> Number {
+        const Value& val = v.deref();
+        if (val.isNumber()) {
+            return val.asNumber();
+        }
+        if (val.isRational() && val.asRational().denominator() == Number(1)) {
+            return val.asRational().numerator();
+        }
+        throw RuntimeError("range arguments must be integers");
+    };
+
+    Number start(0);
+    Number stop(0);
+    Number step(1);
+
+    switch (args.size()) {
+        case 1:
+            stop = to_int(args[0]);
+            break;
+        case 2:
+            start = to_int(args[0]);
+            stop = to_int(args[1]);
+            break;
+        case 3:
+            start = to_int(args[0]);
+            stop = to_int(args[1]);
+            step = to_int(args[2]);
+            if (step.isZero()) {
+                throw RuntimeError("range() arg 3 must not be zero");
+            }
+            break;
+        default:
+            break;
+    }
+
+    std::vector<std::shared_ptr<Value>> result;
+    const irgen::VmGcSuppress gc_guard{vm};
+    if (step > Number(0)) {
+        for (Number current = start; current < stop; current += step) {
+            result.push_back(vm.cell_pool.allocateValue(Value(current)));
+        }
+    } else {
+        for (Number current = start; current > stop; current += step) {
+            result.push_back(vm.cell_pool.allocateValue(Value(current)));
+        }
+    }
+
+    return Value(std::move(result));
+}
+
 Value len(VM&, const std::vector<Value>& args) {
     arg_must("len", 1);
     const auto& val = args[0].deref();
@@ -165,14 +219,13 @@ Value int_of(VM&, const std::vector<Value>& args) {
 
 Value exit(VM&, const std::vector<Value>& args) {
     std::exit(0);
-    return {};
 }
 
 Value gc(VM& vm, const std::vector<Value>& args) {
     (void)args;
-    const size_t before = irgen::CellPool::instance().liveCells();
+    const size_t before = vm.cell_pool.liveCells();
     vm.collectGarbage();
-    const size_t after = irgen::CellPool::instance().liveCells();
+    const size_t after = vm.cell_pool.liveCells();
     return Value(static_cast<int64_t>(before > after ? before - after : 0));
 }
 
@@ -198,7 +251,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  get(dict, key, default) - Get value or default\n";
     std::cout << "Standard library:\n";
     std::cout << "  std.math.sin(x), std.math.cos(x), std.math.tan(x)\n";
-    std::cout << "  std.math.sqrt(x), std.math.abs(x)\n";
+    std::cout << "  std.math.sqrt(x), std.math.abs(x), std.math.range(...)\n";
     std::cout << "  std.concat(str1, str2)\n";
     std::cout << "Decorators (std.decos.*):\n";
     std::cout << "  memoize(func) - Cache function results\n";
@@ -234,14 +287,15 @@ Value copyright(VM&, const std::vector<Value>& args) {
     return {};
 }
 
-Value dict_create(VM&, const std::vector<Value>& args) {
+Value dict_create(VM& vm, const std::vector<Value>& args) {
     if (args.size() % 2 != 0) {
         throw RuntimeError("dict requires even number of arguments (key-value pairs)");
     }
     std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> dict;
+    const irgen::VmGcSuppress gc_guard{vm};
     for (size_t i = 0; i < args.size(); i += 2) {
-        auto key = irgen::makePooledCell(args[i].deref());
-        dict[key] = irgen::makePooledCell(args[i + 1]);
+        auto key = vm.cell_pool.allocateCopy(args[i].deref());
+        dict[key] = vm.cell_pool.allocateCopy(args[i + 1]);
     }
     return Value(std::move(dict));
 }
@@ -272,29 +326,30 @@ Value dict_values(VM&, const std::vector<Value>& args) {
     return Value(std::move(values));
 }
 
-Value dict_items(VM&, const std::vector<Value>& args) {
+Value dict_items(VM& vm, const std::vector<Value>& args) {
     arg_must("items", 1);
     const auto& val = args[0].deref();
     if (!val.isDictionary()) {
         throw RuntimeError("items requires a dictionary");
     }
     std::vector<std::shared_ptr<Value>> items;
+    const irgen::VmGcSuppress gc_guard{vm};
     for (const auto& [key, value] : val.asDictionary()) {
         std::vector<std::shared_ptr<Value>> pair;
         pair.push_back(key);
         pair.push_back(value);
-        items.push_back(irgen::makePooledCell(Value(std::move(pair))));
+        items.push_back(vm.cell_pool.allocateValue(Value(std::move(pair))));
     }
     return Value(std::move(items));
 }
 
-Value dict_get(VM&, const std::vector<Value>& args) {
+Value dict_get(VM& vm, const std::vector<Value>& args) {
     arg_at_least("get", 2);
     const auto& dict_val = args[0].deref();
     if (!dict_val.isDictionary()) {
         throw RuntimeError("get requires a dictionary as first argument");
     }
-    auto key = irgen::makePooledCell(args[1].deref());
+    auto key = vm.cell_pool.allocateCopy(args[1].deref());
     const auto& dict = dict_val.asDictionary();
     auto it = dict.find(key);
     if (it != dict.end()) {
@@ -320,6 +375,9 @@ irgen::ModuleObject math_mod = [] {
     );
     math_symbols[irgen::g_string_pool.add("abs")] = std::make_shared<
         irgen::Value>(Value(irgen::FunctionType(math_abs)));
+    math_symbols[irgen::g_string_pool.add("range")] = std::make_shared<irgen::Value>(
+        Value(irgen::FunctionType(math_range))
+    );
     math_symbols[irgen::g_string_pool.add("pi")] = std::make_shared<irgen::Value>(
         Value(Rational::fromDouble(3.14159265358979323846L))
     );
@@ -753,21 +811,21 @@ Value rational(VM&, const std::vector<Value>& args) {
 #undef arg_must
 #undef arg_at_least
 
-void lang::init_builtins(irgen::SymbolTable& symbols) {
-    symbols.set(irgen::g_string_pool.add("true"), Value(true));
-    symbols.set(irgen::g_string_pool.add("false"), Value(false));
-    symbols.set(irgen::g_string_pool.add("input"), Value(irgen::FunctionType(input)));
-    symbols.set(irgen::g_string_pool.add("print"), Value(irgen::FunctionType(print)));
-    symbols.set(irgen::g_string_pool.add("rational"), Value(irgen::FunctionType(rational)));
-    symbols.set(irgen::g_string_pool.add("now"), Value(irgen::FunctionType(now)));
-    symbols.set(irgen::g_string_pool.add("floatstring"), Value(irgen::FunctionType(floatstring)));
-    symbols.set(irgen::g_string_pool.add("len"), Value(irgen::FunctionType(len)));
-    symbols.set(irgen::g_string_pool.add("type"), Value(irgen::FunctionType(type_of)));
-    symbols.set(irgen::g_string_pool.add("str"), Value(irgen::FunctionType(str_of)));
-    symbols.set(irgen::g_string_pool.add("int"), Value(irgen::FunctionType(int_of)));
-    symbols.set(irgen::g_string_pool.add("exit"), Value(irgen::FunctionType(exit)));
-    symbols.set(irgen::g_string_pool.add("gc"), Value(irgen::FunctionType(gc)));
-    symbols.set(irgen::g_string_pool.add("help"), Value(irgen::FunctionType(help)));
-    symbols.set(irgen::g_string_pool.add("copyright"), Value(irgen::FunctionType(copyright)));
-    symbols.set(irgen::g_string_pool.add("dict"), Value(irgen::FunctionType(dict_create)));
+void lang::init_builtins(irgen::SymbolTable& symbols, irgen::CellPool& pool) {
+    symbols.set(irgen::g_string_pool.add("true"), Value(true), pool);
+    symbols.set(irgen::g_string_pool.add("false"), Value(false), pool);
+    symbols.set(irgen::g_string_pool.add("input"), Value(irgen::FunctionType(input)), pool);
+    symbols.set(irgen::g_string_pool.add("print"), Value(irgen::FunctionType(print)), pool);
+    symbols.set(irgen::g_string_pool.add("rational"), Value(irgen::FunctionType(rational)), pool);
+    symbols.set(irgen::g_string_pool.add("now"), Value(irgen::FunctionType(now)), pool);
+    symbols.set(irgen::g_string_pool.add("floatstring"), Value(irgen::FunctionType(floatstring)), pool);
+    symbols.set(irgen::g_string_pool.add("len"), Value(irgen::FunctionType(len)), pool);
+    symbols.set(irgen::g_string_pool.add("type"), Value(irgen::FunctionType(type_of)), pool);
+    symbols.set(irgen::g_string_pool.add("str"), Value(irgen::FunctionType(str_of)), pool);
+    symbols.set(irgen::g_string_pool.add("int"), Value(irgen::FunctionType(int_of)), pool);
+    symbols.set(irgen::g_string_pool.add("exit"), Value(irgen::FunctionType(exit)), pool);
+    symbols.set(irgen::g_string_pool.add("gc"), Value(irgen::FunctionType(gc)), pool);
+    symbols.set(irgen::g_string_pool.add("help"), Value(irgen::FunctionType(help)), pool);
+    symbols.set(irgen::g_string_pool.add("copyright"), Value(irgen::FunctionType(copyright)), pool);
+    symbols.set(irgen::g_string_pool.add("dict"), Value(irgen::FunctionType(dict_create)), pool);
 }

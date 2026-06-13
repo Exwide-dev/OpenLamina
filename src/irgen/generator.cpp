@@ -69,7 +69,7 @@ std::string line_text(const lmx::ASTNode* node, const std::vector<std::string>& 
     if (node == nullptr || node->source_line <= 0) {
         return {};
     }
-    const size_t idx = static_cast<size_t>(node->source_line - 1);
+    const auto idx = static_cast<size_t>(node->source_line - 1);
     if (idx >= source_lines.size()) {
         return {};
     }
@@ -85,6 +85,34 @@ void push_op(std::vector<::irgen::Opcode>& code, const std::string& line, const 
         op.line_no = line_no;
     }
     code.emplace_back(std::move(op));
+}
+
+struct ResolvedVar {
+    bool found = false;
+    size_t slot = 0;
+    size_t define_depth = 0;
+};
+
+[[nodiscard]] ResolvedVar resolve_var(
+    const std::string& name,
+    const lm::irgen::Stack<lm::irgen::LocalScope>& local_scope_stack
+) {
+    ResolvedVar result;
+    const auto& container = local_scope_stack.get_container();
+    for (int i = static_cast<int>(container.size()) - 1; i >= 0; --i) {
+        const auto& scope = container[static_cast<size_t>(i)];
+        if (const auto loc = scope.get_location(name)) {
+            result.found = true;
+            result.slot = loc->slot;
+            result.define_depth = loc->define_depth;
+            return result;
+        }
+    }
+    return result;
+}
+
+[[nodiscard]] bool uses_fast_local(const ResolvedVar& var) {
+    return var.found && var.define_depth > 0;
 }
 } // namespace
 
@@ -113,6 +141,349 @@ std::vector<::irgen::Opcode> gen_code(
     const std::vector<std::string>& source_lines
 );
 
+namespace {
+
+void emit_load_match_subject(std::vector<::irgen::Opcode>& code, const std::string& temp_name) {
+    code.emplace_back(::irgen::LOAD(temp_name));
+    code.emplace_back(::irgen::DEREF());
+}
+
+void emit_load_match_at_path(
+    std::vector<::irgen::Opcode>& code,
+    const std::string& temp_name,
+    const std::vector<size_t>& path
+) {
+    emit_load_match_subject(code, temp_name);
+    for (const size_t idx : path) {
+        code.emplace_back(::irgen::PUSH(::irgen::Value(static_cast<int64_t>(idx))));
+        code.emplace_back(::irgen::INDEX());
+        code.emplace_back(::irgen::DEREF());
+    }
+}
+
+void emit_match_pattern_test(
+    std::vector<::irgen::Opcode>& code,
+    const lmx::MatchPatternNode* pattern,
+    const std::string& temp_name,
+    const std::vector<size_t>& path,
+    const size_t fail_label,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+) {
+    if (pattern->pattern_kind == lmx::MatchPatternKind::Bind) {
+        return;
+    }
+
+    if (pattern->pattern_kind == lmx::MatchPatternKind::Expr) {
+        emit_load_match_at_path(code, temp_name, path);
+        auto expr_code = gen_code(
+            pattern->expr,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines
+        );
+        code.insert(code.end(), expr_code.begin(), expr_code.end());
+        code.emplace_back(::irgen::MATCH_EQ());
+        code.emplace_back(::irgen::GOTOIFNOT(fail_label));
+        return;
+    }
+
+    if (pattern->pattern_kind == lmx::MatchPatternKind::Vector) {
+        emit_load_match_at_path(code, temp_name, path);
+        code.emplace_back(::irgen::IS_VECTOR());
+        code.emplace_back(::irgen::GOTOIFNOT(fail_label));
+
+        emit_load_match_at_path(code, temp_name, path);
+        code.emplace_back(::irgen::VEC_LEN());
+        code.emplace_back(::irgen::PUSH(::irgen::Value(static_cast<int64_t>(pattern->elements.size()))));
+        code.emplace_back(::irgen::EQ());
+        code.emplace_back(::irgen::GOTOIFNOT(fail_label));
+
+        for (size_t i = 0; i < pattern->elements.size(); ++i) {
+            std::vector<size_t> child_path = path;
+            child_path.push_back(i);
+            emit_match_pattern_test(
+                code,
+                pattern->elements[i],
+                temp_name,
+                child_path,
+                fail_label,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+        }
+        return;
+    }
+
+    throw RuntimeError("Invalid match pattern in test");
+}
+
+void emit_match_pattern_bindings(
+    std::vector<::irgen::Opcode>& code,
+    const lmx::MatchPatternNode* pattern,
+    const std::string& temp_name,
+    const std::vector<size_t>& path,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+) {
+    if (pattern->pattern_kind == lmx::MatchPatternKind::Bind) {
+        emit_load_match_at_path(code, temp_name, path);
+        code.emplace_back(::irgen::NEW_VAR(pattern->bind_name));
+        code.emplace_back(::irgen::STORE());
+        return;
+    }
+
+    if (pattern->pattern_kind == lmx::MatchPatternKind::Vector) {
+        for (size_t i = 0; i < pattern->elements.size(); ++i) {
+            std::vector<size_t> child_path = path;
+            child_path.push_back(i);
+            emit_match_pattern_bindings(
+                code,
+                pattern->elements[i],
+                temp_name,
+                child_path,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+        }
+    }
+}
+
+void emit_match_case(
+    std::vector<::irgen::Opcode>& code,
+    const lmx::MatchCaseNode* match_case,
+    const std::string& temp_name,
+    const size_t next_case_label,
+    const size_t end_label,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+) {
+    const auto* pattern = match_case->pattern;
+
+    if (pattern->pattern_kind == lmx::MatchPatternKind::Or) {
+        std::vector<size_t> body_labels;
+        body_labels.reserve(pattern->alternatives.size());
+
+        for (const auto* alt : pattern->alternatives) {
+            const size_t body_label = label_counter++;
+            body_labels.push_back(body_label);
+            const size_t fail_label = label_counter++;
+            emit_match_pattern_test(
+                code,
+                alt,
+                temp_name,
+                {},
+                fail_label,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.emplace_back(::irgen::GOTO(body_label));
+            code.emplace_back(::irgen::LABEL(fail_label));
+        }
+
+        code.emplace_back(::irgen::GOTO(next_case_label));
+
+        for (size_t i = 0; i < pattern->alternatives.size(); ++i) {
+            code.emplace_back(::irgen::LABEL(body_labels[i]));
+            emit_match_pattern_bindings(
+                code,
+                pattern->alternatives[i],
+                temp_name,
+                {},
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            if (match_case->body) {
+                auto body_code = gen_code(
+                    match_case->body,
+                    loop_stack,
+                    local_scope_stack,
+                    func_context_stack,
+                    source_lines
+                );
+                code.insert(code.end(), body_code.begin(), body_code.end());
+            }
+            code.emplace_back(::irgen::GOTO(end_label));
+        }
+        return;
+    }
+
+    const size_t fail_label = label_counter++;
+    const size_t body_label = label_counter++;
+
+    emit_match_pattern_test(
+        code,
+        pattern,
+        temp_name,
+        {},
+        fail_label,
+        loop_stack,
+        local_scope_stack,
+        func_context_stack,
+        source_lines
+    );
+    code.emplace_back(::irgen::GOTO(body_label));
+    code.emplace_back(::irgen::LABEL(fail_label));
+    code.emplace_back(::irgen::GOTO(next_case_label));
+    code.emplace_back(::irgen::LABEL(body_label));
+
+    emit_match_pattern_bindings(
+        code,
+        pattern,
+        temp_name,
+        {},
+        loop_stack,
+        local_scope_stack,
+        func_context_stack,
+        source_lines
+    );
+
+    if (match_case->body) {
+        auto body_code = gen_code(
+            match_case->body,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines
+        );
+        code.insert(code.end(), body_code.begin(), body_code.end());
+    }
+    code.emplace_back(::irgen::GOTO(end_label));
+}
+
+} // namespace
+
+std::shared_ptr<::irgen::FunctionObject> compile_function_decl(
+    const lmx::FuncDeclNode* func_decl_node,
+    std::vector<::irgen::Opcode>& code,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines,
+    const std::string& src,
+    int src_line_no,
+    bool store_in_global_scope
+) {
+    const size_t func_label = label_counter++;
+    const size_t func_end_label = label_counter++;
+
+    auto func_obj = std::make_shared<::irgen::FunctionObject>();
+    func_obj->params.clear();
+    func_obj->param_default_ir.clear();
+    for (const auto& param : func_decl_node->params) {
+        func_obj->params.push_back(param.name);
+        if (param.default_value != nullptr) {
+            auto default_code = gen_code(
+                param.default_value,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            func_obj->param_default_ir.push_back(std::move(default_code));
+        } else {
+            func_obj->param_default_ir.emplace_back();
+        }
+    }
+    func_obj->location = func_label;
+    func_obj->name = func_decl_node->name;
+
+    local_scope_stack.emplace();
+    local_scope_stack.top().depth = local_scope_stack.size() - 1;
+
+    func_context_stack.emplace_back();
+    func_context_stack.back().func_depth = local_scope_stack.top().depth;
+
+    std::vector<size_t> param_slots;
+    param_slots.reserve(func_decl_node->params.size());
+    for (const auto& param : func_decl_node->params) {
+        param_slots.push_back(
+            local_scope_stack.top().allocate_slot(param.name, false, lmx::Visibility::Internal)
+        );
+    }
+
+    const size_t self_slot = local_scope_stack.top().allocate_slot(
+        func_decl_node->name,
+        false,
+        lmx::Visibility::Internal
+    );
+
+    std::vector<::irgen::Opcode> body_code;
+    if (func_decl_node->body) {
+        body_code = gen_code(func_decl_node->body, loop_stack, local_scope_stack, func_context_stack, source_lines);
+    }
+
+    func_obj->needs_closure = func_context_stack.back().needs_closure;
+    func_obj->needs_symbol_bind = func_context_stack.back().needs_symbol_bind;
+    func_context_stack.pop_back();
+    const bool bind_symbols = func_obj->needs_closure || func_obj->needs_symbol_bind;
+
+    code.emplace_back(::irgen::GOTO(func_end_label));
+    code.emplace_back(::irgen::LABEL(func_label));
+    code.emplace_back(::irgen::ENTER_SCOPE());
+
+    for (size_t i = 0; i < func_decl_node->params.size(); ++i) {
+        const auto& param = func_decl_node->params[i];
+        code.emplace_back(::irgen::STORE_FAST(param_slots[i]));
+        if (bind_symbols) {
+            emit_bind_fast(code, param_slots[i], param.name);
+        }
+    }
+
+    push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(func_obj)));
+    push_op(code, src, src_line_no, ::irgen::STORE_FAST(self_slot));
+    if (bind_symbols) {
+        emit_bind_fast(code, self_slot, func_decl_node->name);
+    }
+
+    code.insert(code.end(), body_code.begin(), body_code.end());
+
+    code.emplace_back(::irgen::RET_THEN_LEAVE_SCOPE());
+    local_scope_stack.pop();
+
+    code.emplace_back(::irgen::LABEL(func_end_label));
+
+    if (store_in_global_scope) {
+        push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(func_obj)));
+
+        for (const auto& decorator : func_decl_node->decos) {
+            auto deco_code = gen_code(decorator, loop_stack, local_scope_stack, func_context_stack, source_lines);
+            code.insert(code.end(), deco_code.begin(), deco_code.end());
+            push_op(code, src, src_line_no, ::irgen::CALL(1));
+        }
+
+        if (func_decl_node->visibility == lmx::Visibility::Internal) {
+            local_scope_stack.top().allocate_slot(
+                func_decl_node->name,
+                false,
+                lmx::Visibility::Internal
+            );
+            const auto slot = local_scope_stack.top().get_slot(func_decl_node->name).value();
+            push_op(code, src, src_line_no, ::irgen::STORE_FAST(slot));
+        } else {
+            push_op(code, src, src_line_no, ::irgen::NEW_VAR(func_decl_node->name));
+            push_op(code, src, src_line_no, ::irgen::STORE());
+        }
+    }
+
+    return func_obj;
+}
+
 std::vector<::irgen::Opcode> gen_lvalue_code(
     lmx::ExprNode* node,
     std::stack<LoopLabels>& loop_stack,
@@ -136,40 +507,27 @@ std::vector<::irgen::Opcode> gen_lvalue_code(
         const auto* var_ref_node = dynamic_cast<lmx::VarRefNode*>(node);
         const std::string& var_name = var_ref_node->name;
 
-        bool found_in_local = false;
-        size_t slot = 0;
-        size_t define_depth = 0;
-        const auto& container = local_scope_stack.get_container();
-        for (int i = static_cast<int>(container.size()) - 1; i >= 0; --i) {
-            const auto& scope = container[static_cast<size_t>(i)];
-            auto loc_opt = scope.get_location(var_name);
-            if (loc_opt.has_value()) {
-                slot = loc_opt->slot;
-                define_depth = loc_opt->define_depth;
-                found_in_local = true;
-                break;
-            }
-        }
+        const ResolvedVar var = resolve_var(var_name, local_scope_stack);
 
         bool use_closure_load = false;
-        if (found_in_local) {
+        if (var.found) {
             if (!func_context_stack.empty()) {
                 const size_t func_depth = func_context_stack.back().func_depth;
-                if (define_depth < func_depth) {
+                if (var.define_depth < func_depth) {
                     func_context_stack.back().needs_closure = true;
                     use_closure_load = true;
                     for (auto& ctx : func_context_stack) {
-                        if (ctx.func_depth == define_depth) {
+                        if (ctx.func_depth == var.define_depth) {
                             ctx.needs_symbol_bind = true;
                         }
                     }
                 }
             }
-            if (!use_closure_load) {
-                push_op(code, src, src_line_no, ::irgen::LOAD_FAST(slot));
+            if (!use_closure_load && uses_fast_local(var)) {
+                push_op(code, src, src_line_no, ::irgen::LOAD_FAST(var.slot));
             }
         }
-        if (!found_in_local || use_closure_load) {
+        if (!var.found || use_closure_load || !uses_fast_local(var)) {
             push_op(code, src, src_line_no, ::irgen::LOAD(var_name));
         }
     } else if (node->kind == lmx::ASTNodeType::IndexAccess) {
@@ -250,6 +608,114 @@ std::vector<::irgen::Opcode> gen_code(
             code.insert(code.end(), elem_code.begin(), elem_code.end());
         }
         push_op(code, src, src_line_no, ::irgen::VEC_NEW(vec_node->elements.size()));
+    } else if (node->kind == lmx::ASTNodeType::Comprehension) {
+        const auto* comp_node = dynamic_cast<lmx::ComprehensionNode*>(node);
+        const std::string result_var = std::format("__comp_{}", label_counter++);
+        const size_t item_count = comp_node->items.size();
+
+        push_op(code, src, src_line_no, ::irgen::VEC_NEW(0));
+        code.emplace_back(::irgen::NEW_INTERN_VAR(result_var));
+        code.emplace_back(::irgen::STORE());
+
+        const size_t loop_start_label = label_counter++;
+        const size_t loop_end_label = label_counter++;
+        const size_t append_skip_label = label_counter++;
+
+        loop_stack.emplace(loop_start_label, loop_end_label);
+
+        std::vector<std::string> prior_var_names;
+        std::vector<std::string> iter_slot_names(item_count);
+        std::vector<bool> iter_is_dependent(item_count);
+
+        for (size_t i = 0; i < item_count; ++i) {
+            const auto& item = comp_node->items[i];
+            const bool dependent = iterableDependsOnPriorVars(item->iterable, prior_var_names);
+            iter_is_dependent[i] = dependent;
+            prior_var_names.push_back(item->var_name);
+
+            if (!dependent) {
+                iter_slot_names[i] = std::format("__comp_iter_{}", label_counter++);
+                auto iterable_code = gen_code(
+                    item->iterable,
+                    loop_stack,
+                    local_scope_stack,
+                    func_context_stack,
+                    source_lines
+                );
+                code.insert(code.end(), iterable_code.begin(), iterable_code.end());
+                code.emplace_back(::irgen::ITER_NEW());
+                code.emplace_back(::irgen::NEW_INTERN_VAR(iter_slot_names[i]));
+                code.emplace_back(::irgen::STORE());
+            }
+        }
+
+        code.emplace_back(::irgen::LABEL(loop_start_label));
+
+        for (size_t i = 0; i < item_count; ++i) {
+            const auto& item = comp_node->items[i];
+
+            if (iter_is_dependent[i]) {
+                auto iterable_code = gen_code(
+                    item->iterable,
+                    loop_stack,
+                    local_scope_stack,
+                    func_context_stack,
+                    source_lines
+                );
+                code.insert(code.end(), iterable_code.begin(), iterable_code.end());
+                code.emplace_back(::irgen::ITER_NEW());
+            } else {
+                code.emplace_back(::irgen::LOAD(iter_slot_names[i]));
+            }
+
+            code.emplace_back(::irgen::ITER_NEXT());
+            code.emplace_back(::irgen::NOT());
+            code.emplace_back(::irgen::GOTOIF(loop_end_label));
+            code.emplace_back(::irgen::NEW_VAR(item->var_name));
+            code.emplace_back(::irgen::STORE());
+            code.emplace_back(::irgen::ITER_END());
+        }
+
+        if (comp_node->guard) {
+            auto guard_code = gen_code(
+                comp_node->guard,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), guard_code.begin(), guard_code.end());
+            code.emplace_back(::irgen::NOT());
+            code.emplace_back(::irgen::GOTOIF(append_skip_label));
+        }
+
+        auto elem_code = gen_code(
+            comp_node->expr,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines
+        );
+        code.insert(code.end(), elem_code.begin(), elem_code.end());
+        code.emplace_back(::irgen::LOAD(result_var));
+        push_op(code, src, src_line_no, ::irgen::GETATTR("append"));
+        push_op(code, src, src_line_no, ::irgen::CALL(1));
+
+        code.emplace_back(::irgen::LABEL(append_skip_label));
+        code.emplace_back(::irgen::GOTO(loop_start_label));
+        code.emplace_back(::irgen::LABEL(loop_end_label));
+
+        for (size_t i = 0; i < item_count; ++i) {
+            if (!iter_is_dependent[i]) {
+                code.emplace_back(::irgen::LOAD(iter_slot_names[i]));
+                code.emplace_back(::irgen::ITER_END());
+            }
+        }
+
+        loop_stack.pop();
+
+        code.emplace_back(::irgen::LOAD(result_var));
+        code.emplace_back(::irgen::DEREF());
     } else if (node->kind == lmx::ASTNodeType::Dictionary) {
         const auto* dict_node = dynamic_cast<lmx::DictionaryNode*>(node);
         for (auto entry : std::ranges::reverse_view(dict_node->entries)) {
@@ -330,48 +796,53 @@ std::vector<::irgen::Opcode> gen_code(
         const auto* var_ref_node = dynamic_cast<lmx::VarRefNode*>(node);
         const std::string& var_name = var_ref_node->name;
 
-        bool found_in_local = false;
-        size_t slot = 0;
-        size_t define_depth = 0;
-        const auto& container = local_scope_stack.get_container();
-        for (int i = static_cast<int>(container.size()) - 1; i >= 0; --i) {
-            const auto& scope = container[static_cast<size_t>(i)];
-            auto loc_opt = scope.get_location(var_name);
-            if (loc_opt.has_value()) {
-                slot = loc_opt->slot;
-                define_depth = loc_opt->define_depth;
-                found_in_local = true;
-                break;
-            }
-        }
+        const ResolvedVar var = resolve_var(var_name, local_scope_stack);
 
         bool use_closure_load = false;
-        if (found_in_local) {
+        if (var.found) {
             if (!func_context_stack.empty()) {
                 const size_t func_depth = func_context_stack.back().func_depth;
-                if (define_depth < func_depth) {
+                if (var.define_depth < func_depth) {
                     func_context_stack.back().needs_closure = true;
                     use_closure_load = true;
                     for (auto& ctx : func_context_stack) {
-                        if (ctx.func_depth == define_depth) {
+                        if (ctx.func_depth == var.define_depth) {
                             ctx.needs_symbol_bind = true;
                         }
                     }
                 }
             }
-            if (!use_closure_load) {
-                push_op(code, src, src_line_no, ::irgen::LOAD_FAST(slot));
+            if (!use_closure_load && uses_fast_local(var)) {
+                push_op(code, src, src_line_no, ::irgen::LOAD_FAST(var.slot));
             }
         }
-        if (!found_in_local || use_closure_load) {
+        if (!var.found || use_closure_load || !uses_fast_local(var)) {
             push_op(code, src, src_line_no, ::irgen::LOAD(var_name));
             push_op(code, src, src_line_no, ::irgen::DEREF());
         }
     } else if (node->kind == lmx::ASTNodeType::FuncCallExpr) {
         const auto* func_call_node = dynamic_cast<lmx::FuncCallExprNode*>(node);
-        for (auto arg : std::ranges::reverse_view(func_call_node->args)) {
-            auto bcode = gen_code(arg, loop_stack, local_scope_stack, func_context_stack, source_lines);
-            code.insert(code.end(), bcode.begin(), bcode.end());
+
+        size_t positional_count = 0;
+        std::vector<const lmx::CallArgument*> keyword_args;
+        for (const auto& arg : func_call_node->args) {
+            if (arg.name.empty()) {
+                auto arg_code = gen_code(arg.value, loop_stack, local_scope_stack, func_context_stack, source_lines);
+                code.insert(code.end(), arg_code.begin(), arg_code.end());
+                ++positional_count;
+            } else {
+                keyword_args.push_back(&arg);
+            }
+        }
+
+        const bool has_kwargs = !keyword_args.empty();
+        if (has_kwargs) {
+            for (const auto* kw : keyword_args) {
+                push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(kw->name)));
+                auto kw_code = gen_code(kw->value, loop_stack, local_scope_stack, func_context_stack, source_lines);
+                code.insert(code.end(), kw_code.begin(), kw_code.end());
+            }
+            push_op(code, src, src_line_no, ::irgen::DICT_NEW(keyword_args.size()));
         }
 
         if (func_call_node->func_expr->kind == lmx::ASTNodeType::MemberAccess) {
@@ -386,7 +857,7 @@ std::vector<::irgen::Opcode> gen_code(
             );
             code.insert(code.end(), receiver_code.begin(), receiver_code.end());
             push_op(code, src, src_line_no, ::irgen::GETATTR(member_callee->member));
-            push_op(code, src, src_line_no, ::irgen::CALL(func_call_node->args.size()));
+            push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs));
             return code;
         }
 
@@ -394,11 +865,14 @@ std::vector<::irgen::Opcode> gen_code(
             const auto& callee =
                     dynamic_cast<const lmx::VarRefNode*>(func_call_node->func_expr)->name;
             if (::irgen::is_struct_type(callee)) {
+                if (has_kwargs) {
+                    throw RuntimeError("struct constructor does not support keyword arguments");
+                }
                 push_op(
                     code,
                     src,
                     src_line_no,
-                    ::irgen::STRUCT_NEW(callee, func_call_node->args.size())
+                    ::irgen::STRUCT_NEW(callee, positional_count)
                 );
                 return code;
             }
@@ -407,8 +881,9 @@ std::vector<::irgen::Opcode> gen_code(
         auto bcode = gen_code(func_call_node->func_expr, loop_stack, local_scope_stack, func_context_stack, source_lines);
         code.insert(code.end(), bcode.begin(), bcode.end());
 
-        push_op(code, src, src_line_no, ::irgen::CALL(func_call_node->args.size()));
+        push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs));
     } else if (node->kind == lmx::ASTNodeType::VMCall) {
+        // todo!
     } else if (node->kind == lmx::ASTNodeType::BlockStmt) {
         const auto* block_node = dynamic_cast<lmx::BlockStmtNode*>(node);
         for (const auto& stmt : block_node->stmts) {
@@ -434,8 +909,18 @@ std::vector<::irgen::Opcode> gen_code(
             } else {
                 push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value()));
             }
-            push_op(code, src, src_line_no, ::irgen::STORE_FAST(slot));
-            emit_bind_fast(code, slot, var_decl_node->name);
+
+            const ResolvedVar binding{true, slot, local_scope_stack.empty() ? 0 : local_scope_stack.top().depth};
+            if (uses_fast_local(binding)) {
+                push_op(code, src, src_line_no, ::irgen::STORE_FAST(slot));
+                emit_bind_fast(code, slot, var_decl_node->name);
+            } else if (var_decl_node->is_const) {
+                push_op(code, src, src_line_no, ::irgen::NEW_INTERN_CONST(var_decl_node->name));
+                push_op(code, src, src_line_no, ::irgen::STORE());
+            } else {
+                push_op(code, src, src_line_no, ::irgen::NEW_INTERN_VAR(var_decl_node->name));
+                push_op(code, src, src_line_no, ::irgen::STORE());
+            }
         } else {
             if (var_decl_node->init) {
                 auto init_code = gen_code(var_decl_node->init, loop_stack, local_scope_stack, func_context_stack, source_lines);
@@ -473,22 +958,10 @@ std::vector<::irgen::Opcode> gen_code(
             push_op(code, src, src_line_no, ::irgen::SET_FIELD(member_node->member));
         } else if (assign_node->var->kind == lmx::ASTNodeType::VarRef) {
             const std::string& var_name = dynamic_cast<lmx::VarRefNode*>(assign_node->var)->name;
+            const ResolvedVar var = resolve_var(var_name, local_scope_stack);
 
-            bool found_in_local = false;
-            size_t slot = 0;
-            const auto& container = local_scope_stack.get_container();
-            for (int i = static_cast<int>(container.size()) - 1; i >= 0; --i) {
-                const auto& scope = container[static_cast<size_t>(i)];
-                auto slot_opt = scope.get_slot(var_name);
-                if (slot_opt.has_value()) {
-                    slot = *slot_opt;
-                    found_in_local = true;
-                    break;
-                }
-            }
-
-            if (found_in_local) {
-                push_op(code, src, src_line_no, ::irgen::STORE_FAST(slot));
+            if (uses_fast_local(var)) {
+                push_op(code, src, src_line_no, ::irgen::STORE_FAST(var.slot));
             } else {
                 push_op(code, src, src_line_no, ::irgen::NEW_VAR_OR_LOAD(var_name));
                 push_op(code, src, src_line_no, ::irgen::STORE());
@@ -532,6 +1005,21 @@ std::vector<::irgen::Opcode> gen_code(
             def.fields.push_back(std::move(fd));
         }
 
+        for (const auto* method : struct_node->methods) {
+            auto func_obj = compile_function_decl(
+                method,
+                code,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines,
+                src,
+                src_line_no,
+                false
+            );
+            def.methods[method->name] = std::move(func_obj);
+        }
+
         ::irgen::register_struct_type(std::move(def));
 
         const std::string struct_name = struct_node->name;
@@ -549,90 +1037,17 @@ std::vector<::irgen::Opcode> gen_code(
         push_op(code, src, src_line_no, ::irgen::STORE());
     } else if (node->kind == lmx::ASTNodeType::FuncDecl) {
         const auto* func_decl_node = dynamic_cast<lmx::FuncDeclNode*>(node);
-
-        size_t func_label = label_counter++;
-        size_t func_end_label = label_counter++;
-
-        auto func_obj = std::make_shared<::irgen::FunctionObject>();
-        func_obj->params = func_decl_node->params;
-        func_obj->location = func_label;
-        func_obj->name = func_decl_node->name;
-
-        local_scope_stack.emplace();
-        local_scope_stack.top().depth = local_scope_stack.size() - 1;
-
-        func_context_stack.emplace_back();
-        func_context_stack.back().func_depth = local_scope_stack.top().depth;
-
-        std::vector<size_t> param_slots;
-        param_slots.reserve(func_decl_node->params.size());
-        for (const auto& param : func_decl_node->params) {
-            param_slots.push_back(
-                local_scope_stack.top().allocate_slot(param, false, lmx::Visibility::Internal)
-            );
-        }
-
-        const size_t self_slot = local_scope_stack.top().allocate_slot(
-            func_decl_node->name,
-            false,
-            lmx::Visibility::Internal
+        compile_function_decl(
+            func_decl_node,
+            code,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines,
+            src,
+            src_line_no,
+            true
         );
-
-        std::vector<::irgen::Opcode> body_code;
-        if (func_decl_node->body) {
-            body_code = gen_code(func_decl_node->body, loop_stack, local_scope_stack, func_context_stack, source_lines);
-        }
-
-        func_obj->needs_closure = func_context_stack.back().needs_closure;
-        func_obj->needs_symbol_bind = func_context_stack.back().needs_symbol_bind;
-        func_context_stack.pop_back();
-        const bool bind_symbols = func_obj->needs_closure || func_obj->needs_symbol_bind;
-
-        code.emplace_back(::irgen::GOTO(func_end_label));
-        code.emplace_back(::irgen::LABEL(func_label));
-        code.emplace_back(::irgen::ENTER_SCOPE());
-
-        for (size_t i = 0; i < func_decl_node->params.size(); ++i) {
-            const auto& param = func_decl_node->params[i];
-            code.emplace_back(::irgen::STORE_FAST(param_slots[i]));
-            if (bind_symbols) {
-                emit_bind_fast(code, param_slots[i], param);
-            }
-        }
-
-        push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(func_obj)));
-        push_op(code, src, src_line_no, ::irgen::STORE_FAST(self_slot));
-        if (bind_symbols) {
-            emit_bind_fast(code, self_slot, func_decl_node->name);
-        }
-
-        code.insert(code.end(), body_code.begin(), body_code.end());
-
-        code.emplace_back(::irgen::RET_THEN_LEAVE_SCOPE());
-        local_scope_stack.pop();
-
-        code.emplace_back(::irgen::LABEL(func_end_label));
-
-        push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(func_obj)));
-
-        for (const auto& decorator : func_decl_node->decos) {
-            auto deco_code = gen_code(decorator, loop_stack, local_scope_stack, func_context_stack, source_lines);
-            code.insert(code.end(), deco_code.begin(), deco_code.end());
-            push_op(code, src, src_line_no, ::irgen::CALL(1));
-        }
-
-        if (func_decl_node->visibility == lmx::Visibility::Internal) {
-            local_scope_stack.top().allocate_slot(
-                func_decl_node->name,
-                false,
-                lmx::Visibility::Internal
-            );
-            auto slot = local_scope_stack.top().get_slot(func_decl_node->name).value();
-            push_op(code, src, src_line_no, ::irgen::STORE_FAST(slot));
-        } else {
-            push_op(code, src, src_line_no, ::irgen::NEW_VAR(func_decl_node->name));
-            push_op(code, src, src_line_no, ::irgen::STORE());
-        }
     } else if (node->kind == lmx::ASTNodeType::DoFuncDecl) {
         const auto* do_func_node = dynamic_cast<lmx::DoFuncDeclNode*>(node);
 
@@ -640,7 +1055,23 @@ std::vector<::irgen::Opcode> gen_code(
         size_t func_end_label = label_counter++;
 
         auto func_obj = std::make_shared<::irgen::FunctionObject>();
-        func_obj->params = do_func_node->params;
+        func_obj->params.clear();
+        func_obj->param_default_ir.clear();
+        for (const auto& param : do_func_node->params) {
+            func_obj->params.push_back(param.name);
+            if (param.default_value != nullptr) {
+                auto default_code = gen_code(
+                    param.default_value,
+                    loop_stack,
+                    local_scope_stack,
+                    func_context_stack,
+                    source_lines
+                );
+                func_obj->param_default_ir.push_back(std::move(default_code));
+            } else {
+                func_obj->param_default_ir.emplace_back();
+            }
+        }
         func_obj->location = func_label;
         func_obj->name = "";
 
@@ -654,7 +1085,7 @@ std::vector<::irgen::Opcode> gen_code(
         param_slots.reserve(do_func_node->params.size());
         for (const auto& param : do_func_node->params) {
             param_slots.push_back(
-                local_scope_stack.top().allocate_slot(param, false, lmx::Visibility::Internal)
+                local_scope_stack.top().allocate_slot(param.name, false, lmx::Visibility::Internal)
             );
         }
 
@@ -676,7 +1107,7 @@ std::vector<::irgen::Opcode> gen_code(
             const auto& param = do_func_node->params[i];
             code.emplace_back(::irgen::STORE_FAST(param_slots[i]));
             if (bind_symbols) {
-                emit_bind_fast(code, param_slots[i], param);
+                emit_bind_fast(code, param_slots[i], param.name);
             }
         }
 
@@ -707,22 +1138,82 @@ std::vector<::irgen::Opcode> gen_code(
     } else if (node->kind == lmx::ASTNodeType::Loop) {
         const auto* loop_node = dynamic_cast<lmx::LoopNode*>(node);
 
-        size_t loop_start_label = label_counter++;
-        size_t loop_end_label = label_counter++;
+        if (loop_node->condition) {
+            const std::string count_var = std::format("__loop_count_{}", label_counter++);
+            const std::string iter_var = std::format("__loop_i_{}", label_counter++);
 
-        loop_stack.emplace(loop_start_label, loop_end_label);
+            auto count_code = gen_code(
+                loop_node->condition,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), count_code.begin(), count_code.end());
+            code.emplace_back(::irgen::NEW_INTERN_VAR(count_var));
+            code.emplace_back(::irgen::STORE());
 
-        code.emplace_back(::irgen::LABEL(loop_start_label));
+            push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(static_cast<size_t>(0))));
+            code.emplace_back(::irgen::NEW_INTERN_VAR(iter_var));
+            code.emplace_back(::irgen::STORE());
 
-        if (loop_node->body) {
-            auto body_code = gen_code(loop_node->body, loop_stack, local_scope_stack, func_context_stack, source_lines);
-            code.insert(code.end(), body_code.begin(), body_code.end());
+            const size_t loop_start_label = label_counter++;
+            const size_t loop_end_label = label_counter++;
+
+            loop_stack.emplace(loop_start_label, loop_end_label);
+
+            code.emplace_back(::irgen::LABEL(loop_start_label));
+
+            code.emplace_back(::irgen::LOAD(iter_var));
+            code.emplace_back(::irgen::LOAD(count_var));
+            code.emplace_back(::irgen::GTE());
+            code.emplace_back(::irgen::GOTOIF(loop_end_label));
+
+            if (loop_node->body) {
+                auto body_code = gen_code(
+                    loop_node->body,
+                    loop_stack,
+                    local_scope_stack,
+                    func_context_stack,
+                    source_lines
+                );
+                code.insert(code.end(), body_code.begin(), body_code.end());
+            }
+
+            code.emplace_back(::irgen::LOAD(iter_var));
+            push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(static_cast<size_t>(1))));
+            code.emplace_back(::irgen::ADD());
+            code.emplace_back(::irgen::NEW_VAR_OR_LOAD(iter_var));
+            code.emplace_back(::irgen::STORE());
+
+            code.emplace_back(::irgen::GOTO(loop_start_label));
+            code.emplace_back(::irgen::LABEL(loop_end_label));
+
+            loop_stack.pop();
+        } else {
+            const size_t loop_start_label = label_counter++;
+            const size_t loop_end_label = label_counter++;
+
+            loop_stack.emplace(loop_start_label, loop_end_label);
+
+            code.emplace_back(::irgen::LABEL(loop_start_label));
+
+            if (loop_node->body) {
+                auto body_code = gen_code(
+                    loop_node->body,
+                    loop_stack,
+                    local_scope_stack,
+                    func_context_stack,
+                    source_lines
+                );
+                code.insert(code.end(), body_code.begin(), body_code.end());
+            }
+
+            code.emplace_back(::irgen::GOTO(loop_start_label));
+            code.emplace_back(::irgen::LABEL(loop_end_label));
+
+            loop_stack.pop();
         }
-
-        code.emplace_back(::irgen::GOTO(loop_start_label));
-        code.emplace_back(::irgen::LABEL(loop_end_label));
-
-        loop_stack.pop();
     } else if (node->kind == lmx::ASTNodeType::WhileStmt) {
         const auto* while_node = dynamic_cast<lmx::WhileStmtNode*>(node);
 
@@ -849,6 +1340,55 @@ std::vector<::irgen::Opcode> gen_code(
         code.emplace_back(::irgen::LABEL(else_label));
         if (if_node->else_block) {
             auto else_code = gen_code(if_node->else_block, loop_stack, local_scope_stack, func_context_stack, source_lines);
+            code.insert(code.end(), else_code.begin(), else_code.end());
+        }
+
+        code.emplace_back(::irgen::LABEL(end_label));
+    } else if (node->kind == lmx::ASTNodeType::MatchStmt) {
+        const auto* match_node = dynamic_cast<lmx::MatchStmtNode*>(node);
+        const std::string temp_name = std::format("__match_{}", label_counter++);
+
+        if (match_node->subject) {
+            auto subject_code = gen_code(
+                match_node->subject,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), subject_code.begin(), subject_code.end());
+        } else {
+            push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value()));
+        }
+        push_op(code, src, src_line_no, ::irgen::NEW_INTERN_VAR(temp_name));
+        push_op(code, src, src_line_no, ::irgen::STORE());
+
+        const size_t end_label = label_counter++;
+
+        for (size_t i = 0; i < match_node->cases.size(); ++i) {
+            const size_t next_case_label = label_counter++;
+            emit_match_case(
+                code,
+                match_node->cases[i],
+                temp_name,
+                next_case_label,
+                end_label,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.emplace_back(::irgen::LABEL(next_case_label));
+        }
+
+        if (match_node->else_block) {
+            auto else_code = gen_code(
+                match_node->else_block,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
             code.insert(code.end(), else_code.begin(), else_code.end());
         }
 

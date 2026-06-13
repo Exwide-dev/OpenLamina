@@ -83,6 +83,52 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             }
             break;
         }
+        case lmx::ASTNodeType::MatchStmt: {
+            const auto match_node = dynamic_cast<lmx::MatchStmtNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "MatchStmt\n";
+            std::cout << indent_str << "  Subject:\n";
+            printAST(match_node->subject, indent + 2);
+            for (const auto* match_case : match_node->cases) {
+                printAST(match_case, indent + 1);
+            }
+            if (match_node->else_block != nullptr) {
+                std::cout << indent_str << "  Else:\n";
+                printAST(match_node->else_block, indent + 2);
+            }
+            break;
+        }
+        case lmx::ASTNodeType::MatchCase: {
+            const auto case_node = dynamic_cast<lmx::MatchCaseNode*>(const_cast<lmx::ASTNode*>(node));
+            std::cout << indent_str << "MatchCase\n";
+            printAST(case_node->pattern, indent + 2);
+            printAST(case_node->body, indent + 2);
+            break;
+        }
+        case lmx::ASTNodeType::MatchPattern: {
+            const auto pat = dynamic_cast<lmx::MatchPatternNode*>(const_cast<lmx::ASTNode*>(node));
+            switch (pat->pattern_kind) {
+                case lmx::MatchPatternKind::Expr:
+                    std::cout << indent_str << "Pattern: expr\n";
+                    printAST(pat->expr, indent + 2);
+                    break;
+                case lmx::MatchPatternKind::Bind:
+                    std::cout << indent_str << "Pattern: bind " << pat->bind_name << "\n";
+                    break;
+                case lmx::MatchPatternKind::Vector:
+                    std::cout << indent_str << "Pattern: vector\n";
+                    for (const auto* elem : pat->elements) {
+                        printAST(elem, indent + 2);
+                    }
+                    break;
+                case lmx::MatchPatternKind::Or:
+                    std::cout << indent_str << "Pattern: or\n";
+                    for (const auto* alt : pat->alternatives) {
+                        printAST(alt, indent + 2);
+                    }
+                    break;
+            }
+            break;
+        }
         case lmx::ASTNodeType::Loop: {
             const auto loop = dynamic_cast<lmx::LoopNode*>(const_cast<lmx::ASTNode*>(node));
             std::cout << indent_str << "Loop\n";
@@ -127,7 +173,7 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             std::cout << indent_str << "  Params: ";
             for (size_t i = 0; i < func->params.size(); ++i) {
                 if (i > 0) std::cout << ", ";
-                std::cout << func->params[i];
+                std::cout << func->params[i].name;
             }
             std::cout << "\n";
             std::cout << indent_str << "  Body:\n";
@@ -140,7 +186,7 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             std::cout << indent_str << "  Params: ";
             for (size_t i = 0; i < func->params.size(); ++i) {
                 if (i > 0) std::cout << ", ";
-                std::cout << func->params[i];
+                std::cout << func->params[i].name;
             }
             std::cout << "\n";
             std::cout << indent_str << "  Body:\n";
@@ -180,7 +226,10 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             printAST(call->func_expr, indent + 2);
             std::cout << indent_str << "  Args:\n";
             for (const auto& arg : call->args) {
-                printAST(arg, indent + 2);
+                if (!arg.name.empty()) {
+                    std::cout << indent_str << "    " << arg.name << " =\n";
+                }
+                printAST(arg.value, indent + 2);
             }
             break;
         }

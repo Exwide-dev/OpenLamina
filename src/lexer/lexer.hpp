@@ -41,6 +41,8 @@ enum class TokenType {
     KW_IN,       ///< in 关键字
     KW_STRUCT,   ///< struct 关键字
     KW_TYPED,    ///< typed 关键字（启用 struct 字段类型检查）
+    KW_MATCH,    ///< match 关键字
+    KW_CASE,     ///< case 关键字
     PLACEHOLDER, ///< 管道占位符 _
 
     OPER_PLUS,  ///< 加法运算符 +
@@ -59,6 +61,7 @@ enum class TokenType {
     OPER_DOT,   ///< 点号 .
     OPER_COLON, ///< 冒号 :
     OPER_PIPE,  ///< 管道运算符 |>
+    OPER_BAR,   ///< 竖线 |（match case 或运算）
     ASSIGN,     ///< 赋值运算符 =
 
     LPAREN,   ///< 左圆括号 (
@@ -291,6 +294,12 @@ private:
      * @return 匹配到的 token
      */
     Token tryMatchPatterns();
+
+    /**
+     * @brief 跳过单行或多行注释
+     * @return 若已跳过注释返回 true
+     */
+    bool skipComment();
 
     /**
      * @brief 添加词法错误

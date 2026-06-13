@@ -61,6 +61,9 @@ enum class ASTNodeType {
     Continue,      ///< continue 语句
     ForLoop,       ///< for 循环
     IfStmt,        ///< if 语句
+    MatchStmt,     ///< match 语句
+    MatchCase,     ///< match case 分支
+    MatchPattern,  ///< match 模式
     Module,        ///< 模块
     Binary,        ///< 二元表达式
     Unary,         ///< 一元表达式
@@ -81,7 +84,8 @@ enum class ASTNodeType {
     IndexAccess,   ///< 索引访问
     Dictionary,    ///< 字典字面量
     DictEntry,     ///< 字典条目
-    StructDecl     ///< struct 类型声明
+    StructDecl,    ///< struct 类型声明
+    Comprehension  ///< 向量推导式
 };
 
 struct ASTNode;
@@ -142,6 +146,32 @@ struct ExprNode : ASTNode {
      */
     [[nodiscard]] virtual ValueCategory getValueCategory() const {
         return ValueCategory::RVALUE;
+    }
+};
+
+/**
+ * @struct FuncParam
+ * @brief 函数形参（可带默认值）
+ */
+struct FuncParam {
+    std::string name;
+    ExprNode* default_value = nullptr;
+
+    FuncParam(std::string n, ExprNode* def = nullptr)
+        : name(std::move(n)), default_value(def) {
+    }
+};
+
+/**
+ * @struct CallArgument
+ * @brief 函数调用实参（可具名）
+ */
+struct CallArgument {
+    std::string name;  ///< 空表示位置参数
+    ExprNode* value = nullptr;
+
+    CallArgument(ExprNode* v, std::string n = {})
+        : name(std::move(n)), value(v) {
     }
 };
 
@@ -487,15 +517,15 @@ struct BinaryNode : ExprNode {
  * @brief 函数调用表达式节点
  */
 struct FuncCallExprNode final : ExprNode {
-    ExprNode* func_expr;        ///< 函数表达式
-    std::vector<ASTNode*> args; ///< 参数列表
+    ExprNode* func_expr;              ///< 函数表达式
+    std::vector<CallArgument> args; ///< 参数列表
 
     /**
      * @brief 构造函数
      * @param e 函数表达式
      * @param a 参数列表
      */
-    FuncCallExprNode(ExprNode* e, std::vector<ASTNode*> a)
+    FuncCallExprNode(ExprNode* e, std::vector<CallArgument> a)
         : ExprNode(ASTNodeType::FuncCallExpr), func_expr(e), args(std::move(a)) {
     }
 
@@ -504,8 +534,8 @@ struct FuncCallExprNode final : ExprNode {
      */
     ~FuncCallExprNode() override {
         delete func_expr;
-        for (const auto arg : args) {
-            delete arg;
+        for (const auto& arg : args) {
+            delete arg.value;
         }
     }
 
@@ -734,7 +764,7 @@ struct DecoratedFuncNode final : ASTNode {
  */
 struct FuncDeclNode final : ASTNode {
     std::string name;                             ///< 函数名称
-    std::vector<std::string> params;              ///< 参数列表
+    std::vector<FuncParam> params;                ///< 参数列表
     BlockStmtNode* body;                          ///< 函数体
     std::vector<TypeNode*> args_type;             ///< 参数类型列表
     TypeNode* ret_type{};                         ///< 返回类型
@@ -751,7 +781,7 @@ struct FuncDeclNode final : ASTNode {
      */
     FuncDeclNode(
         std::string n,
-        std::vector<std::string> p,
+        std::vector<FuncParam> p,
         BlockStmtNode* b,
         Visibility v = Visibility::Exported,
         const std::vector<ExprNode*>& decos = {}
@@ -768,6 +798,9 @@ struct FuncDeclNode final : ASTNode {
      */
     ~FuncDeclNode() override {
         delete body;
+        for (const auto& param : params) {
+            delete param.default_value;
+        }
         for (const auto type : args_type) {
             delete type;
         }
@@ -780,7 +813,7 @@ struct FuncDeclNode final : ASTNode {
  * @brief do 表达式形式的函数声明节点
  */
 struct DoFuncDeclNode : ExprNode {
-    std::vector<std::string> params;  ///< 参数列表
+    std::vector<FuncParam> params;  ///< 参数列表
     BlockStmtNode* body;              ///< 函数体
     std::vector<TypeNode*> args_type; ///< 参数类型列表
     TypeNode* ret_type{};             ///< 返回类型
@@ -793,7 +826,7 @@ struct DoFuncDeclNode : ExprNode {
      * @param decos 装饰器列表
      */
     DoFuncDeclNode(
-        std::vector<std::string> p,
+        std::vector<FuncParam> p,
         BlockStmtNode* b,
         const std::vector<ExprNode*>& decos = {}
     )
@@ -804,6 +837,9 @@ struct DoFuncDeclNode : ExprNode {
      * @brief 析构函数
      */
     ~DoFuncDeclNode() override {
+        for (const auto& param : params) {
+            delete param.default_value;
+        }
         delete body;
         for (const auto type : args_type) {
             delete type;
@@ -1047,6 +1083,101 @@ struct IfStmtNode final : ASTNode {
 };
 
 /**
+ * @enum MatchPatternKind
+ * @brief match 模式种类
+ */
+enum class MatchPatternKind {
+    Expr,   ///< 值模式 (expr)
+    Bind,   ///< 向量元素绑定
+    Vector, ///< 向量解构 [a, b, x, ...]
+    Or      ///< 或模式 pat | pat | ...
+};
+
+/**
+ * @struct MatchPatternNode
+ * @brief match 模式节点
+ */
+struct MatchPatternNode final : ASTNode {
+    MatchPatternKind pattern_kind;              ///< 模式种类
+    ExprNode* expr = nullptr;                 ///< 值模式表达式
+    std::string bind_name;                    ///< Bind 模式的变量名
+    std::vector<MatchPatternNode*> elements;   ///< Vector 模式的元素
+    std::vector<MatchPatternNode*> alternatives; ///< Or 模式的备选
+
+    MatchPatternNode(
+        const MatchPatternKind kind,
+        ExprNode* e = nullptr,
+        std::string bind = {},
+        std::vector<MatchPatternNode*> elems = {},
+        std::vector<MatchPatternNode*> alts = {}
+    )
+        : ASTNode(ASTNodeType::MatchPattern),
+          pattern_kind(kind),
+          expr(e),
+          bind_name(std::move(bind)),
+          elements(std::move(elems)),
+          alternatives(std::move(alts)) {
+    }
+
+    ~MatchPatternNode() override {
+        delete expr;
+        for (const auto elem : elements) {
+            delete elem;
+        }
+        for (const auto alt : alternatives) {
+            delete alt;
+        }
+    }
+};
+
+/**
+ * @struct MatchCaseNode
+ * @brief match case 分支
+ */
+struct MatchCaseNode final : ASTNode {
+    MatchPatternNode* pattern; ///< 匹配模式
+    BlockStmtNode* body;     ///< 分支体
+
+    MatchCaseNode(MatchPatternNode* pat, BlockStmtNode* b)
+        : ASTNode(ASTNodeType::MatchCase), pattern(pat), body(b) {
+    }
+
+    ~MatchCaseNode() override {
+        delete pattern;
+        delete body;
+    }
+};
+
+/**
+ * @struct MatchStmtNode
+ * @brief match 语句节点
+ */
+struct MatchStmtNode final : ASTNode {
+    ExprNode* subject;                    ///< 被匹配表达式
+    std::vector<MatchCaseNode*> cases;    ///< case 分支列表
+    BlockStmtNode* else_block = nullptr;  ///< 默认分支
+
+    MatchStmtNode(
+        ExprNode* subj,
+        std::vector<MatchCaseNode*> cs,
+        BlockStmtNode* else_b = nullptr
+    )
+        : ASTNode(ASTNodeType::MatchStmt),
+          subject(subj),
+          cases(std::move(cs)),
+          else_block(else_b) {
+    }
+
+    ~MatchStmtNode() override {
+        delete subject;
+        for (const auto* c : cases) {
+            delete c;
+        }
+        delete else_block;
+    }
+};
+
+/**
  * @struct ModuleNode
  * @brief 模块节点
  */
@@ -1206,18 +1337,57 @@ struct StructField {
  * @struct StructDeclNode
  * @brief struct 声明
  */
+struct ComprehensionNode final : ExprNode {
+    ExprNode* expr;
+    std::vector<ForLoopNode::IterationItem*> items;
+    ExprNode* guard;
+
+    ComprehensionNode(
+        ExprNode* e,
+        std::vector<ForLoopNode::IterationItem*> its,
+        ExprNode* g
+    )
+        : ExprNode(ASTNodeType::Comprehension), expr(e), items(std::move(its)), guard(g) {
+    }
+
+    ~ComprehensionNode() override {
+        delete expr;
+        for (auto* item : items) {
+            delete item;
+        }
+        delete guard;
+    }
+
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
+};
+
 struct StructDeclNode final : ASTNode {
     std::string name;
     bool typed = false;
     std::vector<StructField> fields;
+    std::vector<FuncDeclNode*> methods;
 
-    StructDeclNode(std::string n, bool t, std::vector<StructField> f)
-        : ASTNode(ASTNodeType::StructDecl), name(std::move(n)), typed(t), fields(std::move(f)) {
+    StructDeclNode(
+        std::string n,
+        bool t,
+        std::vector<StructField> f,
+        std::vector<FuncDeclNode*> m = {}
+    )
+        : ASTNode(ASTNodeType::StructDecl),
+          name(std::move(n)),
+          typed(t),
+          fields(std::move(f)),
+          methods(std::move(m)) {
     }
 
     ~StructDeclNode() override {
         for (auto& field : fields) {
             delete field.default_init;
+        }
+        for (auto* method : methods) {
+            delete method;
         }
     }
 };

@@ -1,9 +1,10 @@
-#include <algorithm>
+#include "cell_pool.hpp"
+
+#include "opcode.hpp"
+
 #include <new>
 #include <unordered_map>
 #include <vector>
-#include "cell_pool.hpp"
-#include "opcode.hpp"
 
 namespace irgen {
 
@@ -15,7 +16,15 @@ void resetCell(Value* cell) {
 }
 
 struct CellDeleter {
-    void operator()(Value* cell) const;
+    CellPool* pool = nullptr;
+
+    void operator()(Value* cell) const {
+        if (pool != nullptr) {
+            pool->releaseCell(cell);
+        } else {
+            delete cell;
+        }
+    }
 };
 
 } // namespace
@@ -25,19 +34,19 @@ struct CellPool::Impl {
         uint32_t chunk = 0;
         uint32_t index = 0;
         uint8_t mark = 0;
+        bool is_free = false;
     };
 
     std::vector<std::unique_ptr<Value[]>> chunks;
     std::vector<Value*> free_list;
     std::unordered_map<Value*, CellRecord> cell_index;
 
-    VM* active_vm = nullptr;
     size_t allocations_since_gc = 0;
 
     static constexpr size_t kChunkSize = 4096;
 
     void recycle(Value* cell);
-    [[nodiscard]] Value* acquireCell();
+    [[nodiscard]] Value* acquireCell(CellPool& owner);
     void growChunk();
     [[nodiscard]] bool owns(const Value* cell) const;
     void clearMarks();
@@ -45,22 +54,21 @@ struct CellPool::Impl {
     void markFromValue(const Value& value);
     void markModuleExports(const ModuleObject& module);
     void sweepUnmarked();
-    void tryCollectBeforeGrow() const;
+    void tryCollectBeforeGrow(CellPool& owner);
 };
-
-void CellDeleter::operator()(Value* cell) const {
-    CellPool::instance().releaseCell(cell);
-}
-
-CellPool& CellPool::instance() {
-    static CellPool pool;
-    return pool;
-}
 
 CellPool::CellPool() : impl_(std::make_unique<Impl>()) {
 }
 
+CellPool::CellPool(CellPool&&) noexcept = default;
+
+CellPool& CellPool::operator=(CellPool&&) noexcept = default;
+
 CellPool::~CellPool() = default;
+
+void CellPool::bindOwner(VM* vm) {
+    owner_vm_ = vm;
+}
 
 void CellPool::releaseCell(Value* cell) const {
     impl_->recycle(cell);
@@ -78,10 +86,6 @@ size_t CellPool::liveCells() const {
     return impl_->cell_index.size() - impl_->free_list.size();
 }
 
-void CellPool::setActiveVm(VM* vm) const {
-    impl_->active_vm = vm;
-}
-
 bool CellPool::Impl::owns(const Value* cell) const {
     return cell != nullptr && cell_index.contains(const_cast<Value*>(cell));
 }
@@ -94,17 +98,23 @@ void CellPool::Impl::growChunk() {
 
     for (uint32_t i = 0; i < kChunkSize; ++i) {
         Value* cell = base + i;
-        cell_index[cell] = CellRecord{chunk_id, i, 0};
+        cell_index[cell] = CellRecord{chunk_id, i, 0, true};
         free_list.push_back(cell);
     }
 }
 
-Value* CellPool::Impl::acquireCell() {
+void CellPool::Impl::tryCollectBeforeGrow(CellPool& owner) {
+    if (owner.owner_vm_ != nullptr && owner.owner_vm_->gc_suppress_depth == 0) {
+        owner.collectGarbage(*owner.owner_vm_);
+    }
+}
+
+Value* CellPool::Impl::acquireCell(CellPool& owner) {
     if (chunks.empty()) {
         growChunk();
     }
     if (free_list.empty()) {
-        tryCollectBeforeGrow();
+        tryCollectBeforeGrow(owner);
     }
     if (free_list.empty()) {
         growChunk();
@@ -113,36 +123,31 @@ Value* CellPool::Impl::acquireCell() {
     Value* cell = free_list.back();
     free_list.pop_back();
     cell_index[cell].mark = 0;
+    cell_index[cell].is_free = false;
     return cell;
 }
 
-void CellPool::Impl::tryCollectBeforeGrow() const {
-    if (active_vm != nullptr) {
-        instance().collectGarbage(*active_vm);
-    }
-}
-
-CellPool::CellPtr CellPool::allocate() const {
-    Value* cell = impl_->acquireCell();
+CellPool::CellPtr CellPool::allocate() {
+    Value* cell = impl_->acquireCell(*this);
     resetCell(cell);
     ++impl_->allocations_since_gc;
-    return CellPtr(cell, CellDeleter{});
+    return CellPtr(cell, CellDeleter{this});
 }
 
-CellPool::CellPtr CellPool::allocateCopy(const Value& value) const {
-    Value* cell = impl_->acquireCell();
+CellPool::CellPtr CellPool::allocateCopy(const Value& value) {
+    Value* cell = impl_->acquireCell(*this);
     cell->~Value();
     new (cell) Value(value);
     ++impl_->allocations_since_gc;
-    return CellPtr(cell, CellDeleter{});
+    return CellPtr(cell, CellDeleter{this});
 }
 
-CellPool::CellPtr CellPool::allocateValue(Value&& value) const {
-    Value* cell = impl_->acquireCell();
+CellPool::CellPtr CellPool::allocateValue(Value&& value) {
+    Value* cell = impl_->acquireCell(*this);
     cell->~Value();
     new (cell) Value(std::move(value));
     ++impl_->allocations_since_gc;
-    return CellPtr(cell, CellDeleter{});
+    return CellPtr(cell, CellDeleter{this});
 }
 
 void CellPool::Impl::recycle(Value* cell) {
@@ -151,11 +156,15 @@ void CellPool::Impl::recycle(Value* cell) {
         return;
     }
 
-    resetCell(cell);
-    if (std::ranges::find(free_list, cell) == free_list.end()) {
-        free_list.push_back(cell);
+    auto& record = cell_index[cell];
+    if (record.is_free) {
+        return;
     }
-    cell_index[cell].mark = 0;
+
+    resetCell(cell);
+    free_list.push_back(cell);
+    record.is_free = true;
+    record.mark = 0;
 }
 
 void CellPool::Impl::clearMarks() {
@@ -255,19 +264,20 @@ void CellPool::Impl::markModuleExports(const ModuleObject& module) {
 
 [[gnu::hot]] void CellPool::Impl::sweepUnmarked() {
     std::vector<Value*> to_sweep;
-    to_sweep.reserve(free_list.size());
+    to_sweep.reserve(cell_index.size());
 
     for (auto& [cell, record] : cell_index) {
-        if (record.mark == 0 &&
-            std::ranges::find(free_list, cell) == free_list.end()) {
+        if (record.mark == 0 && !record.is_free) {
             to_sweep.push_back(cell);
         }
     }
 
+    free_list.reserve(free_list.size() + to_sweep.size());
+
     for (Value* cell : to_sweep) {
         resetCell(cell);
         free_list.push_back(cell);
-        cell_index[cell].mark = 0;
+        cell_index[cell].is_free = true;
     }
 }
 
@@ -320,18 +330,6 @@ void CellPool::collectGarbage(const VM& vm) const {
 
     impl_->sweepUnmarked();
     impl_->allocations_since_gc = 0;
-}
-
-std::shared_ptr<Value> makePooledCell() {
-    return CellPool::instance().allocate();
-}
-
-std::shared_ptr<Value> makePooledCell(const Value& value) {
-    return CellPool::instance().allocateCopy(value);
-}
-
-std::shared_ptr<Value> makePooledCell(Value&& value) {
-    return CellPool::instance().allocateValue(std::move(value));
 }
 
 } // namespace irgen

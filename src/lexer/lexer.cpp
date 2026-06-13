@@ -98,6 +98,8 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_IN: return "in";
         case TokenType::KW_STRUCT: return "struct";
         case TokenType::KW_TYPED: return "typed";
+        case TokenType::KW_MATCH: return "match";
+        case TokenType::KW_CASE: return "case";
         case TokenType::PLACEHOLDER: return "_";
         case TokenType::OPER_PLUS: return "+";
         case TokenType::OPER_MINUS: return "-";
@@ -115,6 +117,7 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::OPER_DOT: return ".";
         case TokenType::OPER_COLON: return ":";
         case TokenType::OPER_PIPE: return "|>";
+        case TokenType::OPER_BAR: return "|";
         case TokenType::ASSIGN: return "=";
         case TokenType::LPAREN: return "(";
         case TokenType::RPAREN: return ")";
@@ -135,6 +138,7 @@ std::vector<TokenPattern> Lexer::initPatterns() {
         {R"(<=)", TokenType::OPER_LE},
         {R"(>=)", TokenType::OPER_GE},
         {R"(\|>)", TokenType::OPER_PIPE},
+        {R"(\|)", TokenType::OPER_BAR},
         {R"(\+)", TokenType::OPER_PLUS},
         {R"(-)", TokenType::OPER_MINUS},
         {R"(\*)", TokenType::OPER_MUL},
@@ -228,6 +232,37 @@ Token Lexer::parseString() {
     return {TokenType::STRING_LITERAL, value, start_line, start_col};
 }
 
+bool Lexer::skipComment() {
+    if (peekChar() != '/') {
+        return false;
+    }
+    if (pos + 1 >= full_source.size()) {
+        return false;
+    }
+    if (full_source[pos + 1] == '/') {
+        consumeChar();
+        consumeChar();
+        while (!isAtEnd() && peekChar() != '\n') {
+            consumeChar();
+        }
+        return true;
+    }
+    if (full_source[pos + 1] == '*') {
+        consumeChar();
+        consumeChar();
+        while (!isAtEnd()) {
+            if (peekChar() == '*' && pos + 1 < full_source.size() && full_source[pos + 1] == '/') {
+                consumeChar();
+                consumeChar();
+                return true;
+            }
+            consumeChar();
+        }
+        return true;
+    }
+    return false;
+}
+
 Token Lexer::parseNewline() {
     const int start_line = line;
     const int start_col = column;
@@ -271,6 +306,8 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"in", TokenType::KW_IN},
         {"struct", TokenType::KW_STRUCT},
         {"typed", TokenType::KW_TYPED},
+        {"match", TokenType::KW_MATCH},
+        {"case", TokenType::KW_CASE},
         {"_", TokenType::PLACEHOLDER},
     };
 
@@ -356,6 +393,10 @@ std::vector<Token> Lexer::tokenize() {
             break;
         }
 
+        if (skipComment()) {
+            continue;
+        }
+
         const char c = peekChar();
 
         if (c == '"') {
@@ -387,6 +428,10 @@ std::vector<Token> Lexer::lex_rest() {
 
         if (isAtEnd()) {
             break;
+        }
+
+        if (skipComment()) {
+            continue;
         }
 
         const char c = peekChar();

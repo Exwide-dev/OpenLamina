@@ -47,13 +47,13 @@ public:
      * @brief 检查栈是否为空
      * @return 如果为空返回true
      */
-    bool empty() const { return data.empty(); }
+    [[nodiscard]] bool empty() const { return data.empty(); }
 
     /**
      * @brief 获取栈大小
      * @return 栈中元素数量
      */
-    size_t size() const { return data.size(); }
+    [[nodiscard]] size_t size() const { return data.size(); }
 
     /**
      * @brief 获取底层容器
@@ -185,7 +185,7 @@ public:
      * @brief 将字符串操作数替换为字符串池ID
      * @param codes 字节码向量
      */
-    static void replace_string(std::vector<::irgen::Opcode>&) {}
+    static void replace_string(std::vector<::irgen::Opcode>& codes) {}
 };
 
 /**

@@ -146,6 +146,9 @@ void struct_set_field(Value& struct_val, const std::string& field_name, const Va
             return;
         }
     }
+    if (inst->type->methods.contains(field_name)) {
+        throw RuntimeError("cannot assign to method: " + field_name);
+    }
     throw RuntimeError("struct has no field: " + field_name);
 }
 
@@ -162,5 +165,58 @@ Value struct_get_field(const Value& struct_val, const std::string& field_name) {
         }
     }
     throw RuntimeError("struct has no field: " + field_name);
+}
+
+std::optional<Value> struct_try_bind_method(
+    VM& vm,
+    const Value& receiver,
+    const std::string& method_name
+) {
+    const Value& obj = receiver.deref();
+    if (obj.getType() != Value::Type::StructObject) {
+        return std::nullopt;
+    }
+
+    const auto inst = obj.asStruct();
+    const auto method_it = inst->type->methods.find(method_name);
+    if (method_it == inst->type->methods.end()) {
+        return std::nullopt;
+    }
+
+    const std::shared_ptr<FunctionObject>& method = method_it->second;
+    std::shared_ptr<Value> self_cell;
+    if (receiver.isReference()) {
+        self_cell = receiver.asReference().value_ptr;
+    } else {
+        self_cell = vm.cell_pool.allocateCopy(obj);
+    }
+
+    return Value(FunctionType(
+        [self_cell, method](VM& caller_vm, const std::vector<Value>& args) -> Value {
+            if (!method->owner_vm) {
+                method->owner_vm = &caller_vm;
+            }
+
+            const size_t user_argc = method->params.empty() || method->params[0] != "self"
+                                         ? method->params.size()
+                                         : method->params.size() - 1;
+            if (args.size() != user_argc) {
+                throw RuntimeError(
+                    std::format(
+                        "method {} expects {} argument(s), got {}",
+                        method->name,
+                        user_argc,
+                        args.size()
+                    )
+                );
+            }
+
+            std::vector<Value> full_args;
+            full_args.reserve(args.size() + 1);
+            full_args.push_back(Value::makeRef(self_cell, caller_vm.cell_pool));
+            full_args.insert(full_args.end(), args.begin(), args.end());
+            return method->call(caller_vm, full_args);
+        }
+    ));
 }
 } // namespace irgen

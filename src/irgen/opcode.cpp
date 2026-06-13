@@ -60,8 +60,27 @@ namespace {
 #define VM_RUNTIME_ERROR(vm, msg) \
     throw RuntimeError((msg), vm_opcode_site((vm)), build_traceback((vm)))
 
-Value Value::makeEmptyRef() {
-    return Value(Ref(CellPool::instance().allocate()));
+Value Value::makeEmptyRef(CellPool& pool) {
+    return Value(Ref(pool.allocate(), false, &pool));
+}
+
+Value Value::makeRef(Value&& val, CellPool& pool) {
+    return Value(Ref(pool.allocateValue(std::move(val)), false, &pool));
+}
+
+Value Value::makeRef(const Value& val, CellPool& pool) {
+    return Value(Ref(pool.allocateCopy(val), false, &pool));
+}
+
+Value Value::makeRef(std::shared_ptr<Value> val_ptr, CellPool& pool) {
+    return Value(Ref(std::move(val_ptr), false, &pool));
+}
+
+Ref::Ref(std::shared_ptr<Value> ptr, const bool is_opaque, CellPool* pool)
+    : value_ptr(std::move(ptr)), opaque(is_opaque) {
+    if (!opaque && value_ptr->isReference() && pool != nullptr) {
+        value_ptr = pool->allocateCopy(value_ptr->deref());
+    }
 }
 
 std::string Value::displayString() const {
@@ -211,8 +230,8 @@ std::optional<std::shared_ptr<Value>> SymbolTable::get(const size_t id) const no
     return symbols.try_get(id);
 }
 
-void SymbolTable::set(const size_t id, const Value& value) {
-    symbols.set(id, makePooledCell(value));
+void SymbolTable::set(const size_t id, const Value& value, CellPool& pool) {
+    symbols.set(id, pool.allocateCopy(value));
 }
 
 void SymbolTable::set(const size_t id, const std::shared_ptr<Value>& value) {
@@ -227,8 +246,125 @@ bool SymbolTable::is_constant(const size_t id) const noexcept {
     return constants.get(id);
 }
 
+
+namespace {
+
+void rebindValueAfterMove(Value& val, VM& old_vm, VM& new_vm) {
+    if (val.isReference()) {
+        if (val.asReference().value_ptr) {
+            rebindValueAfterMove(*val.asReference().value_ptr, old_vm, new_vm);
+        }
+        return;
+    }
+
+    Value& self = val;
+
+    if (self.isUserFunction()) {
+        auto& func = *self.asFunctionObject();
+        if (func.owner_vm == &old_vm) {
+            func.owner_vm = &new_vm;
+        }
+        for (SymbolTable& table : func.closure) {
+            for (const auto& [id, ptr] : table.symbols) {
+                (void)id;
+                if (ptr) {
+                    rebindValueAfterMove(*ptr, old_vm, new_vm);
+                }
+            }
+        }
+        return;
+    }
+
+    if (self.getType() == Value::Type::Iterator) {
+
+        if (auto iter_ptr = self.asIterator()) {
+            auto& iter = *iter_ptr;
+            if (iter.cell_pool == &old_vm.cell_pool) {
+                iter.cell_pool = &new_vm.cell_pool;
+            }
+            if (iter.iterable) {
+                rebindValueAfterMove(*iter.iterable, old_vm, new_vm);
+            }
+        }
+        return;
+    }
+
+    if (self.isVector()) {
+        for (const auto& elem : self.asVector()) {
+            if (elem) {
+                rebindValueAfterMove(*elem, old_vm, new_vm);
+            }
+        }
+        return;
+    }
+
+    if (self.isDictionary()) {
+        for (const auto& [key, elem] : self.asDictionary()) {
+            if (key) {
+                rebindValueAfterMove(*key, old_vm, new_vm);
+            }
+            if (elem) {
+                rebindValueAfterMove(*elem, old_vm, new_vm);
+            }
+        }
+        return;
+    }
+
+    if (self.isStruct()) {
+        if (const auto& obj = self.asStruct()) {
+            for (Value& slot : obj->slots) {
+                rebindValueAfterMove(slot, old_vm, new_vm);
+            }
+        }
+        return;
+    }
+
+    if (self.getType() == Value::Type::Module) {
+        if (const auto mod = self.asModule()) {
+            if (mod->owner_vm == &old_vm) {
+                mod->owner_vm = &new_vm;
+            }
+            for (auto& [name, export_val] : mod->exports) {
+                (void)name;
+                rebindValueAfterMove(export_val, old_vm, new_vm);
+            }
+            for (auto& [name, sub] : mod->submodules) {
+                (void)name;
+                if (sub && sub->owner_vm == &old_vm) {
+                    sub->owner_vm = &new_vm;
+                }
+                if (sub) {
+                    for (auto& [sub_name, export_val] : sub->exports) {
+                        (void)sub_name;
+                        rebindValueAfterMove(export_val, old_vm, new_vm);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void rebindModuleTreeAfterMove(ModuleObject& module, VM& old_vm, VM& new_vm) {
+    if (module.owner_vm == &old_vm) {
+        module.owner_vm = &new_vm;
+    }
+    for (auto& [name, export_val] : module.exports) {
+        (void)name;
+        rebindValueAfterMove(export_val, old_vm, new_vm);
+    }
+    for (auto& [name, sub] : module.submodules) {
+        (void)name;
+        if (sub) {
+            rebindModuleTreeAfterMove(*sub, old_vm, new_vm);
+        }
+    }
+}
+
+} // namespace
+
 // 初始化内置函数
 VM::VM() {
+    cell_pool.bindOwner(this);
     symbol_stack.reserve(256);
     call_stack.reserve(256);
     main_module = std::make_shared<ModuleObject>("__main__", this);
@@ -236,15 +372,106 @@ VM::VM() {
 }
 
 VM::VM(std::vector<Opcode> c) : code(std::move(c)) {
+    cell_pool.bindOwner(this);
     symbol_stack.reserve(256);
     call_stack.reserve(256);
     main_module = std::make_shared<ModuleObject>("__main__", this);
     init_builtins();
 }
 
+VM::VM(VM&& other) noexcept
+    : cell_pool(std::move(other.cell_pool)),
+      op_stack(std::move(other.op_stack)),
+      call_stack(std::move(other.call_stack)),
+      source_filename(std::move(other.source_filename)),
+      call_func_stack(std::move(other.call_func_stack)),
+      code(std::move(other.code)),
+      label_scan_end(other.label_scan_end),
+      symbol_stack(std::move(other.symbol_stack)),
+      locals_stack(std::move(other.locals_stack)),
+      cache(std::move(other.cache)),
+      label_table(std::move(other.label_table)),
+      pc(other.pc),
+      label_counter(other.label_counter),
+      main_module(std::move(other.main_module)) {
+    rebindAfterMove(other);
+}
+
+VM& VM::operator=(VM&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+
+    cell_pool = std::move(other.cell_pool);
+    op_stack = std::move(other.op_stack);
+    call_stack = std::move(other.call_stack);
+    source_filename = std::move(other.source_filename);
+    call_func_stack = std::move(other.call_func_stack);
+    code = std::move(other.code);
+    label_scan_end = other.label_scan_end;
+    symbol_stack = std::move(other.symbol_stack);
+    locals_stack = std::move(other.locals_stack);
+    cache = std::move(other.cache);
+    label_table = std::move(other.label_table);
+    pc = other.pc;
+    label_counter = other.label_counter;
+    main_module = std::move(other.main_module);
+
+    rebindAfterMove(other);
+    return *this;
+}
+
+void VM::rebindAfterMove(VM& source) noexcept {
+    cell_pool.bindOwner(this);
+
+    for (Value& val : op_stack) {
+        rebindValueAfterMove(val, source, *this);
+    }
+    for (auto& frame : locals_stack) {
+        for (Value& val : frame) {
+            rebindValueAfterMove(val, source, *this);
+        }
+    }
+    for (SymbolTable& table : symbol_stack) {
+        for (const auto& [id, ptr] : table.symbols) {
+            (void)id;
+            if (ptr) {
+                rebindValueAfterMove(*ptr, source, *this);
+            }
+        }
+    }
+    for (const auto& func : call_func_stack) {
+        if (!func) {
+            continue;
+        }
+        if (func->owner_vm == &source) {
+            func->owner_vm = this;
+        }
+        for (SymbolTable& table : func->closure) {
+            for (const auto& [id, ptr] : table.symbols) {
+                (void)id;
+                if (ptr) {
+                    rebindValueAfterMove(*ptr, source, *this);
+                }
+            }
+        }
+    }
+    for (const auto& [id, ptr] : cache.allEntries()) {
+        (void)id;
+        if (ptr) {
+            rebindValueAfterMove(*ptr, source, *this);
+        }
+    }
+    if (main_module) {
+        rebindModuleTreeAfterMove(*main_module, source, *this);
+    }
+
+    source.cell_pool.bindOwner(&source);
+}
+
 void VM::init_builtins() {
     SymbolTable temp_symbols;
-    lang::init_builtins(temp_symbols);
+    lang::init_builtins(temp_symbols, cell_pool);
 
     for (const auto& [id, val] : temp_symbols.symbols) {
         main_module->set_attr(g_string_pool.get_string(id), *val);
@@ -260,10 +487,6 @@ void VM::run() {
 #ifdef ANALYSE
     std::unordered_map<std::string, int> callmap{};
 #endif
-    CellPool::instance().setActiveVm(this);
-    struct ActiveVmGuard {
-        ~ActiveVmGuard() { CellPool::instance().setActiveVm(nullptr); }
-    } active_vm_guard;
     size_t ops_since_gc = 0;
     try {
         scan_labels();
@@ -279,7 +502,7 @@ void VM::run() {
                 code[pc]
             );
 
-            if (++ops_since_gc >= 1000000) {
+            if (++ops_since_gc >= 1000000 && gc_suppress_depth == 0) {
                 collectGarbage();
                 ops_since_gc = 0;
             }
@@ -305,7 +528,7 @@ void VM::run() {
 }
 
 void VM::collectGarbage() {
-    CellPool::instance().collectGarbage(*this);
+    cell_pool.collectGarbage(*this);
 }
 
 std::optional<Value> VM::get_symbol(const std::string& name) const {
@@ -427,7 +650,7 @@ inline void PTR_TO_REF::emit(VM& vm) const {
     if (!slot.isAddressRef()) {
         VM_RUNTIME_ERROR(vm, "dereference requires a pointer");
     }
-    vm.op_stack.push(Value::makeRef(slot.asReference().value_ptr));
+    vm.op_stack.push(Value::makeRef(slot.asReference().value_ptr, vm.cell_pool));
 }
 
 inline void NOT::emit(VM& vm) {
@@ -537,7 +760,7 @@ inline void LOAD::emit(VM& vm) const {
         if (value_ptr->isReference()) {
             vm.op_stack.push(*value_ptr);
         } else {
-            vm.op_stack.push(Value::makeRef(value_ptr));
+            vm.op_stack.push(Value::makeRef(value_ptr, vm.cell_pool));
         }
         return;
     }
@@ -566,7 +789,7 @@ inline void LOAD::emit(VM& vm) const {
         if (vm.main_module) {
             auto attr = vm.main_module->get_attr(var_name);
             if (attr.has_value()) {
-                value_ptr = makePooledCell(*attr);
+                value_ptr = vm.cell_pool.allocateCopy(*attr);
                 vm.cache.add(var_id, value_ptr);
                 LOG("Found in Module");
             }
@@ -583,7 +806,7 @@ inline void LOAD::emit(VM& vm) const {
     if (value_ptr->isReference()) {
         vm.op_stack.push(*value_ptr);
     } else {
-        vm.op_stack.push(Value::makeRef(value_ptr));
+        vm.op_stack.push(Value::makeRef(value_ptr, vm.cell_pool));
     }
 }
 
@@ -639,6 +862,150 @@ inline void LEAVE_SCOPE::emit(VM& vm) {
     LOG("LEAVE_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
 }
 
+namespace {
+
+Value eval_param_default(VM& vm, const std::vector<Opcode>& ir) {
+    const size_t stack_depth = vm.op_stack.size();
+    for (auto op : ir) {
+        std::visit([&](auto& opcode) { opcode.emit(vm); }, op);
+    }
+    if (vm.op_stack.size() <= stack_depth) {
+        throw RuntimeError("parameter default did not produce a value");
+    }
+    return vm.op_stack.popValue();
+}
+
+std::vector<Value> pop_positional_args(VM& vm, const size_t count) {
+    std::vector<Value> positional;
+    positional.reserve(count);
+    for (size_t i = count; i > 0; --i) {
+        positional.push_back(vm.op_stack.popValue());
+    }
+    std::ranges::reverse(positional);
+    return positional;
+}
+
+Value pop_kwargs_dict(VM& vm, const bool has_kwargs) {
+    if (!has_kwargs) {
+        return Value(std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{});
+    }
+    return vm.op_stack.popValue();
+}
+
+std::vector<Value> resolve_user_function_args(
+    VM& vm,
+    const FunctionObject& func_obj,
+    const std::vector<Value>& positional,
+    const Value& kwargs_value
+) {
+    const size_t param_count = func_obj.params.size();
+    if (func_obj.param_default_ir.size() != param_count) {
+        VM_RUNTIME_ERROR(vm, "internal error: parameter metadata mismatch");
+    }
+
+    std::vector<Value> resolved(param_count);
+    std::vector<bool> filled(param_count, false);
+
+    if (positional.size() > param_count) {
+        VM_RUNTIME_ERROR(
+            vm,
+            std::format(
+                "function {} expects at most {} argument(s), got {} positional",
+                func_obj.name,
+                param_count,
+                positional.size()
+            )
+        );
+    }
+
+    for (size_t i = 0; i < positional.size(); ++i) {
+        resolved[i] = positional[i];
+        filled[i] = true;
+    }
+
+    const Value& kwargs = kwargs_value.deref();
+    if (kwargs.getType() != Value::Type::Dictionary) {
+        VM_RUNTIME_ERROR(vm, "internal error: keyword arguments must be a dictionary");
+    }
+
+    for (const auto& [key_ptr, value_ptr] : kwargs.asDictionary()) {
+        const Value& key = key_ptr->deref();
+        if (key.getType() != Value::Type::String) {
+            VM_RUNTIME_ERROR(vm, "keyword argument names must be strings");
+        }
+        const std::string& kw_name = key.asString();
+        auto it = std::ranges::find(func_obj.params, kw_name);
+        if (it == func_obj.params.end()) {
+            VM_RUNTIME_ERROR(
+                vm,
+                std::format("function {} has no parameter named '{}'", func_obj.name, kw_name)
+            );
+        }
+        const size_t index = static_cast<size_t>(std::distance(func_obj.params.begin(), it));
+        if (filled[index]) {
+            VM_RUNTIME_ERROR(
+                vm,
+                std::format("multiple values for argument '{}'", kw_name)
+            );
+        }
+        resolved[index] = *value_ptr;
+        filled[index] = true;
+    }
+
+    for (size_t i = 0; i < param_count; ++i) {
+        if (filled[i]) {
+            continue;
+        }
+        if (func_obj.param_default_ir[i].empty()) {
+            VM_RUNTIME_ERROR(
+                vm,
+                std::format(
+                    "function {} missing required argument '{}'",
+                    func_obj.name,
+                    func_obj.params[i]
+                )
+            );
+        }
+        resolved[i] = eval_param_default(vm, func_obj.param_default_ir[i]);
+        filled[i] = true;
+    }
+
+    return resolved;
+}
+
+void invoke_user_function_with_args(VM& vm, const std::shared_ptr<FunctionObject>& func_obj, std::vector<Value> args) {
+    if (!func_obj->owner_vm) {
+        func_obj->owner_vm = &vm;
+    }
+
+    if (func_obj->owner_vm != &vm) {
+        const Value result = func_obj->call(vm, args);
+        vm.op_stack.push(result);
+        return;
+    }
+
+    vm.call_func_stack.push_back(func_obj);
+    vm.call_stack.push_back(vm.pc);
+
+    for (auto& arg : args) {
+        vm.op_stack.push(std::move(arg));
+    }
+
+    if (!func_obj->closure.empty()) {
+        for (const auto& scope : func_obj->closure) {
+            vm.symbol_stack.push_back(scope);
+        }
+    }
+
+    const auto label_it = vm.label_table.find(func_obj->location);
+    if (label_it == vm.label_table.end()) {
+        VM_RUNTIME_ERROR(vm, "Function label not found: " + std::to_string(func_obj->location));
+    }
+    vm.pc = label_it->second;
+}
+
+} // namespace
+
 inline void CALL::emit(VM& vm) const {
     Value func = vm.op_stack.popValue();
     LOG(ITIS(,func,.toString()) << ", true val type: " << func.deref().type_name());
@@ -649,67 +1016,26 @@ inline void CALL::emit(VM& vm) const {
 
     if (func.isUserFunction()) {
         auto func_obj = func.asFunctionObject();
-
-        if (!func_obj->owner_vm) {
-            func_obj->owner_vm = &vm;
-        }
-
-        if (func_obj->owner_vm == &vm) {
-            vm.call_func_stack.push_back(func_obj);
-            vm.call_stack.push_back(vm.pc);
-
-            if (arg_count > 1) {
-                if (arg_count <= 8) {
-                    Value arg_buf[8];
-                    for (ptrdiff_t i = static_cast<ptrdiff_t>(arg_count) - 1; i >= 0; --i) {
-                        arg_buf[i] = vm.op_stack.popValue();
-                    }
-                    for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
-                        vm.op_stack.push(arg_buf[i]);
-                    }
-                } else {
-                    std::vector<Value> args;
-                    args.reserve(static_cast<size_t>(arg_count));
-                    for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
-                        args.emplace_back(vm.op_stack.popValue());
-                    }
-                    for (auto& arg : std::ranges::reverse_view(args)) {
-                        vm.op_stack.push(arg);
-                    }
-                }
-            }
-
-            if (!func_obj->closure.empty()) {
-                for (const auto& scope : func_obj->closure) {
-                    vm.symbol_stack.push_back(scope);
-                }
-            }
-
-            const auto label_it = vm.label_table.find(func_obj->location);
-            if (label_it == vm.label_table.end()) {
-                VM_RUNTIME_ERROR(vm,"Function label not found: " + std::to_string(func_obj->location));
-            }
-            vm.pc = label_it->second;
-        } else {
-            std::vector<Value> args;
-            args.reserve(arg_count);
-            for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
-                args.emplace_back(vm.op_stack.popValue());
-            }
-            Value result = func_obj->call(vm, args);
-            vm.op_stack.push(result);
-        }
-    } else {
-        std::vector<Value> args;
-        args.reserve(arg_count);
-        for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
-            args.emplace_back(vm.op_stack.popValue());
-        }
-
-        auto builtin_func = func.asFunction();
-        auto result = builtin_func(vm, args);
-        vm.op_stack.push(result);
+        const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
+        std::vector<Value> positional = pop_positional_args(vm, arg_count);
+        std::vector<Value> resolved = resolve_user_function_args(vm, *func_obj, positional, kwargs);
+        invoke_user_function_with_args(vm, func_obj, std::move(resolved));
+        return;
     }
+
+    if (has_kwargs) {
+        VM_RUNTIME_ERROR(vm, "keyword arguments are not supported for builtin functions");
+    }
+
+    std::vector<Value> args;
+    args.reserve(arg_count);
+    for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
+        args.emplace_back(vm.op_stack.popValue());
+    }
+
+    auto builtin_func = func.asFunction();
+    auto result = builtin_func(vm, args);
+    vm.op_stack.push(result);
 }
 
 inline void RET::emit(VM& vm) {
@@ -752,7 +1078,7 @@ inline void GETATTR::emit(VM& vm) const {
     const auto push_module_attr = [&](const std::shared_ptr<ModuleObject>& module) {
         const auto result = module->get_attr(attr_name);
         if (result.has_value()) {
-            vm.op_stack.push(Value::makeRef(makePooledCell(*result)));
+            vm.op_stack.push(Value::makeRef(vm.cell_pool.allocateCopy(*result), vm.cell_pool));
             return;
         }
         VM_RUNTIME_ERROR(vm, "Attribute not found: " + attr_name + ", in module: " + module->name);
@@ -767,6 +1093,10 @@ inline void GETATTR::emit(VM& vm) const {
             return;
         }
         if (val.getType() == Value::Type::StructObject) {
+            if (auto method = struct_try_bind_method(vm, Value(*cell), attr_name)) {
+                vm.op_stack.push(*method);
+                return;
+            }
             vm.op_stack.push(struct_get_field(Value(*cell), attr_name));
             return;
         }
@@ -782,6 +1112,10 @@ inline void GETATTR::emit(VM& vm) const {
 
     const Value& val = receiver.deref();
     if (val.getType() == Value::Type::StructObject) {
+        if (auto method = struct_try_bind_method(vm, receiver, attr_name)) {
+            vm.op_stack.push(*method);
+            return;
+        }
         vm.op_stack.push(struct_get_field(receiver, attr_name));
         return;
     }
@@ -790,7 +1124,7 @@ inline void GETATTR::emit(VM& vm) const {
         return;
     }
 
-    const auto temp = makePooledCell(val);
+    const auto temp = vm.cell_pool.allocateCopy(val);
     if (auto method = lang::bind_method(temp, attr_name)) {
         vm.op_stack.push(Value(*method));
         return;
@@ -817,19 +1151,57 @@ void STRUCT_NEW::emit(VM& vm) const {
 
 void SET_FIELD::emit(VM& vm) const {
     const std::string& field_name = g_string_pool.get_string(name_id);
-    Value value = vm.op_stack.popValue();
     Value obj = vm.op_stack.popValue();
+    Value value = vm.op_stack.popValue();
     struct_set_field(obj, field_name, value);
     vm.op_stack.push(obj);
+}
+
+inline void IS_VECTOR::emit(VM& vm) const {
+    const Value value = vm.op_stack.popValue();
+    vm.op_stack.push(Value(value.deref().isVector()));
+}
+
+inline void VEC_LEN::emit(VM& vm) const {
+    const Value value = vm.op_stack.popValue();
+    const Value& vec_val = value.deref();
+    if (!vec_val.isVector()) {
+        VM_RUNTIME_ERROR(vm, "VEC_LEN requires a vector");
+    }
+    vm.op_stack.push(Value(static_cast<int64_t>(vec_val.asVector().size())));
+}
+
+namespace {
+bool match_values_equal(const Value& a, const Value& b) {
+    const Value& left = a.deref();
+    const Value& right = b.deref();
+    if (left.isNumber() && right.isNumber()) {
+        return left.asNumber() == right.asNumber();
+    }
+    if (left.getType() == Value::Type::Bool && right.getType() == Value::Type::Bool) {
+        return left.asBool() == right.asBool();
+    }
+    if (left.getType() == Value::Type::String && right.getType() == Value::Type::String) {
+        return left.asString() == right.asString();
+    }
+    return false;
+}
+} // namespace
+
+inline void MATCH_EQ::emit(VM& vm) const {
+    const Value b = vm.op_stack.popValue();
+    const Value a = vm.op_stack.popValue();
+    vm.op_stack.push(Value(match_values_equal(a, b)));
 }
 
 inline void VEC_NEW::emit(VM& vm) const {
     const auto element_count = count;
     std::vector<std::shared_ptr<Value>> elements;
     elements.reserve(element_count);
+    const VmGcSuppress gc_guard{vm};
 
     for (size_t i = 0; i < element_count; ++i) {
-        elements.push_back(makePooledCell(vm.op_stack.popValue()));
+        elements.push_back(vm.cell_pool.allocateCopy(vm.op_stack.popValue()));
     }
 
     vm.op_stack.push(Value(std::move(elements)));
@@ -838,11 +1210,12 @@ inline void VEC_NEW::emit(VM& vm) const {
 inline void DICT_NEW::emit(VM& vm) const {
     auto entry_count = count;
     std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>> dict;
+    const VmGcSuppress gc_guard{vm};
 
     for (size_t i = 0; i < entry_count; ++i) {
         Value value = vm.op_stack.popValue();
         Value key_val = vm.op_stack.popValue();
-        dict[makePooledCell(key_val)] = makePooledCell(value);
+        dict[vm.cell_pool.allocateCopy(key_val)] = vm.cell_pool.allocateCopy(value);
     }
 
     vm.op_stack.push(Value(std::move(dict)));
@@ -864,14 +1237,14 @@ inline void INDEX::emit(VM& vm) const {
             VM_RUNTIME_ERROR(vm,"Index out of range");
         }
 
-        vm.op_stack.push(Value::makeRef(vec[static_cast<size_t>(idx)]));
+        vm.op_stack.push(Value::makeRef(vec[static_cast<size_t>(idx)], vm.cell_pool));
     } else if (obj_deref.isDictionary()) {
         const auto& key = index_val.deref();
 
         auto& dict = obj_deref.asDictionary();
         for (const auto& [tkey, tval] : dict) {
             if (*tkey == key) {
-                vm.op_stack.push(Value::makeRef(tval));
+                vm.op_stack.push(Value::makeRef(tval, vm.cell_pool));
                 return;
             }
         }
@@ -884,14 +1257,14 @@ inline void INDEX::emit(VM& vm) const {
 inline void STORE_ARG::emit(VM& vm) const {
     const Value value = vm.op_stack.popValue();
 
-    const auto value_ptr = makePooledCell(value);
+    const auto value_ptr = vm.cell_pool.allocateCopy(value);
     vm.symbol_stack.back().set(var_id, value_ptr);
     vm.cache.add(var_id, value_ptr);
     LOG("STORE_ARG Done, now " << ITIS(,vm.symbol_stack.back(),.toString()));
 }
 
 void NEW_VAR::emit(VM& vm) const {
-    Value var = Value::makeEmptyRef();
+    Value var = Value::makeEmptyRef(vm.cell_pool);
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -902,7 +1275,7 @@ void NEW_VAR::emit(VM& vm) const {
 }
 
 void NEW_CONST::emit(VM& vm) const {
-    Value var = Value::makeEmptyRef();
+    Value var = Value::makeEmptyRef(vm.cell_pool);
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -913,7 +1286,7 @@ void NEW_CONST::emit(VM& vm) const {
 }
 
 void NEW_INTERN_VAR::emit(VM& vm) const {
-    Value var = Value::makeEmptyRef();
+    Value var = Value::makeEmptyRef(vm.cell_pool);
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -924,7 +1297,7 @@ void NEW_INTERN_VAR::emit(VM& vm) const {
 }
 
 void NEW_INTERN_CONST::emit(VM& vm) const {
-    Value var = Value::makeEmptyRef();
+    Value var = Value::makeEmptyRef(vm.cell_pool);
 
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
@@ -948,7 +1321,7 @@ void NEW_VAR_OR_LOAD::emit(VM& vm) const {
         if (value_ptr->isReference()) {
             vm.op_stack.push(*value_ptr);
         } else {
-            vm.op_stack.push(Value::makeRef(value_ptr));
+            vm.op_stack.push(Value::makeRef(value_ptr, vm.cell_pool));
         }
         return;
     }
@@ -957,14 +1330,14 @@ void NEW_VAR_OR_LOAD::emit(VM& vm) const {
         const auto found = vm.symbol_stack.back().get(var_id);
         if (found.has_value()) {
             LOG("NEW_VAR_OR_LOAD: Found in symbol stack");
-            vm.op_stack.push(Value::makeRef(*found));
+            vm.op_stack.push(Value::makeRef(*found, vm.cell_pool));
             vm.cache.add(var_id, *found);
             return;
         }
     }
 
     LOG("NEW_VAR_OR_LOAD: Variable not found, creating new");
-    Value var = Value::makeEmptyRef();
+    Value var = Value::makeEmptyRef(vm.cell_pool);
     if (!vm.symbol_stack.empty()) {
         vm.symbol_stack.back().set(var_id, var.getRefValuePtr());
         vm.symbol_stack.back().set_constant(var_id, false);
@@ -1031,8 +1404,8 @@ void BIND_FAST::emit(VM& vm) const {
     if (local.isReference()) {
         value_ptr = local.asReference().value_ptr;
     } else {
-        value_ptr = makePooledCell(local);
-        local = Value::makeRef(value_ptr);
+        value_ptr = vm.cell_pool.allocateCopy(local);
+        local = Value::makeRef(value_ptr, vm.cell_pool);
     }
 
     vm.symbol_stack.back().set(var_id, value_ptr);
@@ -1040,15 +1413,12 @@ void BIND_FAST::emit(VM& vm) const {
     vm.cache.add(var_id, value_ptr);
 }
 
-Value ModuleObject::import(const std::string& module_name) {
-    auto existing = get_attr(module_name);
-    if (existing.has_value()) {
-        return *existing;
-    }
+namespace {
 
+std::vector<std::string> split_module_path(const std::string& module_name) {
     std::vector<std::string> path_components;
     std::string current_component;
-    for (char c : module_name) {
+    for (const char c : module_name) {
         if (c == '.') {
             if (!current_component.empty()) {
                 path_components.push_back(current_component);
@@ -1061,10 +1431,53 @@ Value ModuleObject::import(const std::string& module_name) {
     if (!current_component.empty()) {
         path_components.push_back(current_component);
     }
+    return path_components;
+}
 
+std::optional<Value> resolve_module_path(
+    const ModuleObject* root,
+    const std::vector<std::string>& path_components
+) {
+    if (path_components.empty() || root == nullptr) {
+        return std::nullopt;
+    }
+
+    std::optional<Value> current = root->get_attr(path_components.front());
+    if (!current.has_value()) {
+        return std::nullopt;
+    }
+
+    for (size_t i = 1; i < path_components.size(); ++i) {
+        const Value& value = current->deref();
+        if (value.getType() != Value::Type::Module) {
+            return std::nullopt;
+        }
+        const auto mod = value.asModule();
+        const auto next = mod->get_attr(path_components[i]);
+        if (!next.has_value()) {
+            return std::nullopt;
+        }
+        current = next;
+    }
+
+    return current;
+}
+
+} // namespace
+
+Value ModuleObject::import(const std::string& module_name) {
+    const auto path_components = split_module_path(module_name);
     if (path_components.empty()) {
         throw RuntimeError("Invalid module name: " + module_name);
     }
+
+    if (const auto resolved = resolve_module_path(this, path_components)) {
+        if (resolved->deref().getType() == Value::Type::Module) {
+            return *resolved;
+        }
+    }
+
+    const std::string& last_component = path_components.back();
 
     std::vector search_paths = {
         std::filesystem::current_path(),
@@ -1084,7 +1497,6 @@ Value ModuleObject::import(const std::string& module_name) {
             module_path /= path_components[i];
         }
 
-        const std::string& last_component = path_components.back();
         std::filesystem::path file_path = module_path / (last_component + ".lm");
         std::filesystem::path dir_path = module_path / last_component / "main.lm";
 
@@ -1130,12 +1542,17 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         VM_RUNTIME_ERROR(caller_vm, "Function has no owner VM");
     }
 
+    const Value empty_kwargs(
+        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{}
+    );
+    const std::vector<Value> resolved = resolve_user_function_args(caller_vm, *this, args, empty_kwargs);
+
     VM& target_vm = *owner_vm;
 
     size_t old_pc = target_vm.pc;
 
-    for (size_t i = args.size(); i > 0; i--) {
-        target_vm.op_stack.push(args[i - 1]);
+    for (const auto& arg : resolved) {
+        target_vm.op_stack.push(arg);
     }
 
     target_vm.call_stack.push_back(target_vm.code.size());
@@ -1197,7 +1614,10 @@ bool irgen::IteratorObject::next(Value& out) {
     if (iterable_ref.isVector()) {
         auto& vec = iterable_ref.asVector();
         if (index < vec.size()) {
-            out = Value::makeRef(vec[index++]);
+            if (cell_pool == nullptr) {
+                throw RuntimeError("iterator has no cell pool");
+            }
+            out = Value::makeRef(vec[index++], *cell_pool);
             return true;
         }
     } else if (iterable_ref.isString()) {
@@ -1211,7 +1631,10 @@ bool irgen::IteratorObject::next(Value& out) {
         size_t i = 0;
         for (const auto& key : dict | std::views::keys) {
             if (i == index) {
-                out = Value::makeRef(key);
+                if (cell_pool == nullptr) {
+                    throw RuntimeError("iterator has no cell pool");
+                }
+                out = Value::makeRef(key, *cell_pool);
                 index++;
                 return true;
             }
@@ -1224,7 +1647,8 @@ bool irgen::IteratorObject::next(Value& out) {
 
 inline void irgen::ITER_NEW::emit(VM& vm) const {
     Value iterable = vm.op_stack.popValue();
-    auto iter_obj = std::make_shared<irgen::IteratorObject>(makePooledCell(std::move(iterable)));
+    auto iter_obj = std::make_shared<IteratorObject>(vm.cell_pool.allocateValue(std::move(iterable)));
+    iter_obj->cell_pool = &vm.cell_pool;
     vm.op_stack.push(Value(iter_obj));
 }
 

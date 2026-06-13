@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
 
+#include "irgen/cell_pool.hpp"
+
 namespace irgen {
 class Value;
 class VM;
@@ -57,7 +59,7 @@ Value exit(VM& vm, ArgT args);
  * @brief 初始化内置函数到符号表
  * @param symbols 符号表
  */
-void init_builtins(irgen::SymbolTable& symbols);
+void init_builtins(irgen::SymbolTable& symbols, irgen::CellPool& pool);
 
 /**
  * @brief 标准模块实例

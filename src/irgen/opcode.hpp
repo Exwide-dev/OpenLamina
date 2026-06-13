@@ -22,6 +22,7 @@
 #include "../tools/error.hpp"
 #include "../tools/lang/number.hpp"
 #include "../tools/lang/rational.hpp"
+#include "cell_pool.hpp"
 
 #define OPCODE_META(ClassName) \
     [[nodiscard]] std::string name() const { return #ClassName; } \
@@ -102,6 +103,9 @@ class ITER_NEXT;
 class ITER_END;
 class STRUCT_NEW;
 class SET_FIELD;
+class IS_VECTOR;
+class VEC_LEN;
+class MATCH_EQ;
 
 /**
  * @brief 数组映射模板类，使用索引访问的稀疏数组
@@ -383,7 +387,10 @@ using Opcode = std::variant<
     ITER_NEXT,
     ITER_END,
     STRUCT_NEW,
-    SET_FIELD
+    SET_FIELD,
+    IS_VECTOR,
+    VEC_LEN,
+    MATCH_EQ
 >;
 
 class SymbolTable;
@@ -393,6 +400,7 @@ class SymbolTable;
  */
 struct FunctionObject {
     std::vector<std::string> params;  ///< 函数参数列表
+    std::vector<std::vector<Opcode>> param_default_ir; ///< 各参数默认值 IR（空表示无默认值）
     std::vector<Opcode> body;         ///< 函数体的IR指令序列
     size_t location;                  ///< 函数在源码中的位置
     std::string name = "<anonymous>"; ///< 函数名称
@@ -415,6 +423,8 @@ struct FunctionObject {
  */
 using FunctionType = std::function<Value(VM&, const std::vector<Value>&)>;
 
+class SymbolTable;
+
 /**
  * @brief 槽位引用：变量绑定（透明）或地址引用（& 产生，不透明）
  */
@@ -422,7 +432,7 @@ struct Ref {
     std::shared_ptr<Value> value_ptr; ///< 指向池内槽位
     bool opaque = false;              ///< true = 地址视图（print 为 pointer，* 穿透一层）
 
-    explicit Ref(std::shared_ptr<Value> ptr, const bool is_opaque = false);
+    explicit Ref(std::shared_ptr<Value> ptr, bool is_opaque = false, CellPool* pool = nullptr);
 
     [[nodiscard]] bool isAddress() const { return opaque; }
 
@@ -446,6 +456,7 @@ struct Ref {
  */
 struct IteratorObject {
     std::shared_ptr<Value> iterable; ///< 被迭代的对象（使用指针避免循环依赖）
+    CellPool* cell_pool = nullptr;   ///< 分配迭代元素的池（所属 VM）
     size_t index = 0;                ///< 当前迭代位置
 
     /**
@@ -461,10 +472,6 @@ struct IteratorObject {
      */
     bool next(Value& out);
 };
-
-std::shared_ptr<Value> makePooledCell();
-std::shared_ptr<Value> makePooledCell(const Value& value);
-std::shared_ptr<Value> makePooledCell(Value&& value);
 
 /**
  * @brief 统一值类型，支持多种数据类型的存储和操作
@@ -516,8 +523,7 @@ public:
     /**
      * @brief 复制构造函数
      */
-    Value(const Value& other) : type(other.type), data(other.data) {
-    }
+    Value(const Value& other) = default;
 
     /**
      * @brief 移动构造函数
@@ -625,19 +631,6 @@ public:
     }
 
     /**
-     * @brief 从初始化列表构造向量
-     */
-    Value(const std::initializer_list<Value> init)
-        : type(Type::Vector) {
-        std::vector<std::shared_ptr<Value>> vec;
-        vec.reserve(init.size());
-        for (const auto& val : init) {
-            vec.push_back(makePooledCell(val));
-        }
-        data = std::move(vec);
-    }
-
-    /**
      * @brief 复制赋值运算符
      */
     Value& operator=(const Value& other) {
@@ -683,28 +676,10 @@ public:
     /**
      * @brief 创建指向值的引用（移动语义）
      */
-    static Value makeRef(Value&& val) {
-        return Value(Ref(makePooledCell(std::move(val))));
-    }
-
-    /**
-     * @brief 创建指向值的引用（复制语义）
-     */
-    static Value makeRef(const Value& val) {
-        return Value(Ref(makePooledCell(val)));
-    }
-
-    /**
-     * @brief 从智能指针创建引用
-     */
-    static Value makeRef(std::shared_ptr<Value> val_ptr) {
-        return Value(Ref(std::move(val_ptr)));
-    }
-
-    /**
-     * @brief 创建空引用
-     */
-    static Value makeEmptyRef();
+    static Value makeRef(Value&& val, CellPool& pool);
+    static Value makeRef(const Value& val, CellPool& pool);
+    static Value makeRef(std::shared_ptr<Value> val_ptr, CellPool& pool);
+    static Value makeEmptyRef(CellPool& pool);
 
     /** @brief 创建地址槽引用（&expr 的结果，指向已有槽位） */
     static Value makeAddressRef(std::shared_ptr<Value> slot) {
@@ -1263,6 +1238,7 @@ struct StructTypeDef {
     std::string name;
     bool typed = false;
     std::vector<StructFieldDef> fields;
+    std::unordered_map<std::string, std::shared_ptr<FunctionObject>> methods;
 
     [[nodiscard]] size_t required_field_count() const {
         size_t n = 0;
@@ -1332,14 +1308,6 @@ public:
     void emit(VM& vm) const;
 };
 
-inline Ref::Ref(std::shared_ptr<Value> ptr, const bool is_opaque)
-    : value_ptr(std::move(ptr)), opaque(is_opaque) {
-    if (!opaque && value_ptr->isReference()) {
-        value_ptr = makePooledCell(value_ptr->deref());
-    }
-}
-
-
 /**
  * @brief 符号表，用于管理变量的存储和访问
  */
@@ -1371,8 +1339,9 @@ public:
      * @brief 设置符号值
      * @param id 符号ID
      * @param value 值
+     * @param pool 对象池
      */
-    void set(size_t id, const Value& value);
+    void set(size_t id, const Value& value, CellPool& pool);
 
     /**
      * @brief 设置符号值（智能指针版本）
@@ -1699,7 +1668,7 @@ public:
     Value val;
     OPCODE_ARGS1V(val)
 
-    explicit PUSH(const Value& v) : val(v) {}
+    explicit PUSH(Value v) : val(std::move(v)) {}
 
     void emit(VM& vm) const;
 };
@@ -2151,9 +2120,10 @@ class CALL {
 public:
     OPCODE_META(CALL)
     size_t arg_count;
-    OPCODE_ARGS1(arg_count)
+    bool has_kwargs = false;
+    OPCODE_ARGS2(arg_count, has_kwargs)
 
-    explicit CALL(size_t arg_count) : arg_count(arg_count) {}
+    CALL(size_t count, const bool kwargs = false) : arg_count(count), has_kwargs(kwargs) {}
 
     void emit(VM& vm) const;
 };
@@ -2459,6 +2429,45 @@ public:
 };
 
 /**
+ * IS_VECTOR — 判断栈顶值是否为向量.
+ */
+class IS_VECTOR {
+public:
+    OPCODE_META(IS_VECTOR)
+    OPCODE_ARGS0()
+
+    IS_VECTOR() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * VEC_LEN — 取向量长度（栈顶须为向量）.
+ */
+class VEC_LEN {
+public:
+    OPCODE_META(VEC_LEN)
+    OPCODE_ARGS0()
+
+    VEC_LEN() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * MATCH_EQ — 模式匹配用的相等比较，类型不兼容时结果为 false.
+ */
+class MATCH_EQ {
+public:
+    OPCODE_META(MATCH_EQ)
+    OPCODE_ARGS0()
+
+    MATCH_EQ() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
  * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定.
  *
  * 作用：把 locals_stack 某槽与 symbol_stack 顶层的 var_id 指向同一 ref 单元
@@ -2589,6 +2598,8 @@ inline StringPool g_string_pool{}; ///< 全局字符串池
  */
 class VM {
 public:
+    CellPool cell_pool;                                     ///< 槽位对象池
+    size_t gc_suppress_depth = 0;                           ///< >0 时跳过扩容/周期 GC
     Stack<Value> op_stack{};                              ///< 操作数栈
     std::vector<size_t> call_stack{};                     ///< 返回地址栈
     std::string source_filename = "<unknown>";            ///< 当前执行的源文件名
@@ -2609,6 +2620,9 @@ public:
     void init_builtins();
 
     VM();
+
+    VM(VM&& other) noexcept;
+    VM& operator=(VM&& other) noexcept;
 
     /**
      * @brief 从IR指令序列构造
@@ -2653,6 +2667,26 @@ public:
      * @param value 值
      */
     void set_symbol(const std::string& name, const Value& value);
+
+private:
+    /** @brief 移动后把 cell_pool / owner_vm / 迭代器等指针绑到新地址 */
+    void rebindAfterMove(VM& source) noexcept;
+};
+
+/** @brief 批量分配期间抑制扩容 GC，避免未挂根槽位被 sweep */
+struct VmGcSuppress {
+    VM& vm;
+
+    explicit VmGcSuppress(VM& vm_) : vm(vm_) {
+        ++vm.gc_suppress_depth;
+    }
+
+    VmGcSuppress(const VmGcSuppress&) = delete;
+    VmGcSuppress& operator=(const VmGcSuppress&) = delete;
+
+    ~VmGcSuppress() {
+        --vm.gc_suppress_depth;
+    }
 };
 
 /**
@@ -2768,4 +2802,8 @@ public:
     Value import(const std::string& module_name);
 };
 }
-#undef NAME
+#undef OPCODE_ARGS0
+#undef OPCODE_ARGS1
+#undef OPCODE_ARGS2
+#undef OPCODE_ARGS1V
+#undef OPCODE_META

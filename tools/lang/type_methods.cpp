@@ -59,17 +59,17 @@ std::optional<irgen::FunctionType> bind_method(
 
     if (self.isVector()) {
         if (method_name == "append") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 if (args.size() != 1) {
                     throw RuntimeError("append requires 1 argument");
                 }
                 auto& vec = slot_value(receiver).asVector();
-                vec.push_back(irgen::makePooledCell(args[0].deref()));
+                vec.push_back(vm.cell_pool.allocateCopy(args[0].deref()));
                 return {};
             };
         }
         if (method_name == "extend") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 if (args.size() != 1) {
                     throw RuntimeError("extend requires 1 argument");
                 }
@@ -79,7 +79,7 @@ std::optional<irgen::FunctionType> bind_method(
                 }
                 auto& vec = slot_value(receiver).asVector();
                 for (const auto& elem : other.asVector()) {
-                    vec.push_back(irgen::makePooledCell(*elem));
+                    vec.push_back(vm.cell_pool.allocateCopy(*elem));
                 }
                 return {};
             };
@@ -166,7 +166,7 @@ std::optional<irgen::FunctionType> bind_method(
             };
         }
         if (method_name == "set") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 if (args.size() != 2) {
                     throw RuntimeError("set requires 2 arguments");
                 }
@@ -175,7 +175,7 @@ std::optional<irgen::FunctionType> bind_method(
                 if (auto existing = dict_find_key_ptr(dict, key)) {
                     *dict[existing] = args[1].deref();
                 } else {
-                    dict[irgen::makePooledCell(key)] = irgen::makePooledCell(args[1].deref());
+                    dict[vm.cell_pool.allocateCopy(key)] = vm.cell_pool.allocateCopy(args[1].deref());
                 }
                 return {};
             };
@@ -223,27 +223,27 @@ std::optional<irgen::FunctionType> bind_method(
             };
         }
         if (method_name == "keys") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 (void)args;
                 std::vector<std::shared_ptr<Value>> keys;
                 for (const auto& k : slot_value(receiver).asDictionary() | std::views::keys) {
-                    keys.push_back(irgen::makePooledCell(*k));
+                    keys.push_back(vm.cell_pool.allocateCopy(*k));
                 }
                 return Value(std::move(keys));
             };
         }
         if (method_name == "values") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 (void)args;
                 std::vector<std::shared_ptr<Value>> values;
                 for (const auto& v : slot_value(receiver).asDictionary() | std::views::values) {
-                    values.push_back(irgen::makePooledCell(*v));
+                    values.push_back(vm.cell_pool.allocateCopy(*v));
                 }
                 return Value(std::move(values));
             };
         }
         if (method_name == "update") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 if (args.size() != 1) {
                     throw RuntimeError("update requires 1 argument");
                 }
@@ -256,7 +256,7 @@ std::optional<irgen::FunctionType> bind_method(
                     if (auto existing = dict_find_key_ptr(dict, *k)) {
                         *dict[existing] = *v;
                     } else {
-                        dict[irgen::makePooledCell(*k)] = irgen::makePooledCell(*v);
+                        dict[vm.cell_pool.allocateCopy(*k)] = vm.cell_pool.allocateCopy(*v);
                     }
                 }
                 return {};
@@ -299,7 +299,7 @@ std::optional<irgen::FunctionType> bind_method(
             };
         }
         if (method_name == "split") {
-            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
                 std::string sep = " ";
                 if (!args.empty()) {
                     const Value& sep_val = args[0].deref();
@@ -317,10 +317,10 @@ std::optional<irgen::FunctionType> bind_method(
                 while (pos <= s.size()) {
                     const size_t found = s.find(sep, pos);
                     if (found == std::string::npos) {
-                        parts.push_back(irgen::makePooledCell(Value(s.substr(pos))));
+                        parts.push_back(vm.cell_pool.allocateValue(Value(s.substr(pos))));
                         break;
                     }
-                    parts.push_back(irgen::makePooledCell(Value(s.substr(pos, found - pos))));
+                    parts.push_back(vm.cell_pool.allocateValue(Value(s.substr(pos, found - pos))));
                     pos = found + sep.size();
                 }
                 return Value(std::move(parts));
