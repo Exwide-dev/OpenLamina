@@ -97,6 +97,8 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_FOR: return "for";
         case TokenType::KW_IN: return "in";
         case TokenType::KW_STRUCT: return "struct";
+        case TokenType::KW_MACRO: return "macro";
+        case TokenType::KW_QUOTE: return "quote";
         case TokenType::KW_TYPED: return "typed";
         case TokenType::KW_MATCH: return "match";
         case TokenType::KW_CASE: return "case";
@@ -311,6 +313,8 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"for", TokenType::KW_FOR},
         {"in", TokenType::KW_IN},
         {"struct", TokenType::KW_STRUCT},
+        {"macro", TokenType::KW_MACRO},
+        {"quote", TokenType::KW_QUOTE},
         {"typed", TokenType::KW_TYPED},
         {"match", TokenType::KW_MATCH},
         {"case", TokenType::KW_CASE},

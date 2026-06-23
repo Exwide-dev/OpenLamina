@@ -9,6 +9,8 @@
 #include "irgen/opcode.hpp"
 #include "irgen/struct_types.hpp"
 #include "irgen/iterator_ops.hpp"
+#include "irgen/macro_ops.hpp"
+#include "irgen/runtime_ast.hpp"
 #include "rational.hpp"
 #include "std_modules.hpp"
 
@@ -848,6 +850,43 @@ irgen::ModuleObject standard_mod = [] {
     return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
 }();
 
+Value eval_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("eval", 1);
+    if (!irgen::value_is_ast(args[0])) {
+        throw RuntimeError("eval expects an AST value");
+    }
+    return irgen::eval_ast_value(vm, irgen::value_as_ast(args[0]));
+}
+
+Value quote_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("quote", 3);
+    if (args[0].deref().getType() != Value::Type::Vector) {
+        throw RuntimeError("quote expects a vec of hygienic names");
+    }
+    if (args[1].deref().getType() != Value::Type::Vector) {
+        throw RuntimeError("quote expects a vec of binding expressions");
+    }
+    if (!irgen::value_is_ast(args[2])) {
+        throw RuntimeError("quote expects an AST body");
+    }
+
+    std::vector<std::string> hygienic;
+    for (const auto& elem : args[0].deref().asVector()) {
+        hygienic.push_back(elem->deref().asString());
+    }
+
+    std::vector<std::pair<std::string, irgen::RuntimeAstNode>> captured;
+    for (const auto& elem : args[1].deref().asVector()) {
+        const irgen::RuntimeAstNode bind_expr = irgen::value_as_ast(*elem);
+        const std::string name = irgen::binding_var_name_for_quote(bind_expr);
+        const Value bound = irgen::capture_quote_binding_value(vm, bind_expr);
+        captured.emplace_back(name, irgen::value_to_quote_binding_ast(bound));
+    }
+
+    irgen::RuntimeAstNode body = irgen::value_as_ast(args[2]);
+    return irgen::make_ast_value(irgen::quote_ast(hygienic, captured, std::move(body)));
+}
+
 Value rational(VM&, const std::vector<Value>& args) {
     arg_at_least("rational", 1);
     if (args.size() == 1) {
@@ -881,4 +920,6 @@ void lang::init_builtins(irgen::SymbolTable& symbols, irgen::CellPool& pool) {
     symbols.set(irgen::g_string_pool.add("help"), Value(irgen::FunctionType(help)), pool);
     symbols.set(irgen::g_string_pool.add("copyright"), Value(irgen::FunctionType(copyright)), pool);
     symbols.set(irgen::g_string_pool.add("dict"), Value(irgen::FunctionType(dict_create)), pool);
+    symbols.set(irgen::g_string_pool.add("eval"), Value(irgen::FunctionType(eval_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("quote"), Value(irgen::FunctionType(quote_fn)), pool);
 }

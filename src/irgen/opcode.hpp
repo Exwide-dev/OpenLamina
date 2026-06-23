@@ -23,6 +23,7 @@
 #include "../tools/lang/number.hpp"
 #include "../tools/lang/rational.hpp"
 #include "cell_pool.hpp"
+#include "runtime_ast.hpp"
 
 #define OPCODE_META(ClassName) \
     [[nodiscard]] std::string name() const { return #ClassName; } \
@@ -429,6 +430,8 @@ struct FunctionObject {
     std::vector<SymbolTable> closure;                  ///< 闭包捕获的变量
     bool needs_closure = false;                        ///< 是否需要闭包
     bool needs_symbol_bind = false;                    ///< 是否需将 fast 局部绑定到符号表（供嵌套闭包 LOAD）
+    bool is_macro = false;                             ///< 是否为 macro（运行时 AST 展开）
+    std::optional<size_t> variadic_param_index;        ///< *param 在 params 中的下标
 
     ~FunctionObject();
 
@@ -442,6 +445,9 @@ struct FunctionObject {
 };
 
 [[nodiscard]] Value eval_param_default(VM& vm, const std::vector<Opcode>& ir);
+
+/** @brief 执行一段 IR，返回相对执行前栈顶新增的值（无则 none） */
+[[nodiscard]] Value run_ir_snippet(VM& vm, const std::vector<Opcode>& ir);
 
 [[nodiscard]] std::vector<Value> resolve_user_function_args(
     VM& vm,
@@ -535,7 +541,8 @@ public:
         Iterator,    ///< 迭代器
         StructObject, ///< struct 实例
         FriendFunction, ///< friend func（__dispatch__ 多分派）
-        TypeHandle    ///< 类型句柄（指向 StructTypeDef，可调用、含 __convert__）
+        TypeHandle,    ///< 类型句柄（指向 StructTypeDef，可调用、含 __convert__）
+        RuntimeAst     ///< 运行时 AST 值（宏 / eval / quote）
     };
 
 private:
@@ -554,7 +561,8 @@ private:
         std::shared_ptr<IteratorObject>,
         std::shared_ptr<StructObject>,
         std::shared_ptr<FriendFunctionObject>,
-        std::shared_ptr<StructTypeDef>
+        std::shared_ptr<StructTypeDef>,
+        std::shared_ptr<RuntimeAstNode>
     > data; ///< 存储实际值的变体
 
 public:
@@ -679,6 +687,10 @@ public:
     }
 
     explicit Value(std::shared_ptr<StructTypeDef> type_def);
+
+    explicit Value(std::shared_ptr<RuntimeAstNode> ast)
+        : type(Type::RuntimeAst), data(std::move(ast)) {
+    }
 
     /**
      * @brief 复制赋值运算符
@@ -1146,6 +1158,34 @@ return std::get<CppType>(data); \
         const Value& self = deref();
         return self.type == Type::Function &&
                self.data.index() == 3;
+    }
+
+    [[nodiscard]] bool isRuntimeAst() const {
+        return deref().type == Type::RuntimeAst;
+    }
+
+    [[nodiscard]] const RuntimeAstNode& asRuntimeAst() const {
+        const Value& self = deref();
+        if (self.type != Type::RuntimeAst) {
+            throw RuntimeError("Value is not AST");
+        }
+        const auto& ptr = std::get<std::shared_ptr<RuntimeAstNode>>(self.data);
+        if (!ptr) {
+            throw RuntimeError("AST value is null");
+        }
+        return *ptr;
+    }
+
+    [[nodiscard]] RuntimeAstNode& asRuntimeAst() {
+        Value& self = deref();
+        if (self.type != Type::RuntimeAst) {
+            throw RuntimeError("Value is not AST");
+        }
+        auto& ptr = std::get<std::shared_ptr<RuntimeAstNode>>(self.data);
+        if (!ptr) {
+            throw RuntimeError("AST value is null");
+        }
+        return *ptr;
     }
 
 #undef DEFINE_AS_METHOD
@@ -2316,9 +2356,11 @@ public:
     OPCODE_META(CALL)
     size_t arg_count;
     bool has_kwargs = false;
+    uint64_t splat_mask = 0;
     OPCODE_ARGS2(arg_count, has_kwargs)
 
-    CALL(size_t count, const bool kwargs = false) : arg_count(count), has_kwargs(kwargs) {}
+    CALL(size_t count, const bool kwargs = false, const uint64_t splats = 0)
+        : arg_count(count), has_kwargs(kwargs), splat_mask(splats) {}
 
     void emit(VM& vm) const;
 };
@@ -2826,6 +2868,7 @@ public:
     size_t pc = 0;                                                  ///< 程序计数器
     size_t label_counter = 0;                                       ///< 标签计数器
     std::shared_ptr<ModuleObject> main_module;                      ///< 主模块（全局命名空间与 import 根）
+    std::vector<std::vector<SymbolTable>> macro_eval_scope_stack;   ///< eval(ast) 使用的调用方环境
 
     /**
      * @brief 初始化内置函数

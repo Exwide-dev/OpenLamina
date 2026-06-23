@@ -192,6 +192,7 @@ void test_type_convert_sugar();
 void test_exceptions_and_try_catch();
 void test_friend_func_dispatch();
 void test_iter_stopiteration_edges();
+void test_macro_system();
 
 int main() {
     //test::run("vm_goto", test_vm_goto);
@@ -201,8 +202,9 @@ int main() {
     // test::run("bytecode_optimizer", test_bytecode_optimizer);
     // test::run("type_convert_sugar", test_type_convert_sugar);
     // test::run("exceptions_and_try_catch", test_exceptions_and_try_catch);
-    test::run("friend_func_dispatch", test_friend_func_dispatch);
-    test::run("iter_stopiteration_edges", test_iter_stopiteration_edges);
+    // test::run("friend_func_dispatch", test_friend_func_dispatch);
+    // test::run("iter_stopiteration_edges", test_iter_stopiteration_edges);
+    test::run("macro_system", test_macro_system);
     //test::run("gc_memory_trend", test_gc_memory_trend);
     return test::summary();
 }

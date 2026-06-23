@@ -41,6 +41,8 @@ enum class TokenType {
     KW_FOR,      ///< for 关键字
     KW_IN,       ///< in 关键字
     KW_STRUCT,   ///< struct 关键字
+    KW_MACRO,    ///< macro 关键字
+    KW_QUOTE,    ///< quote 关键字
     KW_TYPED,    ///< typed 关键字（启用 struct 字段类型检查）
     KW_MATCH,    ///< match 关键字
     KW_CASE,     ///< case 关键字

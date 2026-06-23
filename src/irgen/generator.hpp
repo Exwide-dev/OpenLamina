@@ -3,6 +3,7 @@
 #include "parser/ast.hpp"
 #include <functional>
 #include <optional>
+#include <stack>
 #include <unordered_map>
 #include <vector>
 
@@ -160,6 +161,28 @@ struct LocalScope {
 };
 
 /**
+ * @struct LoopLabels
+ * @brief 循环跳转标签
+ */
+struct LoopLabels {
+    size_t start_label;
+    size_t end_label;
+
+    LoopLabels(size_t start, size_t end) : start_label(start), end_label(end) {
+    }
+};
+
+/**
+ * @struct FunctionContext
+ * @brief 函数编译上下文
+ */
+struct FunctionContext {
+    bool needs_closure = false;
+    bool needs_symbol_bind = false;
+    size_t func_depth = 0;
+};
+
+/**
  * @class Generator
  * @brief IR生成器类，将AST转换为字节码
  */
@@ -188,6 +211,17 @@ public:
      */
     static void replace_string(std::vector<::irgen::Opcode>& codes) {}
 };
+
+/**
+ * @brief 将单个 AST 节点编译为字节码片段
+ */
+[[nodiscard]] std::vector<::irgen::Opcode> gen_code(
+    lmx::ASTNode* node,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines
+);
 
 /**
  * @brief 执行程序；在 VM 仍存活时调用 on_result，由其检查栈顶等并返回是否成功

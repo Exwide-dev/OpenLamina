@@ -239,6 +239,10 @@ private:
 
     ASTNode* parseFuncDecl();
 
+    ASTNode* parseMacroDecl();
+
+    ExprNode* parseQuoteExpr();
+
     ASTNode* parseStructDecl();
 
     TypeNode* parseTypeName();
@@ -427,6 +431,11 @@ private:
      * @return 形参列表（可含默认值）
      */
     std::vector<FuncParam> parseParamList();
+
+    /**
+     * @brief 解析实参列表直到 end_token
+     */
+    std::vector<CallArgument> parseArgListUntil(TokenType end_token);
 
     /**
      * @brief 解析函数调用实参列表

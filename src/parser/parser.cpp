@@ -516,7 +516,12 @@ ASTNode* Parser::parseStatement() {
         return parseFuncDecl();
     }
 
-    if (current == TokenType::KW_LET || current == TokenType::KW_CONST ||
+    if (current == TokenType::KW_MACRO) {
+        return parseMacroDecl();
+    }
+
+    if (current == TokenType::KW_LET || current == TokenType::KW_VAR ||
+        current == TokenType::KW_CONST ||
         current == TokenType::KW_INTERN || current == TokenType::KW_EXPORT) {
         return parseVarDecl();
     }
@@ -608,6 +613,14 @@ ASTNode* Parser::parseStatement() {
                 auto args = parseArgList();
                 consume(TokenType::RPAREN);
                 expr = make_node_at<FuncCallExprNode>(line, expr, args);
+            } else if (check(TokenType::LBRACE)) {
+                const int line = current_token().line;
+                match(TokenType::LBRACE);
+                skipNewlines();
+                auto args = parseArgListUntil(TokenType::RBRACE);
+                skipNewlines();
+                consume(TokenType::RBRACE);
+                expr = make_node_at<MacroCallExprNode>(line, expr, std::move(args));
             } else if (check(TokenType::OPER_DOT)) {
                 const int line = current_token().line;
                 match(TokenType::OPER_DOT);
@@ -666,7 +679,7 @@ ASTNode* Parser::parseVarDecl() {
         }
     } else if (match(TokenType::KW_CONST)) {
         is_const = true;
-    } else if (match(TokenType::KW_LET)) {
+    } else if (match(TokenType::KW_LET) || match(TokenType::KW_VAR)) {
     }
 
     std::string name = current_token().value;
@@ -969,6 +982,31 @@ ASTNode* Parser::parseFriendFuncDecl() {
     }
 
     return make_node_at<FriendFuncDeclNode>(decl_line, name, std::move(params), body, ret_type);
+}
+
+ASTNode* Parser::parseMacroDecl() {
+    LOG("Parsing macro_decl");
+    const int macro_line = current_token().line;
+    consume(TokenType::KW_MACRO);
+    std::string name = current_token().value;
+    consume(TokenType::IDENTIFIER);
+    consume(TokenType::LPAREN);
+    auto params = parseParamList();
+    consume(TokenType::RPAREN);
+
+    const int body_line = current_token().line;
+    consume(TokenType::LBRACE);
+    push_context(ParserContext::FunctionBody);
+    auto body = parseBlockStatementList();
+    pop_context();
+    consume(TokenType::RBRACE);
+
+    return make_node_at<MacroDeclNode>(
+        macro_line,
+        name,
+        std::move(params),
+        make_node_at<BlockStmtNode>(body_line, body)
+    );
 }
 
 ASTNode* Parser::parseFuncDecl() {
@@ -1709,6 +1747,14 @@ ExprNode* Parser::parsePostfixExpr(const bool parse_do_suffix) {
             skipNewlines();
             consume(TokenType::RPAREN);
             expr = make_node_at<FuncCallExprNode>(line, expr, args);
+        } else if (check(TokenType::LBRACE)) {
+            const int line = current_token().line;
+            match(TokenType::LBRACE);
+            skipNewlines();
+            auto args = parseArgListUntil(TokenType::RBRACE);
+            skipNewlines();
+            consume(TokenType::RBRACE);
+            expr = make_node_at<MacroCallExprNode>(line, expr, std::move(args));
         } else if (check(TokenType::OPER_DOT)) {
             const int line = current_token().line;
             match(TokenType::OPER_DOT);
@@ -1767,6 +1813,10 @@ ExprNode* Parser::parseFactor() {
         const int line = current_token().line;
         advance();
         return make_node_at<PlaceholderNode>(line);
+    }
+
+    if (check(TokenType::KW_QUOTE)) {
+        return parseQuoteExpr();
     }
 
     if (check(TokenType::IDENTIFIER)) {
@@ -1864,6 +1914,56 @@ ExprNode* Parser::parseFactor() {
     return nullptr;
 }
 
+ExprNode* Parser::parseQuoteExpr() {
+    LOG("Parsing quote_expr");
+    const int line = current_token().line;
+    consume(TokenType::KW_QUOTE);
+    consume(TokenType::LPAREN);
+
+    std::vector<std::string> hygienic;
+    skipNewlines();
+    if (!check(TokenType::RPAREN)) {
+        hygienic.push_back(current_token().value);
+        consume(TokenType::IDENTIFIER);
+        while (match(TokenType::OPER_COMMA)) {
+            skipNewlines();
+            hygienic.push_back(current_token().value);
+            consume(TokenType::IDENTIFIER);
+        }
+    }
+    skipNewlines();
+    consume(TokenType::RPAREN);
+
+    consume(TokenType::KW_WITH);
+    consume(TokenType::LPAREN);
+
+    std::vector<ExprNode*> bindings;
+    skipNewlines();
+    if (!check(TokenType::RPAREN)) {
+        bindings.push_back(parseExpression());
+        while (match(TokenType::OPER_COMMA)) {
+            skipNewlines();
+            bindings.push_back(parseExpression());
+        }
+    }
+    skipNewlines();
+    consume(TokenType::RPAREN);
+
+    const int body_line = current_token().line;
+    consume(TokenType::LBRACE);
+    push_context(ParserContext::FunctionBody);
+    auto body_stmts = parseBlockStatementList();
+    pop_context();
+    consume(TokenType::RBRACE);
+
+    return make_node_at<QuoteExprNode>(
+        line,
+        std::move(hygienic),
+        std::move(bindings),
+        make_node_at<BlockStmtNode>(body_line, body_stmts)
+    );
+}
+
 ExprNode* Parser::parseDoExpr() {
     return dynamic_cast<ExprNode*>(parseDecoratedDoDecl());
 }
@@ -1877,70 +1977,61 @@ std::vector<FuncParam> Parser::parseParamList() {
         return params;
     }
 
-    std::string name = current_token().value;
-    consume(TokenType::IDENTIFIER);
-
-    std::string type_name;
-    bool has_type = false;
-    if (match(TokenType::OPER_COLON)) {
-        TypeNode* param_type = parseTypeName();
-        type_name = param_type->name;
-        delete param_type;
-        has_type = true;
-    }
-
-    ExprNode* default_value = nullptr;
-    if (match(TokenType::ASSIGN)) {
-        default_value = parseExpression();
-    }
-    params.emplace_back(std::move(name), default_value, std::move(type_name), has_type);
-
-    while (match(TokenType::OPER_COMMA)) {
-        skipNewlines();
-        name = current_token().value;
+    auto parse_one = [&]() {
+        const bool variadic = match(TokenType::OPER_MUL);
+        std::string name = current_token().value;
         consume(TokenType::IDENTIFIER);
-        type_name.clear();
-        has_type = false;
+
+        std::string type_name;
+        bool has_type = false;
         if (match(TokenType::OPER_COLON)) {
             TypeNode* param_type = parseTypeName();
             type_name = param_type->name;
             delete param_type;
             has_type = true;
         }
-        default_value = nullptr;
+
+        ExprNode* default_value = nullptr;
         if (match(TokenType::ASSIGN)) {
             default_value = parseExpression();
         }
-        params.emplace_back(std::move(name), default_value, std::move(type_name), has_type);
+        params.emplace_back(std::move(name), default_value, std::move(type_name), has_type, variadic);
+    };
+
+    parse_one();
+    while (match(TokenType::OPER_COMMA)) {
+        skipNewlines();
+        parse_one();
     }
 
     skipNewlines();
     return params;
 }
 
-std::vector<CallArgument> Parser::parseArgList() {
+std::vector<CallArgument> Parser::parseArgListUntil(const TokenType end_token) {
     LOG("Parsing arg_list");
     std::vector<CallArgument> args;
 
     skipNewlines();
-    if (check(TokenType::RPAREN)) {
+    if (check(end_token)) {
         return args;
     }
 
     while (true) {
         skipNewlines();
-        if (check(TokenType::IDENTIFIER)) {
+        const bool splat = match(TokenType::OPER_MUL);
+        if (check(TokenType::IDENTIFIER) && !splat) {
             const ParserState saved = save_state();
             const std::string name = current_token().value;
             advance();
             if (match(TokenType::ASSIGN)) {
-                args.emplace_back(parseExpression(), name);
+                args.emplace_back(parseExpression(), name, false);
             } else {
                 restore_state(saved);
-                args.emplace_back(parseExpression());
+                args.emplace_back(parseExpression(), std::string{}, splat);
             }
         } else {
-            args.emplace_back(parseExpression());
+            args.emplace_back(parseExpression(), std::string{}, splat);
         }
 
         if (!match(TokenType::OPER_COMMA)) {
@@ -1951,6 +2042,10 @@ std::vector<CallArgument> Parser::parseArgList() {
 
     skipNewlines();
     return args;
+}
+
+std::vector<CallArgument> Parser::parseArgList() {
+    return parseArgListUntil(TokenType::RPAREN);
 }
 
 std::vector<ASTNode*> Parser::parseVecElementList() {

@@ -55,6 +55,10 @@ set(OPENLAMINA_CORE_SOURCES
         src/irgen/value_copy.hpp
         src/irgen/friend_function.cpp
         src/irgen/friend_function.hpp
+        src/irgen/runtime_ast.cpp
+        src/irgen/runtime_ast.hpp
+        src/irgen/macro_ops.cpp
+        src/irgen/macro_ops.hpp
         src/repl/repl.cpp
         src/repl/repl.hpp
         tools/cli.cpp
@@ -84,6 +88,8 @@ set(OPENLAMINA_TEST_SOURCES
         src/irgen/exceptions.cpp
         src/irgen/friend_function.cpp
         src/irgen/value_copy.cpp
+        src/irgen/runtime_ast.cpp
+        src/irgen/macro_ops.cpp
 )
 
 add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})

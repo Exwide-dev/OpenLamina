@@ -15,6 +15,8 @@
 #include "opcode.hpp"
 #include "struct_types.hpp"
 #include "friend_function.hpp"
+#include "runtime_ast.hpp"
+#include "macro_ops.hpp"
 
 namespace {
 ::irgen::Value literal_to_value(const lmx::ExprNode* expr) {
@@ -135,20 +137,6 @@ struct ResolvedVar {
 
 namespace lm::irgen {
 thread_local size_t label_counter = 0;
-
-struct LoopLabels {
-    size_t start_label;
-    size_t end_label;
-
-    LoopLabels(size_t start, size_t end) : start_label(start), end_label(end) {
-    }
-};
-
-struct FunctionContext {
-    bool needs_closure = false;
-    bool needs_symbol_bind = false;
-    size_t func_depth = 0;
-};
 
 std::vector<::irgen::Opcode> gen_code(
     lmx::ASTNode* node,
@@ -498,6 +486,89 @@ std::shared_ptr<::irgen::FunctionObject> compile_function_decl(
             push_op(code, src, src_line_no, ::irgen::STORE());
         }
     }
+
+    return func_obj;
+}
+
+std::shared_ptr<::irgen::FunctionObject> compile_macro_decl(
+    const lmx::MacroDeclNode* macro_decl_node,
+    std::vector<::irgen::Opcode>& code,
+    std::stack<LoopLabels>& loop_stack,
+    Stack<LocalScope>& local_scope_stack,
+    std::vector<FunctionContext>& func_context_stack,
+    const std::vector<std::string>& source_lines,
+    const std::string& src,
+    int src_line_no
+) {
+    const size_t func_label = label_counter++;
+    const size_t func_end_label = label_counter++;
+
+    auto func_obj = std::make_shared<::irgen::FunctionObject>();
+    func_obj->is_macro = true;
+    func_obj->params.clear();
+    func_obj->param_default_ir.clear();
+    for (size_t i = 0; i < macro_decl_node->params.size(); ++i) {
+        const auto& param = macro_decl_node->params[i];
+        func_obj->params.push_back(param.name);
+        if (param.is_variadic) {
+            func_obj->variadic_param_index = i;
+        }
+        func_obj->param_default_ir.emplace_back();
+    }
+    func_obj->location = func_label;
+    func_obj->name = macro_decl_node->name;
+
+    local_scope_stack.emplace();
+    local_scope_stack.top().depth = local_scope_stack.size() - 1;
+
+    func_context_stack.emplace_back();
+    func_context_stack.back().func_depth = local_scope_stack.top().depth;
+
+    std::vector<size_t> param_slots;
+    param_slots.reserve(macro_decl_node->params.size());
+    for (const auto& param : macro_decl_node->params) {
+        param_slots.push_back(
+            local_scope_stack.top().allocate_slot(param.name, false, lmx::Visibility::Internal)
+        );
+    }
+
+    std::vector<::irgen::Opcode> body_code;
+    if (macro_decl_node->body) {
+        body_code = gen_code(
+            macro_decl_node->body,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines
+        );
+    }
+
+    func_obj->needs_closure = func_context_stack.back().needs_closure;
+    func_obj->needs_symbol_bind = func_context_stack.back().needs_symbol_bind;
+    func_context_stack.pop_back();
+    const bool bind_symbols = func_obj->needs_closure || func_obj->needs_symbol_bind;
+
+    code.emplace_back(::irgen::GOTO(func_end_label));
+    code.emplace_back(::irgen::LABEL(func_label));
+    code.emplace_back(::irgen::ENTER_SCOPE());
+
+    for (size_t i = 0; i < macro_decl_node->params.size(); ++i) {
+        const auto& param = macro_decl_node->params[i];
+        code.emplace_back(::irgen::STORE_FAST(param_slots[i]));
+        if (bind_symbols) {
+            emit_bind_fast(code, param_slots[i], param.name);
+        }
+    }
+
+    code.insert(code.end(), body_code.begin(), body_code.end());
+    code.emplace_back(::irgen::RET_THEN_LEAVE_SCOPE());
+    local_scope_stack.pop();
+
+    code.emplace_back(::irgen::LABEL(func_end_label));
+
+    push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(func_obj)));
+    push_op(code, src, src_line_no, ::irgen::NEW_VAR(macro_decl_node->name));
+    push_op(code, src, src_line_no, ::irgen::STORE());
 
     return func_obj;
 }
@@ -920,11 +991,15 @@ std::vector<::irgen::Opcode> gen_code(
         const auto* func_call_node = dynamic_cast<lmx::FuncCallExprNode*>(node);
 
         size_t positional_count = 0;
+        uint64_t splat_mask = 0;
         std::vector<const lmx::CallArgument*> keyword_args;
         for (const auto& arg : func_call_node->args) {
             if (arg.name.empty()) {
                 auto arg_code = gen_code(arg.value, loop_stack, local_scope_stack, func_context_stack, source_lines);
                 code.insert(code.end(), arg_code.begin(), arg_code.end());
+                if (arg.is_splat) {
+                    splat_mask |= (1ULL << positional_count);
+                }
                 ++positional_count;
             } else {
                 keyword_args.push_back(&arg);
@@ -953,7 +1028,7 @@ std::vector<::irgen::Opcode> gen_code(
             );
             code.insert(code.end(), receiver_code.begin(), receiver_code.end());
             push_op(code, src, src_line_no, ::irgen::GETATTR(member_callee->member));
-            push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs));
+            push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs, splat_mask));
             return code;
         }
 
@@ -962,7 +1037,7 @@ std::vector<::irgen::Opcode> gen_code(
                     dynamic_cast<const lmx::VarRefNode*>(func_call_node->func_expr)->name;
             if (::irgen::is_type_name(callee)) {
                 push_op(code, src, src_line_no, ::irgen::LOAD(callee));
-                push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs));
+                push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs, splat_mask));
                 return code;
             }
         }
@@ -970,7 +1045,73 @@ std::vector<::irgen::Opcode> gen_code(
         auto bcode = gen_code(func_call_node->func_expr, loop_stack, local_scope_stack, func_context_stack, source_lines);
         code.insert(code.end(), bcode.begin(), bcode.end());
 
-        push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs));
+        push_op(code, src, src_line_no, ::irgen::CALL(positional_count, has_kwargs, splat_mask));
+    } else if (node->kind == lmx::ASTNodeType::MacroCallExpr) {
+        const auto* macro_call_node = dynamic_cast<lmx::MacroCallExprNode*>(node);
+
+        size_t positional_count = 0;
+        uint64_t splat_mask = 0;
+        for (const auto& arg : macro_call_node->args) {
+            if (!arg.name.empty()) {
+                throw RuntimeError("macro arguments cannot be keyword arguments");
+            }
+            if (arg.is_splat) {
+                auto arg_code = gen_code(arg.value, loop_stack, local_scope_stack, func_context_stack, source_lines);
+                code.insert(code.end(), arg_code.begin(), arg_code.end());
+                splat_mask |= (1ULL << positional_count);
+            } else {
+                push_op(
+                    code,
+                    src,
+                    src_line_no,
+                    ::irgen::PUSH(::irgen::make_ast_value(::irgen::ast_from_parse(arg.value)))
+                );
+            }
+            ++positional_count;
+        }
+
+        if (macro_call_node->macro_expr->kind == lmx::ASTNodeType::VarRef) {
+            const auto& callee = dynamic_cast<const lmx::VarRefNode*>(macro_call_node->macro_expr)->name;
+            push_op(code, src, src_line_no, ::irgen::LOAD(callee));
+        } else {
+            auto callee_code = gen_code(
+                macro_call_node->macro_expr,
+                loop_stack,
+                local_scope_stack,
+                func_context_stack,
+                source_lines
+            );
+            code.insert(code.end(), callee_code.begin(), callee_code.end());
+        }
+
+        push_op(code, src, src_line_no, ::irgen::CALL(positional_count, false, splat_mask));
+    } else if (node->kind == lmx::ASTNodeType::QuoteExpr) {
+        const auto* quote_node = dynamic_cast<const lmx::QuoteExprNode*>(node);
+
+        std::vector<std::shared_ptr<::irgen::Value>> hygienic_vec;
+        for (const auto& name : quote_node->hygienic_names) {
+            hygienic_vec.push_back(
+                std::make_shared<::irgen::Value>(::irgen::Value(name))
+            );
+        }
+        std::vector<std::shared_ptr<::irgen::Value>> binding_vec;
+        for (const auto* binding : quote_node->bindings) {
+            binding_vec.push_back(
+                std::make_shared<::irgen::Value>(
+                    ::irgen::make_ast_value(::irgen::ast_from_parse(binding))
+                )
+            );
+        }
+        push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(std::move(hygienic_vec))));
+        push_op(code, src, src_line_no, ::irgen::PUSH(::irgen::Value(std::move(binding_vec))));
+        push_op(
+            code,
+            src,
+            src_line_no,
+            ::irgen::PUSH(::irgen::make_ast_value(::irgen::ast_from_parse(quote_node->body)))
+        );
+        push_op(code, src, src_line_no, ::irgen::LOAD("quote"));
+        push_op(code, src, src_line_no, ::irgen::CALL(3));
     } else if (node->kind == lmx::ASTNodeType::VMCall) {
         // todo!
     } else if (node->kind == lmx::ASTNodeType::BlockStmt) {
@@ -1135,6 +1276,18 @@ std::vector<::irgen::Opcode> gen_code(
         );
         push_op(code, src, src_line_no, ::irgen::NEW_VAR(struct_name));
         push_op(code, src, src_line_no, ::irgen::STORE());
+    } else if (node->kind == lmx::ASTNodeType::MacroDecl) {
+        const auto* macro_decl_node = dynamic_cast<lmx::MacroDeclNode*>(node);
+        compile_macro_decl(
+            macro_decl_node,
+            code,
+            loop_stack,
+            local_scope_stack,
+            func_context_stack,
+            source_lines,
+            src,
+            src_line_no
+        );
     } else if (node->kind == lmx::ASTNodeType::FuncDecl) {
         const auto* func_decl_node = dynamic_cast<lmx::FuncDeclNode*>(node);
         compile_function_decl(

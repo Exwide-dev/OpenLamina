@@ -90,7 +90,10 @@ enum class ASTNodeType {
     Dictionary,    ///< 字典字面量
     DictEntry,     ///< 字典条目
     StructDecl,    ///< struct 类型声明
-    Comprehension  ///< 向量推导式
+    Comprehension,  ///< 向量推导式
+    MacroDecl,      ///< macro 声明
+    MacroCallExpr,  ///< macro{...} 调用
+    QuoteExpr       ///< quote(...) with (...) { ... }
 };
 
 struct ASTNode;
@@ -162,12 +165,20 @@ struct FuncParam {
     std::string name;
     std::string type_name;
     bool has_type = false;
+    bool is_variadic = false;
     ExprNode* default_value = nullptr;
 
-    FuncParam(std::string n, ExprNode* def = nullptr, std::string ty = {}, const bool typed = false)
+    FuncParam(
+        std::string n,
+        ExprNode* def = nullptr,
+        std::string ty = {},
+        const bool typed = false,
+        const bool variadic = false
+    )
         : name(std::move(n)),
           type_name(std::move(ty)),
           has_type(typed),
+          is_variadic(variadic),
           default_value(def) {
     }
 };
@@ -178,10 +189,11 @@ struct FuncParam {
  */
 struct CallArgument {
     std::string name;  ///< 空表示位置参数
+    bool is_splat = false;
     ExprNode* value = nullptr;
 
-    CallArgument(ExprNode* v, std::string n = {})
-        : name(std::move(n)), value(v) {
+    CallArgument(ExprNode* v, std::string n = {}, const bool splat = false)
+        : name(std::move(n)), is_splat(splat), value(v) {
     }
 };
 
@@ -700,6 +712,62 @@ struct BlockStmtNode final : ASTNode {
 };
 
 /**
+ * @struct MacroCallExprNode
+ * @brief macro{...} 宏调用表达式
+ */
+struct MacroCallExprNode final : ExprNode {
+    ExprNode* macro_expr;
+    std::vector<CallArgument> args;
+
+    MacroCallExprNode(ExprNode* e, std::vector<CallArgument> a)
+        : ExprNode(ASTNodeType::MacroCallExpr), macro_expr(e), args(std::move(a)) {
+    }
+
+    ~MacroCallExprNode() override {
+        delete macro_expr;
+        for (const auto& arg : args) {
+            delete arg.value;
+        }
+    }
+
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
+};
+
+/**
+ * @struct QuoteExprNode
+ * @brief quote(id...) with (binding...) { body }
+ */
+struct QuoteExprNode final : ExprNode {
+    std::vector<std::string> hygienic_names;
+    std::vector<ExprNode*> bindings;
+    BlockStmtNode* body = nullptr;
+
+    QuoteExprNode(
+        std::vector<std::string> hygienic,
+        std::vector<ExprNode*> binds,
+        BlockStmtNode* b
+    )
+        : ExprNode(ASTNodeType::QuoteExpr),
+          hygienic_names(std::move(hygienic)),
+          bindings(std::move(binds)),
+          body(b) {
+    }
+
+    ~QuoteExprNode() override {
+        delete body;
+        for (const auto* bind : bindings) {
+            delete bind;
+        }
+    }
+
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
+};
+
+/**
  * @struct VarDeclNode
  * @brief 变量声明节点
  */
@@ -837,6 +905,37 @@ struct FuncDeclNode final : ASTNode {
             delete type;
         }
         delete ret_type;
+    }
+};
+
+/**
+ * @struct MacroDeclNode
+ * @brief macro 声明节点
+ */
+struct MacroDeclNode final : ASTNode {
+    std::string name;
+    std::vector<FuncParam> params;
+    BlockStmtNode* body = nullptr;
+    Visibility visibility = Visibility::Exported;
+
+    MacroDeclNode(
+        std::string n,
+        std::vector<FuncParam> p,
+        BlockStmtNode* b,
+        Visibility v = Visibility::Exported
+    )
+        : ASTNode(ASTNodeType::MacroDecl),
+          name(std::move(n)),
+          params(std::move(p)),
+          body(b),
+          visibility(v) {
+    }
+
+    ~MacroDeclNode() override {
+        delete body;
+        for (const auto& param : params) {
+            delete param.default_value;
+        }
     }
 };
 

@@ -16,6 +16,8 @@
 #include <ranges>
 
 #include "generator.hpp"
+#include "runtime_ast.hpp"
+#include "macro_ops.hpp"
 #include "struct_types.hpp"
 #include "../front-end/front_end.hpp"
 
@@ -91,6 +93,8 @@ std::string Value::type_name() const {
             return asStruct()->type->name;
         case Type::FriendFunction:
             return "friend func";
+        case Type::RuntimeAst:
+            return "AST";
         case Type::TypeHandle:
             return asTypeDef()->name;
         case Type::Iterator:
@@ -180,6 +184,8 @@ std::string Value::displayString() const {
             const auto& ff = asFriendFunction();
             return std::format("<friend func {}>", ff->name);
         }
+        case Type::RuntimeAst:
+            return std::format("<ast {}>", ast_to_source(asRuntimeAst()));
         default: return "<__UNKNOWN_Value>";
     }
 }
@@ -261,6 +267,8 @@ std::string Value::printString() const {
             const auto& ff = asFriendFunction();
             return std::format("<friend func {}>", ff->name);
         }
+        case Type::RuntimeAst:
+            return ast_to_source(asRuntimeAst());
         default: return "<__UNKNOWN_Value>";
     }
 }
@@ -775,9 +783,12 @@ inline void ADD::emit(VM& vm) {
 }
 
 inline void MUL::emit(VM& vm) {
+    LOG("[MUL] stack before=" << vm.op_stack.size());
     Value rhs = vm.op_stack.popValue();
     Value lhs = vm.op_stack.popValue();
+    LOG("[MUL] lhs=" << lhs.deref().printString() << " rhs=" << rhs.deref().printString());
     vm.op_stack.push(lhs.deref() * rhs.deref());
+    LOG("[MUL] result=" << vm.op_stack.top().deref().printString());
 }
 
 inline void SUB::emit(VM& vm) {
@@ -1046,14 +1057,108 @@ inline void LEAVE_SCOPE::emit(VM& vm) {
 }
 
 Value eval_param_default(VM& vm, const std::vector<Opcode>& ir) {
+    if (Value result = run_ir_snippet(vm, ir); result.getType() != Value::Type::None) {
+        return result;
+    }
+    throw RuntimeError("parameter default did not produce a value");
+}
+
+namespace {
+
+std::unordered_map<size_t, size_t> collect_ir_labels(const std::vector<Opcode>& ir) {
+    std::unordered_map<size_t, size_t> labels;
+    for (size_t i = 0; i < ir.size(); ++i) {
+        std::visit(
+            [&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, LABEL>) {
+                    labels[op.label_id] = i;
+                }
+            },
+            ir[i]
+        );
+    }
+    return labels;
+}
+
+void emit_ir_op(VM& vm, Opcode& op) {
+    const size_t saved_pc = vm.pc;
+    std::visit([&](auto& opcode) { opcode.emit(vm); }, op);
+    vm.pc = saved_pc;
+}
+
+void log_snippet_op_vm(const size_t ipc, const Opcode& op, const VM& vm) {
+    std::visit([&](const auto& opcode) {
+        LOG("[snippet] ipc=" << ipc << " op=" << opcode.name()
+            << " stack=" << vm.op_stack.size()
+            << " sym=" << vm.symbol_stack.size()
+            << " loc=" << vm.locals_stack.size()
+            << " cache=" << vm.cache.scope_depth());
+    }, op);
+}
+
+} // namespace
+
+Value run_ir_snippet(VM& vm, const std::vector<Opcode>& ir) {
+    if (ir.empty()) {
+        return Value();
+    }
+
     const size_t stack_depth = vm.op_stack.size();
-    for (auto op : ir) {
-        std::visit([&](auto& opcode) { opcode.emit(vm); }, op);
+    LOG("[snippet] BEGIN ir_size=" << ir.size() << " stack_depth=" << stack_depth);
+    const auto labels = collect_ir_labels(ir);
+    size_t ipc = 0;
+
+    while (ipc < ir.size()) {
+        auto op = ir[ipc];
+        bool advance = true;
+
+        log_snippet_op_vm(ipc, op, vm);
+
+        const auto dispatch = [&]<typename T>(T& opcode) {
+            if constexpr (std::is_same_v<T, LABEL>) {
+                (void)opcode;
+            } else if constexpr (std::is_same_v<T, GOTO>) {
+                ipc = labels.at(opcode.label_id);
+                advance = false;
+            } else if constexpr (std::is_same_v<T, GOTOIF>) {
+                if (vm.op_stack.popValue().asBool()) {
+                    ipc = labels.at(opcode.label_id);
+                    advance = false;
+                }
+            } else if constexpr (std::is_same_v<T, GOTOIFNOT>) {
+                if (!vm.op_stack.popValue().asBool()) {
+                    ipc = labels.at(opcode.label_id);
+                    advance = false;
+                }
+            } else if constexpr (std::is_same_v<T, RET> || std::is_same_v<T, RET_THEN_LEAVE_SCOPE>) {
+                LOG("[snippet] hit RET at ipc=" << ipc);
+                ipc = ir.size();
+                advance = false;
+            } else if constexpr (std::is_same_v<T, MUL>) {
+                LOG("[snippet] MUL before stack=" << vm.op_stack.size());
+                emit_ir_op(vm, op);
+                LOG("[snippet] MUL after stack=" << vm.op_stack.size()
+                    << " top=" << (vm.op_stack.empty() ? "empty" : vm.op_stack.top().deref().printString()));
+            } else {
+                emit_ir_op(vm, op);
+            }
+        };
+
+        std::visit(dispatch, op);
+        if (advance) {
+            ++ipc;
+        }
     }
+
+    LOG("[snippet] END stack=" << vm.op_stack.size() << " delta=" << (vm.op_stack.size() - stack_depth));
     if (vm.op_stack.size() <= stack_depth) {
-        throw RuntimeError("parameter default did not produce a value");
+        LOG("[snippet] no result value");
+        return Value();
     }
-    return vm.op_stack.popValue();
+    Value out = vm.op_stack.popValue();
+    LOG("[snippet] returning " << out.deref().printString());
+    return out;
 }
 
 namespace {
@@ -1091,7 +1196,30 @@ std::vector<Value> resolve_user_function_args(
     std::vector<Value> resolved(param_count);
     std::vector<bool> filled(param_count, false);
 
-    if (positional.size() > param_count) {
+    if (func_obj.variadic_param_index.has_value()) {
+        const size_t vi = *func_obj.variadic_param_index;
+        if (positional.size() < vi) {
+            VM_RUNTIME_ERROR(
+                vm,
+                std::format(
+                    "function {} expects at least {} argument(s), got {}",
+                    func_obj.name,
+                    vi,
+                    positional.size()
+                )
+            );
+        }
+        for (size_t i = 0; i < vi; ++i) {
+            resolved[i] = positional[i];
+            filled[i] = true;
+        }
+        std::vector<std::shared_ptr<Value>> packed;
+        for (size_t i = vi; i < positional.size(); ++i) {
+            packed.push_back(vm.cell_pool.allocateCopy(positional[i]));
+        }
+        resolved[vi] = Value(std::move(packed));
+        filled[vi] = true;
+    } else if (positional.size() > param_count) {
         VM_RUNTIME_ERROR(
             vm,
             std::format(
@@ -1101,11 +1229,11 @@ std::vector<Value> resolve_user_function_args(
                 positional.size()
             )
         );
-    }
-
-    for (size_t i = 0; i < positional.size(); ++i) {
-        resolved[i] = positional[i];
-        filled[i] = true;
+    } else {
+        for (size_t i = 0; i < positional.size(); ++i) {
+            resolved[i] = positional[i];
+            filled[i] = true;
+        }
     }
 
     const Value& kwargs = kwargs_value.deref();
@@ -1206,14 +1334,16 @@ inline void CALL::emit(VM& vm) const {
 
     if (func.isTypeHandle()) {
         const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
-        std::vector<Value> positional = pop_positional_args(vm, arg_count);
+        std::vector<Value> raw = pop_positional_args(vm, arg_count);
+        const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
         vm.op_stack.push(type_call(vm, func.asTypeDef(), positional, kwargs));
         return;
     }
 
     if (func.isFriendFunction()) {
         const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
-        std::vector<Value> positional = pop_positional_args(vm, arg_count);
+        std::vector<Value> raw = pop_positional_args(vm, arg_count);
+        const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
         friend_invoke_dispatch(vm, func.asFriendFunction(), positional, kwargs);
         return;
     }
@@ -1225,8 +1355,19 @@ inline void CALL::emit(VM& vm) const {
     if (func.isUserFunction()) {
         auto func_obj = func.asFunctionObject();
         const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
-        std::vector<Value> positional = pop_positional_args(vm, arg_count);
+        std::vector<Value> raw = pop_positional_args(vm, arg_count);
+        const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
         std::vector<Value> resolved = resolve_user_function_args(vm, *func_obj, positional, kwargs);
+
+        if (func_obj->is_macro) {
+            if (!func_obj->owner_vm) {
+                func_obj->owner_vm = &vm;
+            }
+            vm.macro_eval_scope_stack.push_back(vm.symbol_stack);
+            invoke_user_function_with_args(vm, func_obj, std::move(resolved));
+            return;
+        }
+
         invoke_user_function_with_args(vm, func_obj, std::move(resolved));
         return;
     }
@@ -1235,7 +1376,8 @@ inline void CALL::emit(VM& vm) const {
         VM_RUNTIME_ERROR(vm, "keyword arguments are not supported for builtin functions");
     }
 
-    const std::vector<Value> args = pop_positional_args(vm, arg_count);
+    std::vector<Value> raw = pop_positional_args(vm, arg_count);
+    const std::vector<Value> args = resolve_call_args_with_splat(vm, raw, splat_mask);
 
     auto builtin_func = func.asFunction();
     auto result = builtin_func(vm, args);
@@ -1244,6 +1386,8 @@ inline void CALL::emit(VM& vm) const {
 
 inline void RET::emit(VM& vm) {
     LOG("RET: call_stack size=" << vm.call_stack.size() << ", call_func_stack size=" << vm.call_func_stack.size());
+    const bool from_macro =
+        !vm.call_func_stack.empty() && vm.call_func_stack.back()->is_macro;
     if (!vm.call_stack.empty()) {
         vm.pc = vm.call_stack.back();
         vm.call_stack.pop_back();
@@ -1260,6 +1404,38 @@ inline void RET::emit(VM& vm) {
         }
     } else {
         VM_RUNTIME_ERROR(vm,"RET when call stack is empty");
+    }
+
+    if (from_macro) {
+        LOG("[macro_ret] step0 from_macro op_stack=" << vm.op_stack.size()
+            << " sym=" << vm.symbol_stack.size()
+            << " loc=" << vm.locals_stack.size()
+            << " cache=" << vm.cache.scope_depth()
+            << " macro_eval_depth=" << vm.macro_eval_scope_stack.size());
+        if (!vm.op_stack.empty()) {
+            LOG("[macro_ret] step1 pop return value");
+            Value top = vm.op_stack.popValue();
+            LOG("[macro_ret] step2 popped type=" << top.deref().type_name()
+                << " is_ast=" << top.deref().isRuntimeAst());
+            if (top.deref().isRuntimeAst()) {
+                LOG("[macro_ret] step3 call eval_ast_value");
+                Value evaluated = eval_ast_value(vm, top.deref().asRuntimeAst());
+                LOG("[macro_ret] step4 eval_ast_value returned type=" << evaluated.deref().type_name()
+                    << " val=" << evaluated.deref().printString());
+                LOG("[macro_ret] step5 destroy old AST return value");
+                top = std::move(evaluated);
+                LOG("[macro_ret] step6 assigned evaluated result");
+            }
+            LOG("[macro_ret] step7 push result onto op_stack");
+            vm.op_stack.push(top);
+            LOG("[macro_ret] step8 pushed op_stack=" << vm.op_stack.size());
+        }
+        if (!vm.macro_eval_scope_stack.empty()) {
+            LOG("[macro_ret] step9 pop macro_eval_scope");
+            vm.macro_eval_scope_stack.pop_back();
+            LOG("[macro_ret] step10 macro_eval_depth=" << vm.macro_eval_scope_stack.size());
+        }
+        LOG("[macro_ret] step11 done");
     }
 }
 
@@ -1593,8 +1769,16 @@ void NEW_VAR_OR_LOAD::emit(VM& vm) const {
 }
 
 void RET_THEN_LEAVE_SCOPE::emit(VM& vm) const {
+    LOG("[ret_leave] step1 RET begin sym=" << vm.symbol_stack.size()
+        << " loc=" << vm.locals_stack.size());
     RET().emit(vm);
+    LOG("[ret_leave] step2 RET done sym=" << vm.symbol_stack.size()
+        << " op_stack=" << vm.op_stack.size());
+    LOG("[ret_leave] step3 LEAVE_SCOPE begin");
     LEAVE_SCOPE().emit(vm);
+    LOG("[ret_leave] step4 LEAVE_SCOPE done sym=" << vm.symbol_stack.size()
+        << " loc=" << vm.locals_stack.size()
+        << " cache=" << vm.cache.scope_depth());
 }
 
 inline void LOAD_FAST::emit(VM& vm) const {

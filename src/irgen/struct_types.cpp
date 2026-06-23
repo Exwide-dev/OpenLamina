@@ -1,6 +1,7 @@
 #include "struct_types.hpp"
 
 #include "exceptions.hpp"
+#include "runtime_ast.hpp"
 #include "../tools/error.hpp"
 
 namespace irgen {
@@ -114,6 +115,9 @@ Value coerce_primitive(const std::shared_ptr<StructTypeDef>& def, const Value& v
         }
         if (v.isNumber() || v.isRational() || v.isBool()) {
             return Value(v.printString());
+        }
+        if (v.isRuntimeAst()) {
+            return Value(ast_to_source(v.asRuntimeAst()));
         }
     } else if (def->name == "num") {
         if (v.isNumber()) {
@@ -247,13 +251,14 @@ std::shared_ptr<StructTypeDef> register_type_def(StructTypeDef def) {
 }
 
 void register_builtin_types() {
-    for (const char* name : {"text", "num", "bool", "nonetype", "vector", "table"}) {
+    for (const char* name : {"text", "num", "bool", "nonetype", "vector", "table", "AST"}) {
         if (!registry_mut().contains(name)) {
             auto def = make_builtin_type(name);
             registry_mut()[def->name] = def;
         }
     }
     register_builtin_exceptions();
+    register_ast_type_converters();
 }
 
 Value make_type_value(const std::shared_ptr<StructTypeDef>& def) {
@@ -326,6 +331,9 @@ bool struct_instance_is_a(const Value& value, const std::string& type_name) {
 
 int struct_type_match_depth(const Value& value, const std::string& type_name) {
     const Value& obj = value.deref();
+    if (type_name == "AST") {
+        return obj.getType() == Value::Type::RuntimeAst ? 0 : -1;
+    }
     if (obj.getType() != Value::Type::StructObject) {
         return -1;
     }
