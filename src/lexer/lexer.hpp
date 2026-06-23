@@ -19,6 +19,7 @@ enum class TokenType {
 
     KW_LET,      ///< let 关键字
     KW_FUNC,     ///< func 关键字
+    KW_FRIEND,   ///< friend 关键字（friend func 多分派函数）
     KW_DO,       ///< do 关键字
     KW_RETURN,   ///< return 关键字
     KW_IF,       ///< if 关键字
@@ -43,6 +44,9 @@ enum class TokenType {
     KW_TYPED,    ///< typed 关键字（启用 struct 字段类型检查）
     KW_MATCH,    ///< match 关键字
     KW_CASE,     ///< case 关键字
+    KW_TRY,      ///< try 关键字
+    KW_CATCH,    ///< catch 关键字
+    KW_THROW,    ///< throw 关键字
     PLACEHOLDER, ///< 管道占位符 _
 
     OPER_PLUS,  ///< 加法运算符 +
@@ -60,6 +64,7 @@ enum class TokenType {
     OPER_COMMA, ///< 逗号 ,
     OPER_DOT,   ///< 点号 .
     OPER_COLON, ///< 冒号 :
+    OPER_ARROW, ///< 返回类型箭头 ->
     OPER_PIPE,  ///< 管道运算符 |>
     OPER_BAR,   ///< 竖线 |（match case 或运算）
     ASSIGN,     ///< 赋值运算符 =

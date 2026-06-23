@@ -51,6 +51,7 @@ enum class ASTNodeType {
     VarDecl,       ///< 变量声明
     Assign,        ///< 赋值语句
     FuncDecl,      ///< 函数声明
+    FriendFuncDecl, ///< friend func 声明（__dispatch__ 多分派）
     DoFuncDecl,    ///< do 表达式形式的函数
     DecoratedFunc, ///< 带装饰器的函数
     ExternFunc,    ///< 外部函数声明
@@ -59,6 +60,9 @@ enum class ASTNodeType {
     WhileStmt,     ///< while 循环
     Break,         ///< break 语句
     Continue,      ///< continue 语句
+    ThrowStmt,     ///< throw 语句
+    TryStmt,       ///< try/catch/else 语句
+    CatchClause,   ///< catch 子句
     ForLoop,       ///< for 循环
     IfStmt,        ///< if 语句
     MatchStmt,     ///< match 语句
@@ -74,6 +78,7 @@ enum class ASTNodeType {
     Placeholder,   ///< 管道占位符 _
     FuncCallExpr,  ///< 函数调用表达式
     MemberAccess,  ///< 成员访问
+    TypeConvert,   ///< type.(value) — convert(type, value) 语法糖
     Type,          ///< 类型节点
     CompositeType, ///< 复合类型
     Program,       ///< 程序根节点
@@ -155,10 +160,15 @@ struct ExprNode : ASTNode {
  */
 struct FuncParam {
     std::string name;
+    std::string type_name;
+    bool has_type = false;
     ExprNode* default_value = nullptr;
 
-    FuncParam(std::string n, ExprNode* def = nullptr)
-        : name(std::move(n)), default_value(def) {
+    FuncParam(std::string n, ExprNode* def = nullptr, std::string ty = {}, const bool typed = false)
+        : name(std::move(n)),
+          type_name(std::move(ty)),
+          has_type(typed),
+          default_value(def) {
     }
 };
 
@@ -549,6 +559,28 @@ struct FuncCallExprNode final : ExprNode {
 };
 
 /**
+ * @struct TypeConvertExprNode
+ * @brief type.(obj) 类型转换语法糖
+ */
+struct TypeConvertExprNode final : ExprNode {
+    ExprNode* type_expr;  ///< 目标类型表达式
+    ExprNode* value_expr; ///< 待转换值
+
+    TypeConvertExprNode(ExprNode* type, ExprNode* value)
+        : ExprNode(ASTNodeType::TypeConvert), type_expr(type), value_expr(value) {
+    }
+
+    ~TypeConvertExprNode() override {
+        delete type_expr;
+        delete value_expr;
+    }
+
+    [[nodiscard]] ValueCategory getValueCategory() const override {
+        return ValueCategory::RVALUE;
+    }
+};
+
+/**
  * @struct MemberAccessNode
  * @brief 成员访问表达式节点
  */
@@ -809,6 +841,38 @@ struct FuncDeclNode final : ASTNode {
 };
 
 /**
+ * @struct FriendFuncDeclNode
+ * @brief friend func 声明（占位符或带 __dispatch__ 实现体）
+ */
+struct FriendFuncDeclNode final : ASTNode {
+    std::string name;
+    std::vector<FuncParam> params;
+    BlockStmtNode* body = nullptr;
+    TypeNode* ret_type = nullptr;
+
+    FriendFuncDeclNode(
+        std::string n,
+        std::vector<FuncParam> p,
+        BlockStmtNode* b,
+        TypeNode* r = nullptr
+    )
+        : ASTNode(ASTNodeType::FriendFuncDecl),
+          name(std::move(n)),
+          params(std::move(p)),
+          body(b),
+          ret_type(r) {
+    }
+
+    ~FriendFuncDeclNode() override {
+        delete body;
+        delete ret_type;
+        for (const auto& param : params) {
+            delete param.default_value;
+        }
+    }
+};
+
+/**
  * @struct DoFuncDeclNode
  * @brief do 表达式形式的函数声明节点
  */
@@ -1044,6 +1108,69 @@ struct ContinueNode final : ASTNode {
      * @brief 析构函数
      */
     ~ContinueNode() override = default;
+};
+
+/**
+ * @struct ThrowStmtNode
+ * @brief throw 语句节点
+ */
+struct ThrowStmtNode final : ASTNode {
+    ExprNode* expr;
+
+    explicit ThrowStmtNode(ExprNode* e) : ASTNode(ASTNodeType::ThrowStmt), expr(e) {
+    }
+
+    ~ThrowStmtNode() override {
+        delete expr;
+    }
+};
+
+/**
+ * @struct CatchClauseNode
+ * @brief catch 子句
+ */
+struct CatchClauseNode final : ASTNode {
+    std::string var_name;
+    std::string type_name;
+    bool catch_all = false;
+    BlockStmtNode* body = nullptr;
+
+    CatchClauseNode(std::string var, std::string type, bool all, BlockStmtNode* b)
+        : ASTNode(ASTNodeType::CatchClause),
+          var_name(std::move(var)),
+          type_name(std::move(type)),
+          catch_all(all),
+          body(b) {
+    }
+
+    ~CatchClauseNode() override {
+        delete body;
+    }
+};
+
+/**
+ * @struct TryStmtNode
+ * @brief try/catch/else 语句
+ */
+struct TryStmtNode final : ASTNode {
+    BlockStmtNode* try_body = nullptr;
+    std::vector<CatchClauseNode*> catches;
+    BlockStmtNode* else_body = nullptr;
+
+    TryStmtNode(BlockStmtNode* try_b, std::vector<CatchClauseNode*> catch_clauses, BlockStmtNode* else_b)
+        : ASTNode(ASTNodeType::TryStmt),
+          try_body(try_b),
+          catches(std::move(catch_clauses)),
+          else_body(else_b) {
+    }
+
+    ~TryStmtNode() override {
+        delete try_body;
+        for (const auto* clause : catches) {
+            delete clause;
+        }
+        delete else_body;
+    }
 };
 
 /**
@@ -1365,6 +1492,7 @@ struct ComprehensionNode final : ExprNode {
 
 struct StructDeclNode final : ASTNode {
     std::string name;
+    std::string base_name;
     bool typed = false;
     std::vector<StructField> fields;
     std::vector<FuncDeclNode*> methods;
@@ -1373,10 +1501,12 @@ struct StructDeclNode final : ASTNode {
         std::string n,
         bool t,
         std::vector<StructField> f,
-        std::vector<FuncDeclNode*> m = {}
+        std::vector<FuncDeclNode*> m = {},
+        std::string base = {}
     )
         : ASTNode(ASTNodeType::StructDecl),
           name(std::move(n)),
+          base_name(std::move(base)),
           typed(t),
           fields(std::move(f)),
           methods(std::move(m)) {

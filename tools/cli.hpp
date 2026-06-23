@@ -18,6 +18,7 @@ namespace cli {
 struct Args {
     bool show_help = false;
     bool show_version = false;
+    bool optimize = false;
     std::string file_path;
     std::vector<std::string> script_args;
 };
@@ -29,6 +30,9 @@ struct Args {
      * @return 解析结果
      */
 Args parse_args(int argc, char* argv[]);
+
+/** @brief 根据 -O 设置全局字节码优化开关 */
+void apply_runtime_flags(const Args& args);
 
 /**
      * @brief 运行脚本文件

@@ -56,6 +56,15 @@ Value help(VM& vm, ArgT args);
 Value exit(VM& vm, ArgT args);
 
 /**
+ * @brief 通过 type.__convert__ 将 obj 转为目标类型（不走 struct 构造）
+ */
+Value convert_fn(VM& vm, ArgT args);
+
+Value iter_fn(VM& vm, ArgT args);
+
+Value next_builtin(VM& vm, ArgT args);
+
+/**
  * @brief 初始化内置函数到符号表
  * @param symbols 符号表
  */

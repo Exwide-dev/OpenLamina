@@ -100,6 +100,9 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_TYPED: return "typed";
         case TokenType::KW_MATCH: return "match";
         case TokenType::KW_CASE: return "case";
+        case TokenType::KW_TRY: return "try";
+        case TokenType::KW_CATCH: return "catch";
+        case TokenType::KW_THROW: return "throw";
         case TokenType::PLACEHOLDER: return "_";
         case TokenType::OPER_PLUS: return "+";
         case TokenType::OPER_MINUS: return "-";
@@ -116,6 +119,7 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::OPER_COMMA: return ",";
         case TokenType::OPER_DOT: return ".";
         case TokenType::OPER_COLON: return ":";
+        case TokenType::OPER_ARROW: return "->";
         case TokenType::OPER_PIPE: return "|>";
         case TokenType::OPER_BAR: return "|";
         case TokenType::ASSIGN: return "=";
@@ -139,6 +143,7 @@ std::vector<TokenPattern> Lexer::initPatterns() {
         {R"(>=)", TokenType::OPER_GE},
         {R"(\|>)", TokenType::OPER_PIPE},
         {R"(\|)", TokenType::OPER_BAR},
+        {R"(->)", TokenType::OPER_ARROW},
         {R"(\+)", TokenType::OPER_PLUS},
         {R"(-)", TokenType::OPER_MINUS},
         {R"(\*)", TokenType::OPER_MUL},
@@ -284,6 +289,7 @@ Token Lexer::parseIdentifierOrKeyword() {
     static const std::unordered_map<std::string, TokenType> keywords = {
         {"let", TokenType::KW_LET},
         {"func", TokenType::KW_FUNC},
+        {"friend", TokenType::KW_FRIEND},
         {"do", TokenType::KW_DO},
         {"return", TokenType::KW_RETURN},
         {"if", TokenType::KW_IF},
@@ -308,6 +314,9 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"typed", TokenType::KW_TYPED},
         {"match", TokenType::KW_MATCH},
         {"case", TokenType::KW_CASE},
+        {"try", TokenType::KW_TRY},
+        {"catch", TokenType::KW_CATCH},
+        {"throw", TokenType::KW_THROW},
         {"_", TokenType::PLACEHOLDER},
     };
 

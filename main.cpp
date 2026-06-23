@@ -1,25 +1,21 @@
 #include "tools/cli.hpp"
 
 int main(const int argc, char* argv[]) {
-    const auto [
-        show_help,
-        show_version,
-        file_path,
-        script_args
-    ] = cli::parse_args(argc, argv);
+    const cli::Args args = cli::parse_args(argc, argv);
+    cli::apply_runtime_flags(args);
 
-    if (show_help) {
+    if (args.show_help) {
         cli::show_help();
         return EXIT_SUCCESS;
     }
 
-    if (show_version) {
+    if (args.show_version) {
         cli::show_version();
         return EXIT_SUCCESS;
     }
 
-    if (!file_path.empty()) {
-        return cli::run_file(file_path, script_args);
+    if (!args.file_path.empty()) {
+        return cli::run_file(args.file_path, args.script_args);
     }
 
     return cli::run_repl();

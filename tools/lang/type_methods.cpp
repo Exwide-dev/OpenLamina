@@ -4,6 +4,7 @@
 #include <cctype>
 #include <utility>
 
+#include "irgen/iterator_ops.hpp"
 #include "irgen/opcode.hpp"
 
 namespace lang {
@@ -386,6 +387,16 @@ std::optional<irgen::FunctionType> bind_method(
                     return Value(-n);
                 }
                 return Value(n);
+            };
+        }
+        return std::nullopt;
+    }
+
+    if (self.isIterator()) {
+        if (method_name == "__next__") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                (void)args;
+                return iterator_next(vm, Value(*receiver));
             };
         }
         return std::nullopt;

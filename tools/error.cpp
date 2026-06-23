@@ -35,3 +35,14 @@ std::string format_runtime_traceback(const RuntimeError& e) {
     result += format_trace_frame(e.error_site());
     return result;
 }
+
+std::string format_runtime_error_message(const RuntimeError& e) {
+    if (!e.exception_type().empty()) {
+        const std::string& msg = e.what();
+        if (msg.empty() || msg == e.exception_type()) {
+            return e.exception_type();
+        }
+        return e.exception_type() + ": " + msg;
+    }
+    return e.what();
+}

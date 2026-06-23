@@ -1,5 +1,6 @@
 #include "utf8_io.hpp"
 
+#include "../tools/error.hpp"
 #include "../src/lexer/utf8.hpp"
 
 #include <fstream>
@@ -154,5 +155,13 @@ std::string read_file_utf8(const std::string& path) {
     std::ostringstream oss;
     oss << file.rdbuf();
     return normalize_to_utf8(oss.str());
+}
+
+void write_file_utf8(const std::string& path, const std::string& content) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        throw RuntimeError("could not open file for writing: " + path);
+    }
+    file.write(content.data(), static_cast<std::streamsize>(content.size()));
 }
 }

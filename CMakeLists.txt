@@ -8,6 +8,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(BUILD_SHARED_LIBS ON)
 
+if (MINGW)
+    add_compile_options(-Wa,-mbig-obj)
+endif ()
+
 set(OPENLAMINA_CORE_SOURCES
         tools/debug.cpp
         tools/debug.hpp
@@ -19,12 +23,16 @@ set(OPENLAMINA_CORE_SOURCES
         tools/lang/builtins.hpp
         tools/lang/type_methods.cpp
         tools/lang/type_methods.hpp
+        tools/lang/std_modules.cpp
+        tools/lang/std_modules.hpp
         tools/lang/number.cpp
         tools/lang/number.hpp
         tools/lang/rational.cpp
         tools/lang/rational.hpp
         src/irgen/generator.cpp
         src/irgen/generator.hpp
+        src/irgen/optimizer.cpp
+        src/irgen/optimizer.hpp
         src/lexer/lexer.cpp
         src/lexer/lexer.hpp
         src/parser/parser.cpp
@@ -39,6 +47,14 @@ set(OPENLAMINA_CORE_SOURCES
         src/irgen/opcode.hpp
         src/irgen/struct_types.cpp
         src/irgen/struct_types.hpp
+        src/irgen/iterator_ops.cpp
+        src/irgen/iterator_ops.hpp
+        src/irgen/exceptions.cpp
+        src/irgen/exceptions.hpp
+        src/irgen/value_copy.cpp
+        src/irgen/value_copy.hpp
+        src/irgen/friend_function.cpp
+        src/irgen/friend_function.hpp
         src/repl/repl.cpp
         src/repl/repl.hpp
         tools/cli.cpp
@@ -46,6 +62,7 @@ set(OPENLAMINA_CORE_SOURCES
 )
 
 set(OPENLAMINA_TEST_SOURCES
+        test/test.cpp
         tools/debug.cpp
         tools/error.cpp
         tools/utf8_io.cpp
@@ -53,14 +70,20 @@ set(OPENLAMINA_TEST_SOURCES
         tools/lang/number.cpp
         tools/lang/rational.cpp
         tools/lang/type_methods.cpp
+        tools/lang/std_modules.cpp
         src/irgen/generator.cpp
+        src/irgen/optimizer.cpp
         src/lexer/lexer.cpp
         src/parser/parser.cpp
         src/front-end/front_end.cpp
         src/front-end/repl_session.cpp
         src/irgen/opcode.cpp
         src/irgen/cell_pool.cpp
+        src/irgen/iterator_ops.cpp
         src/irgen/struct_types.cpp
+        src/irgen/exceptions.cpp
+        src/irgen/friend_function.cpp
+        src/irgen/value_copy.cpp
 )
 
 add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})
@@ -97,6 +120,9 @@ if (BUILD_TESTS)
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
+    if (WIN32)
+        target_link_libraries(OpenLaminaTests PRIVATE psapi)
+    endif ()
 endif ()
 
 target_compile_definitions(OpenLamina PRIVATE

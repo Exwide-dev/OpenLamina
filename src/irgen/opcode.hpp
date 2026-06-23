@@ -45,8 +45,14 @@
     [[nodiscard]] std::string stringArgs() const { return std::format("{} {}", a, b); } \
     [[nodiscard]] std::string toString() const { return std::format("{} {} {}", name(), a, b); }
 
+#define OPCODE_ARGS3(a, b, c) \
+    [[nodiscard]] std::string stringArgs() const { return std::format("{} {} {}", a, b, c); } \
+    [[nodiscard]] std::string toString() const { return std::format("{} {} {} {}", name(), a, b, c); }
+
 namespace irgen {
 struct StructObject;
+struct StructTypeDef;
+struct FriendFunctionObject;
 class ModuleObject;
 class Value;
 class VM;
@@ -101,6 +107,13 @@ class BIND_FAST;
 class ITER_NEW;
 class ITER_NEXT;
 class ITER_END;
+class THROW;
+class ENTER_TRY;
+class END_TRY;
+class POP_TRY;
+class PUSH_EXC;
+class EXC_MATCH;
+class RETHROW;
 class STRUCT_NEW;
 class SET_FIELD;
 class IS_VECTOR;
@@ -386,6 +399,13 @@ using Opcode = std::variant<
     ITER_NEW,
     ITER_NEXT,
     ITER_END,
+    THROW,
+    ENTER_TRY,
+    END_TRY,
+    POP_TRY,
+    PUSH_EXC,
+    EXC_MATCH,
+    RETHROW,
     STRUCT_NEW,
     SET_FIELD,
     IS_VECTOR,
@@ -399,15 +419,18 @@ class SymbolTable;
  * @brief 函数对象，存储用户定义函数的信息
  */
 struct FunctionObject {
-    std::vector<std::string> params;  ///< 函数参数列表
+    std::vector<std::string> params;                   ///< 函数参数列表
+    std::vector<std::optional<std::string>> param_types; ///< 参数类型名（可选）
     std::vector<std::vector<Opcode>> param_default_ir; ///< 各参数默认值 IR（空表示无默认值）
-    std::vector<Opcode> body;         ///< 函数体的IR指令序列
-    size_t location;                  ///< 函数在源码中的位置
-    std::string name = "<anonymous>"; ///< 函数名称
-    VM* owner_vm = nullptr;           ///< 所属虚拟机
-    std::vector<SymbolTable> closure; ///< 闭包捕获的变量
-    bool needs_closure = false;       ///< 是否需要闭包
-    bool needs_symbol_bind = false;   ///< 是否需将 fast 局部绑定到符号表（供嵌套闭包 LOAD）
+    std::vector<Opcode> body;                          ///< 函数体的IR指令序列
+    size_t location;                                   ///< 函数在源码中的位置
+    std::string name = "<anonymous>";                  ///< 函数名称
+    VM* owner_vm = nullptr;                            ///< 所属虚拟机
+    std::vector<SymbolTable> closure;                  ///< 闭包捕获的变量
+    bool needs_closure = false;                        ///< 是否需要闭包
+    bool needs_symbol_bind = false;                    ///< 是否需将 fast 局部绑定到符号表（供嵌套闭包 LOAD）
+
+    ~FunctionObject();
 
     /**
      * @brief 调用函数
@@ -417,6 +440,21 @@ struct FunctionObject {
      */
     Value call(VM& caller_vm, const std::vector<Value>& args);
 };
+
+[[nodiscard]] Value eval_param_default(VM& vm, const std::vector<Opcode>& ir);
+
+[[nodiscard]] std::vector<Value> resolve_user_function_args(
+    VM& vm,
+    const FunctionObject& func_obj,
+    const std::vector<Value>& positional,
+    const Value& kwargs_value
+);
+
+void invoke_user_function_with_args(
+    VM& vm,
+    const std::shared_ptr<FunctionObject>& func_obj,
+    std::vector<Value> args
+);
 
 /**
  * @brief 函数类型，内置函数的签名
@@ -454,23 +492,25 @@ struct Ref {
 /**
  * @brief 迭代器对象，支持遍历可迭代对象
  */
-struct IteratorObject {
-    std::shared_ptr<Value> iterable; ///< 被迭代的对象（使用指针避免循环依赖）
-    CellPool* cell_pool = nullptr;   ///< 分配迭代元素的池（所属 VM）
-    size_t index = 0;                ///< 当前迭代位置
+enum class IteratorKind {
+    Sequence,  ///< 内置 vec/text/dict
+    UserNext   ///< 用户 __next__ 方法
+};
 
-    /**
-     * @brief 构造函数
-     * @param obj 要迭代的对象
-     */
+struct IteratorObject {
+    IteratorKind kind = IteratorKind::Sequence;
+    std::shared_ptr<Value> iterable;      ///< Sequence：被迭代对象
+    std::shared_ptr<Value> user_self;     ///< UserNext：绑定 self
+    FunctionType user_next;               ///< UserNext：__next__ 调用体
+    CellPool* cell_pool = nullptr;
+    size_t index = 0;
+
+    explicit IteratorObject() = default;
+
     explicit IteratorObject(std::shared_ptr<Value> obj) : iterable(std::move(obj)) {
     }
 
-    /**
-     * @brief 获取下一个元素
-     * @return 是否还有下一个元素
-     */
-    bool next(Value& out);
+    [[nodiscard]] bool next(VM& vm, Value& out);
 };
 
 /**
@@ -493,7 +533,9 @@ public:
         Reference,   ///< 槽位引用（绑定或地址）
         Rational,    ///< 有理数
         Iterator,    ///< 迭代器
-        StructObject ///< 用户定义的 struct 实例
+        StructObject, ///< struct 实例
+        FriendFunction, ///< friend func（__dispatch__ 多分派）
+        TypeHandle    ///< 类型句柄（指向 StructTypeDef，可调用、含 __convert__）
     };
 
 private:
@@ -510,7 +552,9 @@ private:
         Ref,
         lang::lammp::Rational,
         std::shared_ptr<IteratorObject>,
-        std::shared_ptr<StructObject>
+        std::shared_ptr<StructObject>,
+        std::shared_ptr<FriendFunctionObject>,
+        std::shared_ptr<StructTypeDef>
     > data; ///< 存储实际值的变体
 
 public:
@@ -630,6 +674,12 @@ public:
         : type(Type::StructObject), data(std::move(value)) {
     }
 
+    explicit Value(std::shared_ptr<FriendFunctionObject> value)
+        : type(Type::FriendFunction), data(std::move(value)) {
+    }
+
+    explicit Value(std::shared_ptr<StructTypeDef> type_def);
+
     /**
      * @brief 复制赋值运算符
      */
@@ -677,8 +727,11 @@ public:
      * @brief 创建指向值的引用（移动语义）
      */
     static Value makeRef(Value&& val, CellPool& pool);
+
     static Value makeRef(const Value& val, CellPool& pool);
+
     static Value makeRef(std::shared_ptr<Value> val_ptr, CellPool& pool);
+
     static Value makeEmptyRef(CellPool& pool);
 
     /** @brief 创建地址槽引用（&expr 的结果，指向已有槽位） */
@@ -721,34 +774,7 @@ public:
      * @brief 获取类型名称字符串
      * @return 类型名称
      */
-    [[nodiscard]] std::string type_name() const {
-        switch (type) {
-            case Type::None:
-                return "None";
-            case Type::String:
-                return "String";
-            case Type::Number:
-                return "Number";
-            case Type::Bool:
-                return "Bool";
-            case Type::Function:
-                return "Function";
-            case Type::Module:
-                return "Module";
-            case Type::Vector:
-                return "Vector";
-            case Type::Rational:
-                return "Rational";
-            case Type::Dictionary:
-                return "Dictionary";
-            case Type::StructObject:
-                return "Struct";
-            case Type::Reference:
-                return asReference().opaque ? "Address" : "Reference";
-            default:
-                return "<Unknown_Type>";
-        }
-    }
+    [[nodiscard]] std::string type_name() const;
 
     /**
      * @brief 控制台显示用字符串（如 REPL 求值结果；字符串带引号）
@@ -1156,6 +1182,30 @@ return std::get<CppType>(data); \
         return deref().type == Type::StructObject;
     }
 
+    [[nodiscard]] bool isIterator() const {
+        return deref().type == Type::Iterator;
+    }
+
+    [[nodiscard]] bool isTypeHandle() const {
+        return deref().type == Type::TypeHandle;
+    }
+
+    [[nodiscard]] bool isFriendFunction() const {
+        return deref().type == Type::FriendFunction;
+    }
+
+    [[nodiscard]] bool isCallable() const {
+        return isFunction() || isTypeHandle() || isFriendFunction();
+    }
+
+    [[nodiscard]] const std::shared_ptr<FriendFunctionObject>& asFriendFunction() const;
+
+    [[nodiscard]] std::shared_ptr<FriendFunctionObject>& asFriendFunction();
+
+    [[nodiscard]] const std::shared_ptr<StructTypeDef>& asTypeDef() const;
+
+    [[nodiscard]] std::shared_ptr<StructTypeDef>& asTypeDef();
+
     [[nodiscard]] const std::shared_ptr<StructObject>& asStruct() const;
 
     [[nodiscard]] std::shared_ptr<StructObject>& asStruct();
@@ -1174,29 +1224,57 @@ return std::get<CppType>(data); \
     }
 
     [[nodiscard]] const Value& deref() const {
-        if (type == Type::Reference) {
-            const Ref& ref = std::get<Ref>(data);
-            if (ref.opaque) {
-                return *this;
-            }
-            return ref.value_ptr->deref();
+        if (type != Type::Reference) {
+            return *this;
         }
-        return *this;
+        const Ref& ref = std::get<Ref>(data);
+        if (ref.opaque) {
+            return *this;
+        }
+        if (!ref.value_ptr) {
+            throw RuntimeError("Null reference");
+        }
+        const Value* current = ref.value_ptr.get();
+        std::unordered_set<const Value*> visited;
+        while (current->type == Type::Reference) {
+            if (visited.contains(current)) {
+                throw RuntimeError("Circular reference detected");
+            }
+            visited.insert(current);
+            const Ref& inner = std::get<Ref>(current->data);
+            if (inner.opaque) {
+                return *current;
+            }
+            current = inner.value_ptr.get();
+        }
+        return *current;
     }
 
     Value& deref() {
-        if (type == Type::Reference) {
-            Ref& ref = std::get<Ref>(data);
-            if (ref.opaque) {
-                return *this;
-            }
-            auto current = ref.value_ptr.get();
-            while (current->type == Type::Reference) {
-                current = std::get<Ref>(current->data).value_ptr.get();
-            }
-            return *current;
+        if (type != Type::Reference) {
+            return *this;
         }
-        return *this;
+        Ref& ref = std::get<Ref>(data);
+        if (ref.opaque) {
+            return *this;
+        }
+        if (!ref.value_ptr) {
+            throw RuntimeError("Null reference");
+        }
+        Value* current = ref.value_ptr.get();
+        std::unordered_set<Value*> visited;
+        while (current->type == Type::Reference) {
+            if (visited.contains(current)) {
+                throw RuntimeError("Circular reference detected");
+            }
+            visited.insert(current);
+            Ref& inner = std::get<Ref>(current->data);
+            if (inner.opaque) {
+                return *current;
+            }
+            current = inner.value_ptr.get();
+        }
+        return *current;
     }
 
     Value& safe_deref() {
@@ -1234,11 +1312,31 @@ struct StructFieldDef {
     Value default_value;
 };
 
+enum class TypeKind {
+    User,       ///< 用户 struct（有字段、可实例化）
+    Primitive   ///< 内置类型名（text/num/…，主要作转换目标）
+};
+
 struct StructTypeDef {
     std::string name;
+    std::string base_name;
+    TypeKind kind = TypeKind::User;
     bool typed = false;
     std::vector<StructFieldDef> fields;
     std::unordered_map<std::string, std::shared_ptr<FunctionObject>> methods;
+    /// 运行时 __convert__ 处理器列表（通过引用暴露，append 会就地修改）
+    std::shared_ptr<Value> convert_list_holder;
+
+    void ensure_convert_list() {
+        if (!convert_list_holder) {
+            convert_list_holder = std::make_shared<Value>(std::vector<std::shared_ptr<Value>>{});
+        }
+    }
+
+    [[nodiscard]] std::vector<std::shared_ptr<Value>>& convert_handlers() {
+        ensure_convert_list();
+        return convert_list_holder->asVector();
+    }
 
     [[nodiscard]] size_t required_field_count() const {
         size_t n = 0;
@@ -1304,6 +1402,91 @@ public:
     OPCODE_ARGS0()
 
     ITER_END() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
+ * THROW — 抛出用户异常对象（可被 try/catch 捕获）。
+ */
+class THROW {
+public:
+    OPCODE_META(THROW)
+    OPCODE_ARGS0()
+
+    THROW() = default;
+
+    void emit(VM& vm) const;
+};
+
+/** try 块入口：登记 catch/else/end 标签与当前栈深度。 */
+class ENTER_TRY {
+public:
+    OPCODE_META(ENTER_TRY)
+    size_t catch_label = 0;
+    size_t else_label = 0;
+    size_t end_label = 0;
+    OPCODE_ARGS3(catch_label, else_label, end_label)
+
+    ENTER_TRY(size_t catch_l, size_t else_l, size_t end_l)
+        : catch_label(catch_l), else_label(else_l), end_label(end_l) {
+    }
+
+    void emit(VM& vm) const;
+};
+
+/** try 体正常结束：跳转到 else（若有）或 end。 */
+class END_TRY {
+public:
+    OPCODE_META(END_TRY)
+    OPCODE_ARGS0()
+
+    END_TRY() = default;
+
+    void emit(VM& vm) const;
+};
+
+/** try/catch/else 结束：弹出 try 帧并清除 active_exception。 */
+class POP_TRY {
+public:
+    OPCODE_META(POP_TRY)
+    OPCODE_ARGS0()
+
+    POP_TRY() = default;
+
+    void emit(VM& vm) const;
+};
+
+/** 将当前 active_exception 压栈（供 catch 绑定）。 */
+class PUSH_EXC {
+public:
+    OPCODE_META(PUSH_EXC)
+    OPCODE_ARGS0()
+
+    PUSH_EXC() = default;
+
+    void emit(VM& vm) const;
+};
+
+/** 判断 active_exception 是否为指定类型（含子类）。 */
+class EXC_MATCH {
+public:
+    OPCODE_META(EXC_MATCH)
+    size_t type_name_id = 0;
+    OPCODE_ARGS1(type_name_id)
+
+    explicit EXC_MATCH(std::string type_name);
+
+    void emit(VM& vm) const;
+};
+
+/** 重新抛出 active_exception，交给外层 try。 */
+class RETHROW {
+public:
+    OPCODE_META(RETHROW)
+    OPCODE_ARGS0()
+
+    RETHROW() = default;
 
     void emit(VM& vm) const;
 };
@@ -1624,7 +1807,15 @@ public:
      * @brief 离开当前作用域
      */
     void leave_scope() {
+        if (scopes.size() <= 1) {
+            return;
+        }
         scopes.pop_back();
+    }
+
+    /** @brief 当前作用域栈深度（含全局层） */
+    [[nodiscard]] size_t scope_depth() const {
+        return scopes.size();
     }
 
     /**
@@ -1668,7 +1859,8 @@ public:
     Value val;
     OPCODE_ARGS1V(val)
 
-    explicit PUSH(Value v) : val(std::move(v)) {}
+    explicit PUSH(Value v) : val(std::move(v)) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2016,7 +2208,8 @@ public:
     size_t label_id;
     OPCODE_ARGS1(label_id)
 
-    explicit LABEL(size_t label_id) : label_id(label_id) {}
+    explicit LABEL(size_t label_id) : label_id(label_id) {
+    }
 
     void emit(VM& vm);
 
@@ -2036,7 +2229,8 @@ public:
     size_t label_id;
     OPCODE_ARGS1(label_id)
 
-    explicit GOTO(size_t label_id) : label_id(label_id) {}
+    explicit GOTO(size_t label_id) : label_id(label_id) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2054,7 +2248,8 @@ public:
     size_t label_id;
     OPCODE_ARGS1(label_id)
 
-    explicit GOTOIF(size_t label_id) : label_id(label_id) {}
+    explicit GOTOIF(size_t label_id) : label_id(label_id) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2192,7 +2387,8 @@ public:
     size_t count;
     OPCODE_ARGS1(count)
 
-    explicit VEC_NEW(size_t count) : count(count) {}
+    explicit VEC_NEW(size_t count) : count(count) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2210,7 +2406,8 @@ public:
     size_t count;
     OPCODE_ARGS1(count)
 
-    explicit DICT_NEW(size_t count) : count(count) {}
+    explicit DICT_NEW(size_t count) : count(count) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2370,7 +2567,8 @@ public:
     size_t slot;
     OPCODE_ARGS1(slot)
 
-    explicit LOAD_FAST(size_t slot) : slot(slot) {}
+    explicit LOAD_FAST(size_t slot) : slot(slot) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2388,7 +2586,8 @@ public:
     size_t slot;
     OPCODE_ARGS1(slot)
 
-    explicit STORE_FAST(size_t slot) : slot(slot) {}
+    explicit STORE_FAST(size_t slot) : slot(slot) {
+    }
 
     void emit(VM& vm) const;
 };
@@ -2593,26 +2792,40 @@ public:
 
 inline StringPool g_string_pool{}; ///< 全局字符串池
 
+/** @brief try/catch 栈帧：异常时沿 call_func_stack 回退到此深度 */
+struct TryHandlerFrame {
+    size_t catch_label = 0;
+    size_t else_label = 0;
+    size_t end_label = 0;
+    size_t call_stack_sz = 0;
+    size_t call_func_stack_sz = 0;
+    size_t symbol_stack_sz = 0;
+    size_t locals_stack_sz = 0;
+};
+
 /**
  * @brief 虚拟机类，执行IR指令
  */
 class VM {
 public:
-    CellPool cell_pool;                                     ///< 槽位对象池
-    size_t gc_suppress_depth = 0;                           ///< >0 时跳过扩容/周期 GC
-    Stack<Value> op_stack{};                              ///< 操作数栈
-    std::vector<size_t> call_stack{};                     ///< 返回地址栈
-    std::string source_filename = "<unknown>";            ///< 当前执行的源文件名
+    CellPool cell_pool;                                             ///< 槽位对象池
+    size_t gc_suppress_depth = 0;                                   ///< >0 时跳过扩容/周期 GC
+    size_t iter_next_guard_depth = 0;                               ///< >0 时 for-in 的 ITER_NEXT 吞掉 StopIteration
+    Stack<Value> op_stack{};                                        ///< 操作数栈
+    std::vector<size_t> call_stack{};                               ///< 返回地址栈
+    std::string source_filename = "<unknown>";                      ///< 当前执行的源文件名
     std::vector<std::shared_ptr<FunctionObject>> call_func_stack{}; ///< 函数调用栈
-    std::vector<Opcode> code{};                           ///< IR指令序列
-    size_t label_scan_end = 0;                            ///< 已扫描标签的 code 上界
-    std::vector<SymbolTable> symbol_stack{SymbolTable()}; ///< 符号表栈
-    std::vector<std::vector<Value>> locals_stack;         ///< 局部变量栈
-    Cache cache{};                                        ///< 变量缓存
-    std::unordered_map<size_t, size_t> label_table{};     ///< 标签位置表
-    size_t pc = 0;                                        ///< 程序计数器
-    size_t label_counter = 0;                             ///< 标签计数器
-    std::shared_ptr<ModuleObject> main_module;            ///< 主模块（全局命名空间与 import 根）
+    std::vector<TryHandlerFrame> try_stack{};                       ///< try/catch 处理器栈
+    std::shared_ptr<Value> active_exception{};                      ///< 当前待匹配/绑定的异常对象
+    std::vector<Opcode> code{};                                     ///< IR指令序列
+    size_t label_scan_end = 0;                                      ///< 已扫描标签的 code 上界
+    std::vector<SymbolTable> symbol_stack{SymbolTable()};           ///< 符号表栈
+    std::vector<std::vector<Value>> locals_stack;                   ///< 局部变量栈
+    Cache cache{};                                                  ///< 变量缓存
+    std::unordered_map<size_t, size_t> label_table{};               ///< 标签位置表
+    size_t pc = 0;                                                  ///< 程序计数器
+    size_t label_counter = 0;                                       ///< 标签计数器
+    std::shared_ptr<ModuleObject> main_module;                      ///< 主模块（全局命名空间与 import 根）
 
     /**
      * @brief 初始化内置函数
@@ -2621,7 +2834,10 @@ public:
 
     VM();
 
+    ~VM();
+
     VM(VM&& other) noexcept;
+
     VM& operator=(VM&& other) noexcept;
 
     /**
@@ -2650,6 +2866,9 @@ public:
      * @brief 执行IR指令序列
      */
     void run();
+
+    /** @brief 在 VM 析构前按安全顺序释放运行时状态（供 execute 等短生命周期 VM 使用） */
+    void shutdown();
 
     /** @brief 触发标记-清除 GC，回收不可达槽位 */
     void collectGarbage();
@@ -2682,6 +2901,7 @@ struct VmGcSuppress {
     }
 
     VmGcSuppress(const VmGcSuppress&) = delete;
+
     VmGcSuppress& operator=(const VmGcSuppress&) = delete;
 
     ~VmGcSuppress() {
@@ -2706,9 +2926,10 @@ public:
      * @brief 从代码字符串构造模块
      * @tparam string 字符串类型
      * @param code 代码字符串
+     * @param package_name 模块名
      */
     template<StringType string>
-    explicit ModuleObject(string code);
+    explicit ModuleObject(string code, string package_name = "__main__");
 
     /**
      * @brief 从符号表构造模块（内置模块）

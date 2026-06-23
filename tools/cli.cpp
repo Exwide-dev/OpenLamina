@@ -2,6 +2,7 @@
 #include "error.hpp"
 #include "front-end/front_end.hpp"
 #include "irgen/generator.hpp"
+#include "irgen/optimizer.hpp"
 #include "repl/repl.hpp"
 #include "utf8_io.hpp"
 #include <iostream>
@@ -20,6 +21,8 @@ Args parse_args(const int argc, char* argv[]) {
             args.show_help = true;
         } else if (arg == "-v" || arg == "--version") {
             args.show_version = true;
+        } else if (arg == "-O") {
+            args.optimize = true;
         } else if (args.file_path.empty()) {
             args.file_path = arg;
         } else {
@@ -30,10 +33,14 @@ Args parse_args(const int argc, char* argv[]) {
     return args;
 }
 
+void apply_runtime_flags(const Args& args) {
+    lm::irgen::bytecode_optimize_enabled = args.optimize;
+}
+
 namespace {
 
 void print_runtime_error(std::ostream& out, const RuntimeError& e) {
-    out << RED_BOLD << "Error: " << RESET << e.what() << "\n";
+    out << RED_BOLD << "Error: " << RESET << format_runtime_error_message(e) << "\n";
     out << format_runtime_traceback(e);
 }
 }
@@ -61,12 +68,15 @@ int run_file(const std::string& file_path, const std::vector<std::string>& args)
             return 1;
         }
 
-        ::irgen::Value result = lm::irgen::execute(ast);
+        if (!lm::irgen::execute(ast, [](::irgen::VM&) { return true; })) {
+            delete ast;
+            return 1;
+        }
         delete ast;
 
         return 0;
     } catch (const RuntimeError& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << format_runtime_error_message(e) << std::endl;
         std::cerr << format_runtime_traceback(e);
         return 1;
     } catch (const std::exception& e) {
@@ -167,6 +177,13 @@ Contact OpenLamina-Developing for more information)",
 
             needs_more_input = false;
             line_number++;
+        } catch (const std::exception& e) {
+            std::cout << "\n" << RED_BOLD << "Error: " << RESET << e.what() << "\n";
+
+            repl_instance.vm.pc = repl_instance.vm.code.size();
+            repl_instance.vm.op_stack.clear();
+            needs_more_input = false;
+            line_number++;
         } catch (...) {
             std::cout << "\n" << RED_BOLD << "Error: " << RESET << "An unknown exception occurred.\n";
             std::cout << "\n" << YELLOW << "This is an unexpected error. Please report this bug." << RESET;
@@ -181,7 +198,8 @@ void show_help() {
             "Usage: OpenLamina [options] [file]\n\n"
             "Options:\n"
             "  -h, --help     Show this help message\n"
-            "  -v, --version  Show version information\n\n"
+            "  -v, --version  Show version information\n"
+            "  -O             Optimize bytecode before execution\n\n"
             "If no file is specified, the REPL will start.\n"
             "If a file is specified, it will be executed.\n"
             << std::endl;

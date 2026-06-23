@@ -3,9 +3,26 @@
 #include "../tools/debug.hpp"
 #include "_deps/lammp-src/include/lammp/lmmpn.h"
 
+#include <cctype>
 #include <cmath>
 
 namespace lang::lammp {
+namespace {
+
+std::string trim_ascii_whitespace(const std::string& str) {
+    size_t start = 0;
+    while (start < str.size() && std::isspace(static_cast<unsigned char>(str[start]))) {
+        ++start;
+    }
+    size_t end = str.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(str[end - 1]))) {
+        --end;
+    }
+    return str.substr(start, end - start);
+}
+
+} // namespace
+
 void Number::BigNum::init_zero() {
     size = 1;
     data = std::unique_ptr<mp_limb_t[]>(new mp_limb_t[size]);
@@ -62,7 +79,7 @@ Number::BigNum::BigNum(const std::string& str, int base) {
         } else if (c >= 'A' && c <= 'F') {
             digits[i] = 10 + (c - 'A');
         } else {
-            digits[i] = 0;
+            throw std::invalid_argument("invalid digit in integer string");
         }
     }
 
@@ -337,12 +354,37 @@ Number::Number() : value(0LL) { lmmp_global_init(); }
 
 Number::Number(const std::string& str, int base) {
     lmmp_global_init();
-    try {
-        int64_t v = std::stoll(str, nullptr, base);
-        value = v;
-    } catch (...) {
-        value = BigNum(str, base);
+    const std::string trimmed = trim_ascii_whitespace(str);
+    if (trimmed.empty()) {
+        throw std::invalid_argument("empty string");
     }
+
+    if (base == 10) {
+        size_t idx = 0;
+        if (trimmed[idx] == '+' || trimmed[idx] == '-') {
+            ++idx;
+        }
+        if (idx < trimmed.size()) {
+            bool all_decimal = true;
+            for (size_t i = idx; i < trimmed.size(); ++i) {
+                if (!std::isdigit(static_cast<unsigned char>(trimmed[i]))) {
+                    all_decimal = false;
+                    break;
+                }
+            }
+            if (all_decimal) {
+                try {
+                    value = std::stoll(trimmed, nullptr, 10);
+                    return;
+                } catch (const std::out_of_range&) {
+                    value = BigNum(trimmed, base);
+                    return;
+                }
+            }
+        }
+    }
+
+    value = BigNum(trimmed, base);
 }
 
 Number::Number(const Number& other) : value(other.value) {

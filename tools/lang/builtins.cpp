@@ -7,7 +7,10 @@
 #include <unordered_map>
 
 #include "irgen/opcode.hpp"
+#include "irgen/struct_types.hpp"
+#include "irgen/iterator_ops.hpp"
 #include "rational.hpp"
+#include "std_modules.hpp"
 
 #define arg_must(funcname, num) \
     if ((args.empty() and num != 0) or args.size() != num) { \
@@ -210,11 +213,33 @@ Value int_of(VM&, const std::vector<Value>& args) {
     arg_must("int", 1);
     const auto& val = args[0].deref();
     if (val.isString()) {
-        return Value(std::stoll(val.asString()));
+        try {
+            return Value(lang::lammp::Number(val.asString()));
+        } catch (const std::exception&) {
+            throw RuntimeError(std::format("cannot convert \"{}\" to int", val.asString()));
+        }
     } else if (val.isNumber()) {
         return Value(val.asNumber().toInt64());
     }
     throw RuntimeError("int requires string or number");
+}
+
+Value convert_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("convert", 2);
+    return irgen::convert_to_type(vm, args[0], args[1]);
+}
+
+Value iter_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("iter", 1);
+    return irgen::make_iter(vm, args[0]);
+}
+
+Value next_builtin(VM& vm, const std::vector<Value>& args) {
+    arg_at_least("next", 1);
+    if (args.size() >= 2) {
+        return irgen::iterator_next(vm, args[0], args[1]);
+    }
+    return irgen::iterator_next(vm, args[0]);
 }
 
 Value exit(VM&, const std::vector<Value>& args) {
@@ -239,6 +264,9 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  type(obj) - Get type name\n";
     std::cout << "  str(obj) - Convert to string (uses printString)\n";
     std::cout << "  int(obj) - Convert to integer\n";
+    std::cout << "  convert(type, obj) - Convert obj via type.__convert__ (most specific match)\n";
+    std::cout << "  iter(obj) - Create iterator from iterable\n";
+    std::cout << "  next(iter[, default]) - Advance iterator (__next__ protocol)\n";
     std::cout << "  exit() - Exit the program\n";
     std::cout << "  gc() - Run mark-sweep GC on object pool; returns cells reclaimed\n";
     std::cout << "  help() - Show this help\n";
@@ -253,6 +281,10 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  std.math.sin(x), std.math.cos(x), std.math.tan(x)\n";
     std::cout << "  std.math.sqrt(x), std.math.abs(x), std.math.range(...)\n";
     std::cout << "  std.concat(str1, str2)\n";
+    std::cout << "  std.iter.iter(x), std.iter.next(it), std.iter.enumerate(x)\n";
+    std::cout << "  std.iter.chain(a, b), std.iter.to_list(x)\n";
+    std::cout << "  std.io.read_line(), std.io.read_file(path), std.io.write_file(path, text)\n";
+    std::cout << "  std.io.write_line(...), std.io.eprint(...)\n";
     std::cout << "Decorators (std.decos.*):\n";
     std::cout << "  memoize(func) - Cache function results\n";
     std::cout << "  timer(func) - Measure execution time\n";
@@ -262,6 +294,18 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  retry(func, n) - Retry n times on failure\n";
     std::cout << "  validate(func, validator) - Validate args before call\n";
     std::cout << "  catch(func, handler) - Catch and handle exceptions\n";
+    std::cout << "\nBuiltin exception types (BaseException hierarchy):\n";
+    std::cout << "  BaseException, Exception, StopIteration, RuntimeError, ValueError, TypeError\n";
+    std::cout << "  throw only accepts instances of BaseException subclasses\n";
+    std::cout << "\nException syntax:\n";
+    std::cout << "  throw ValueError(\"msg\")\n";
+    std::cout << "  try { ... } catch (e: ValueError) { ... } else { ... }\n";
+    std::cout << "  catch (e) / catch (e: ...) / catch (...) — broad handlers\n";
+    std::cout << "  for-in digests StopIteration from iterators (not caught by outer try)\n";
+    std::cout << "\nFriend func (multi-dispatch via __dispatch__):\n";
+    std::cout << "  friend func f(x: num) { return x + 1 }\n";
+    std::cout << "  f.__dispatch__.append(do(x: text) { return x + \"!\" })\n";
+    std::cout << "  friend func placeholder   // no body; append handlers later\n";
     std::cout << "\nSyntax examples:\n";
     std::cout << "  let x = 42\n";
     std::cout << "  let arr = vec[1, 2, 3]\n";
@@ -794,6 +838,12 @@ irgen::ModuleObject standard_mod = [] {
     std_symbols[irgen::g_string_pool.add("decos")] = std::make_shared<irgen::Value>(
         Value(std::make_shared<irgen::ModuleObject>(decos_mod))
     );
+    std_symbols[irgen::g_string_pool.add("iter")] = std::make_shared<irgen::Value>(
+        Value(std::make_shared<irgen::ModuleObject>(make_iter_module()))
+    );
+    std_symbols[irgen::g_string_pool.add("io")] = std::make_shared<irgen::Value>(
+        Value(std::make_shared<irgen::ModuleObject>(make_io_module()))
+    );
 
     return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
 }();
@@ -823,6 +873,9 @@ void lang::init_builtins(irgen::SymbolTable& symbols, irgen::CellPool& pool) {
     symbols.set(irgen::g_string_pool.add("type"), Value(irgen::FunctionType(type_of)), pool);
     symbols.set(irgen::g_string_pool.add("str"), Value(irgen::FunctionType(str_of)), pool);
     symbols.set(irgen::g_string_pool.add("int"), Value(irgen::FunctionType(int_of)), pool);
+    symbols.set(irgen::g_string_pool.add("convert"), Value(irgen::FunctionType(convert_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("iter"), Value(irgen::FunctionType(iter_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("next"), Value(irgen::FunctionType(next_builtin)), pool);
     symbols.set(irgen::g_string_pool.add("exit"), Value(irgen::FunctionType(exit)), pool);
     symbols.set(irgen::g_string_pool.add("gc"), Value(irgen::FunctionType(gc)), pool);
     symbols.set(irgen::g_string_pool.add("help"), Value(irgen::FunctionType(help)), pool);

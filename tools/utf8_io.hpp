@@ -37,4 +37,7 @@ void init_stdio_utf8();
  * @brief 以 UTF-8 读取整个文件（二进制读入，保留 BOM 供词法器处理）
  */
 [[nodiscard]] std::string read_file_utf8(const std::string& path);
+
+/** @brief 以 UTF-8 写入整个文件 */
+void write_file_utf8(const std::string& path, const std::string& content);
 } // namespace lm::utf8_io

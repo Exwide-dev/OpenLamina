@@ -1,6 +1,7 @@
 #pragma once
 #include "opcode.hpp"
 #include "parser/ast.hpp"
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -189,11 +190,15 @@ public:
 };
 
 /**
- * @brief 执行程序的包装函数
- * @param program 程序AST节点
- * @return 执行结果
+ * @brief 执行程序；在 VM 仍存活时调用 on_result，由其检查栈顶等并返回是否成功
+ * @param program 程序 AST 节点
+ * @param on_result 在 vm.run() 之后、VM 析构之前调用；返回 true 表示成功
+ * @return on_result 的返回值；空 program 或空回调时返回 false / true
  */
-::irgen::Value execute(const lmx::ProgramASTNode* program);
+bool execute(
+    const lmx::ProgramASTNode* program,
+    const std::function<bool(::irgen::VM& vm)>& on_result = {}
+);
 
 /**
  *

@@ -31,6 +31,8 @@ public:
     [[nodiscard]] CellPtr allocateValue(Value&& value);
     void collectGarbage(const VM& vm) const;
     void releaseCell(Value* cell) const;
+    /** @brief 丢弃池中全部槽位（调用方须已释放所有 CellPtr） */
+    void releaseAll();
 
     [[nodiscard]] size_t totalCells() const;
     [[nodiscard]] size_t freeCells() const;

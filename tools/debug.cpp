@@ -167,6 +167,53 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             printAST(assign->value, indent + 2);
             break;
         }
+        case lmx::ASTNodeType::FriendFuncDecl: {
+            const auto* friend_node = dynamic_cast<const lmx::FriendFuncDeclNode*>(node);
+            std::cout << indent_str << "FriendFuncDecl: " << friend_node->name << "\n";
+            if (friend_node->body) {
+                std::cout << indent_str << "  Body:\n";
+                printAST(friend_node->body, indent + 2);
+            }
+            break;
+        }
+        case lmx::ASTNodeType::ThrowStmt: {
+            const auto* throw_node = dynamic_cast<const lmx::ThrowStmtNode*>(node);
+            std::cout << indent_str << "ThrowStmt\n";
+            printAST(throw_node->expr, indent + 2);
+            break;
+        }
+        case lmx::ASTNodeType::TryStmt: {
+            const auto* try_node = dynamic_cast<const lmx::TryStmtNode*>(node);
+            std::cout << indent_str << "TryStmt\n";
+            std::cout << indent_str << "  Try:\n";
+            printAST(try_node->try_body, indent + 2);
+            for (const auto* clause : try_node->catches) {
+                printAST(clause, indent + 1);
+            }
+            if (try_node->else_body) {
+                std::cout << indent_str << "  Else:\n";
+                printAST(try_node->else_body, indent + 2);
+            }
+            break;
+        }
+        case lmx::ASTNodeType::CatchClause: {
+            const auto* catch_node = dynamic_cast<const lmx::CatchClauseNode*>(node);
+            std::cout << indent_str << "CatchClause";
+            if (!catch_node->var_name.empty()) {
+                std::cout << " (" << catch_node->var_name;
+                if (!catch_node->type_name.empty()) {
+                    std::cout << ": " << catch_node->type_name;
+                } else if (catch_node->catch_all) {
+                    std::cout << ": ...";
+                }
+                std::cout << ")";
+            } else if (catch_node->catch_all) {
+                std::cout << " (...)";
+            }
+            std::cout << "\n";
+            printAST(catch_node->body, indent + 2);
+            break;
+        }
         case lmx::ASTNodeType::FuncDecl: {
             const auto func = dynamic_cast<lmx::FuncDeclNode*>(const_cast<lmx::ASTNode*>(node));
             std::cout << indent_str << "FuncDecl: " << func->name << "\n";
@@ -217,6 +264,15 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             const auto* mem = dynamic_cast<const lmx::MemberAccessNode*>(node);
             std::cout << indent_str << "MemberAccess: ." << mem->member << "\n";
             printAST(mem->object, indent + 2);
+            break;
+        }
+        case lmx::ASTNodeType::TypeConvert: {
+            const auto* convert = dynamic_cast<const lmx::TypeConvertExprNode*>(node);
+            std::cout << indent_str << "TypeConvert: .(...)\n";
+            std::cout << indent_str << "  Type:\n";
+            printAST(convert->type_expr, indent + 2);
+            std::cout << indent_str << "  Value:\n";
+            printAST(convert->value_expr, indent + 2);
             break;
         }
         case lmx::ASTNodeType::FuncCallExpr: {

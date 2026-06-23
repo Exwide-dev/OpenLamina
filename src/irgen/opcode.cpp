@@ -6,8 +6,13 @@
 #include "../tools/lang/type_methods.hpp"
 #include "../tools/debug.hpp"
 #include "cell_pool.hpp"
+#include "iterator_ops.hpp"
+#include "exceptions.hpp"
+#include "friend_function.hpp"
+#include "value_copy.hpp"
 #include <fstream>
 #include <filesystem>
+#include <iostream>
 #include <ranges>
 
 #include "generator.hpp"
@@ -16,49 +21,8 @@
 
 namespace irgen {
 
-namespace {
-
-[[nodiscard]] std::string vm_current_scope(const VM& vm) {
-    if (vm.call_func_stack.empty()) {
-        return "global-scope";
-    }
-    return vm.call_func_stack.back()->name;
-}
-
-[[nodiscard]] TraceFrame vm_opcode_site(const VM& vm, const size_t at_pc = SIZE_MAX) {
-    TraceFrame frame;
-    frame.filename = vm.source_filename;
-    frame.column = 0;
-    frame.scope = vm_current_scope(vm);
-    const size_t pc = at_pc == SIZE_MAX ? vm.pc : at_pc;
-    if (pc < vm.code.size()) {
-        frame.line = get_opcode_line_no(vm.code[pc]);
-        frame.source_line = get_opcode_line(vm.code[pc]);
-    }
-    return frame;
-}
-
-[[nodiscard]] std::vector<TraceFrame> build_traceback(const VM& vm) {
-    std::vector<TraceFrame> frames;
-    frames.reserve(vm.call_stack.size());
-    size_t i = 0;
-    for (const size_t ret_pc : vm.call_stack) {
-        TraceFrame frame = vm_opcode_site(vm, ret_pc);
-        if (i == 0) {
-            frame.scope = "global-scope";
-        } else if (i - 1 < vm.call_func_stack.size()) {
-            frame.scope = vm.call_func_stack[i - 1]->name;
-        }
-        frames.push_back(std::move(frame));
-        ++i;
-    }
-    return frames;
-}
-
-} // namespace
-
 #define VM_RUNTIME_ERROR(vm, msg) \
-    throw RuntimeError((msg), vm_opcode_site((vm)), build_traceback((vm)))
+    throw RuntimeError((msg), vm_exception_site((vm)), build_traceback((vm)))
 
 Value Value::makeEmptyRef(CellPool& pool) {
     return Value(Ref(pool.allocate(), false, &pool));
@@ -83,15 +47,69 @@ Ref::Ref(std::shared_ptr<Value> ptr, const bool is_opaque, CellPool* pool)
     }
 }
 
+const std::shared_ptr<FriendFunctionObject>& Value::asFriendFunction() const {
+    if (type == Type::Reference) {
+        return asReference().get().asFriendFunction();
+    }
+    if (type != Type::FriendFunction) {
+        throw RuntimeError("Value is not a friend function");
+    }
+    return std::get<std::shared_ptr<FriendFunctionObject>>(data);
+}
+
+std::shared_ptr<FriendFunctionObject>& Value::asFriendFunction() {
+    if (type == Type::Reference) {
+        return const_cast<std::shared_ptr<FriendFunctionObject>&>(asReference().get().asFriendFunction());
+    }
+    if (type != Type::FriendFunction) {
+        throw RuntimeError("Value is not a friend function");
+    }
+    return std::get<std::shared_ptr<FriendFunctionObject>>(data);
+}
+
+std::string Value::type_name() const {
+    switch (type) {
+        case Type::None:
+            return "None";
+        case Type::String:
+            return "String";
+        case Type::Number:
+            return "Number";
+        case Type::Bool:
+            return "Bool";
+        case Type::Function:
+            return "Function";
+        case Type::Module:
+            return "Module";
+        case Type::Vector:
+            return "Vector";
+        case Type::Rational:
+            return "Rational";
+        case Type::Dictionary:
+            return "Dictionary";
+        case Type::StructObject:
+            return asStruct()->type->name;
+        case Type::FriendFunction:
+            return "friend func";
+        case Type::TypeHandle:
+            return asTypeDef()->name;
+        case Type::Iterator:
+            return "iter";
+        case Type::Reference:
+            return asReference().opaque ? "Address" : "Reference";
+        default:
+            return "<Unknown_Type>";
+    }
+}
+
 std::string Value::displayString() const {
-    if (type == Type::Reference && asReference().opaque) {
+    if (type == Type::Reference) {
         return std::format(
             "<pointer to 0x{:x}>",
             reinterpret_cast<uintptr_t>(asReference().value_ptr.get())
         );
     }
-    const Value& self = deref();
-    switch (self.type) {
+    switch (type) {
         case Type::None: return "None";
         case Type::Number: return asNumber().toString();
         case Type::Bool: return asBool() ? "true" : "false";
@@ -100,29 +118,28 @@ std::string Value::displayString() const {
         case Type::Rational: return asRational().toString();
         case Type::Vector: {
             std::string result = "vec[";
-            const auto& elements = asVector();
+            const auto& elements = std::get<std::vector<std::shared_ptr<Value>>>(data);
             for (size_t i = 0; i < elements.size(); ++i) {
                 if (i > 0) result += ", ";
-                result += elements[i]->displayString();
+                result += elements[i] ? elements[i]->displayString() : "None";
             }
             result += "]";
             return result;
         }
         case Type::Dictionary: {
             std::string result = "{";
-            const auto& entries = asDictionary();
+            const auto& entries = std::get<std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>>(data);
             size_t i = 0;
             for (const auto& [key, value] : entries) {
                 if (i > 0) result += ", ";
-                result.append(key->displayString() + ": " + value->displayString());
+                result.append(
+                    (key ? key->displayString() : "None") + ": " +
+                    (value ? value->displayString() : "None")
+                );
                 ++i;
             }
             result += "}";
             return result;
-        }
-        case Type::Reference: {
-            auto t = asReference();
-            return t.get().displayString();
         }
         case Type::StructObject: {
             const auto inst = asStruct();
@@ -149,6 +166,19 @@ std::string Value::displayString() const {
                     return result + "}";
                 }()
             );
+        }
+        case Type::TypeHandle: {
+            const auto& def = asTypeDef();
+            if (def->kind == TypeKind::Primitive) {
+                return std::format("<type {}>", def->name);
+            }
+            return std::format("<type {} (struct)>", def->name);
+        }
+        case Type::Iterator:
+            return "<iter>";
+        case Type::FriendFunction: {
+            const auto& ff = asFriendFunction();
+            return std::format("<friend func {}>", ff->name);
         }
         default: return "<__UNKNOWN_Value>";
     }
@@ -218,6 +248,19 @@ std::string Value::printString() const {
                 }()
             );
         }
+        case Type::TypeHandle: {
+            const auto& def = asTypeDef();
+            if (def->kind == TypeKind::Primitive) {
+                return std::format("<type {}>", def->name);
+            }
+            return std::format("<type {} (struct)>", def->name);
+        }
+        case Type::Iterator:
+            return "<iter>";
+        case Type::FriendFunction: {
+            const auto& ff = asFriendFunction();
+            return std::format("<friend func {}>", ff->name);
+        }
         default: return "<__UNKNOWN_Value>";
     }
 }
@@ -284,6 +327,9 @@ void rebindValueAfterMove(Value& val, VM& old_vm, VM& new_vm) {
             }
             if (iter.iterable) {
                 rebindValueAfterMove(*iter.iterable, old_vm, new_vm);
+            }
+            if (iter.user_self) {
+                rebindValueAfterMove(*iter.user_self, old_vm, new_vm);
             }
         }
         return;
@@ -470,11 +516,22 @@ void VM::rebindAfterMove(VM& source) noexcept {
 }
 
 void VM::init_builtins() {
+    register_builtin_types();
+
     SymbolTable temp_symbols;
     lang::init_builtins(temp_symbols, cell_pool);
 
     for (const auto& [id, val] : temp_symbols.symbols) {
         main_module->set_attr(g_string_pool.get_string(id), *val);
+    }
+
+    for (const char* type_name : {"text", "num", "bool"}) {
+        main_module->set_attr(type_name, make_type_value(type_name));
+    }
+
+    for (const char* type_name :
+         {"BaseException", "Exception", "StopIteration", "RuntimeError", "ValueError", "TypeError"}) {
+        main_module->set_attr(type_name, make_type_value(type_name));
     }
 
     auto std_module = std::make_shared<ModuleObject>(lang::standard_mod);
@@ -491,18 +548,30 @@ void VM::run() {
     try {
         scan_labels();
         for (; pc < code.size(); pc++) {
-            std::visit(
-                [&](auto& op) -> void {
-                    LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
-                    op.emit(*this);
+            try {
+                std::visit(
+                    [&](auto& op) -> void {
+                        LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
+                        op.emit(*this);
 #ifdef ANALYSE
-                    ++callmap[op.name()];
+                        ++callmap[op.name()];
 #endif
-                },
-                code[pc]
-            );
+                    },
+                    code[pc]
+                );
+            } catch (const RuntimeError& e) {
+                op_stack.clear();
+                if (is_stop_iteration(e)) {
+                    throw;
+                }
+                if (dispatch_runtime_error(*this, e)) {
+                    continue;
+                }
+                throw;
+            }
 
             if (++ops_since_gc >= 1000000 && gc_suppress_depth == 0) {
+                LOG("GC");
                 collectGarbage();
                 ops_since_gc = 0;
             }
@@ -517,10 +586,15 @@ void VM::run() {
 #endif
 
         if (!op_stack.empty()) {
-            const Value top = op_stack.popValue();
+            Value top = detach_value(op_stack.popValue());
             op_stack.clear();
-            op_stack.push(top);
+            op_stack.push(std::move(top));
         }
+        std::cerr << "[OpenLamina] vm.run done: op_stack=" << op_stack.size()
+                  << " symbol_stack=" << symbol_stack.size()
+                  << " locals_stack=" << locals_stack.size()
+                  << " cache_scopes=" << cache.scope_depth()
+                  << std::endl << std::flush;
     } catch ([[maybe_unused]] const std::exception& e) {
         op_stack.clear();
         throw;
@@ -529,6 +603,105 @@ void VM::run() {
 
 void VM::collectGarbage() {
     cell_pool.collectGarbage(*this);
+}
+
+namespace {
+
+void clear_function_owner_vm(const std::shared_ptr<FunctionObject>& func, VM* vm) {
+    if (func && func->owner_vm == vm) {
+        func->owner_vm = nullptr;
+    }
+}
+
+void clear_value_owner_backrefs(const Value& val, VM* vm) {
+    if (val.isUserFunction()) {
+        clear_function_owner_vm(val.asFunctionObject(), vm);
+        return;
+    }
+    if (val.isReference()) {
+        clear_value_owner_backrefs(val.asReference().get(), vm);
+        return;
+    }
+    if (val.getType() == Value::Type::FriendFunction) {
+        const auto& ff = val.asFriendFunction();
+        if (!ff->dispatch_list_holder) {
+            return;
+        }
+        for (const auto& handler : ff->dispatch_list_holder->asVector()) {
+            if (handler) {
+                clear_value_owner_backrefs(*handler, vm);
+            }
+        }
+    }
+}
+
+void clear_module_owner_backrefs(ModuleObject& module, VM* vm) {
+    for (auto& [name, val] : module.exports) {
+        (void)name;
+        clear_value_owner_backrefs(val, vm);
+    }
+    for (auto& [name, sub] : module.submodules) {
+        (void)name;
+        if (sub) {
+            clear_module_owner_backrefs(*sub, vm);
+        }
+    }
+}
+
+} // namespace
+
+void VM::shutdown() {
+    for (auto& func : call_func_stack) {
+        clear_function_owner_vm(func, this);
+    }
+    call_func_stack.clear();
+    call_stack.clear();
+    try_stack.clear();
+    active_exception.reset();
+    locals_stack.clear();
+
+    for (Opcode& op : code) {
+        std::visit([&](auto& o) {
+            using T = std::decay_t<decltype(o)>;
+            if constexpr (std::is_same_v<T, PUSH>) {
+                clear_value_owner_backrefs(o.val, this);
+            }
+        }, op);
+    }
+    code.clear();
+    label_table.clear();
+    label_scan_end = 0;
+    pc = 0;
+    label_counter = 0;
+
+    op_stack.clear();
+
+    for (const auto& [id, ptr] : cache.allEntries()) {
+        (void)id;
+        if (ptr) {
+            clear_value_owner_backrefs(*ptr, this);
+        }
+    }
+    cache.clear();
+
+    for (SymbolTable& table : symbol_stack) {
+        for (const auto& [id, ptr] : table.symbols) {
+            (void)id;
+            if (ptr) {
+                clear_value_owner_backrefs(*ptr, this);
+            }
+        }
+    }
+    symbol_stack.assign(1, SymbolTable{});
+
+    if (main_module) {
+        clear_module_owner_backrefs(*main_module, this);
+    }
+    main_module.reset();
+}
+
+VM::~VM() {
+    std::cerr << "[OpenLamina] ~VM\n" << std::flush;
 }
 
 std::optional<Value> VM::get_symbol(const std::string& name) const {
@@ -558,6 +731,8 @@ FINDMOD::FINDMOD(const std::string& name) : module_id(g_string_pool.add(name)) {
 GETATTR::GETATTR(const std::string& name) : name_id(g_string_pool.add(name)) {}
 
 SET_FIELD::SET_FIELD(const std::string& field_name) : name_id(g_string_pool.add(field_name)) {}
+
+EXC_MATCH::EXC_MATCH(std::string type_name) : type_name_id(g_string_pool.add(std::move(type_name))) {}
 
 STRUCT_NEW::STRUCT_NEW(const std::string& struct_name, const size_t arg_count)
     : struct_id(g_string_pool.add(struct_name)), arg_count(arg_count) {}
@@ -625,6 +800,7 @@ inline void NEG::emit(VM& vm) {
 inline void DEREF::emit(VM& vm) {
     const Value ref = vm.op_stack.popValue();
     vm.op_stack.push(Value(ref.deref()));
+    LOG("DEREF DONE");
 }
 
 inline void ADDR_OF::emit(VM& vm) const {
@@ -709,9 +885,16 @@ inline void GTE::emit(VM& vm) {
 std::string SymbolTable::toString() const {
     std::string k;
     for (const auto& [a, b] : *this) {
+        if (!b) {
+            k.append(std::format("{} : <null>, \n", g_string_pool.get_string(a)));
+            continue;
+        }
         k.append(std::format("{} : {}({}), \n", g_string_pool.get_string(a), b->toString(), b->type_name()));
     }
-    return k.substr(0, k.size() - 3);
+    if (k.size() >= 3) {
+        return k.substr(0, k.size() - 3);
+    }
+    return k;
 }
 
 inline void STORE::emit(VM& vm) const {
@@ -852,7 +1035,7 @@ inline void ENTER_SCOPE::emit(VM& vm) {
 
 inline void LEAVE_SCOPE::emit(VM& vm) {
     LOG("LEAVE_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
-    if (!vm.symbol_stack.empty()) {
+    if (vm.symbol_stack.size() > 1) {
         vm.symbol_stack.pop_back();
     }
     if (!vm.locals_stack.empty()) {
@@ -861,8 +1044,6 @@ inline void LEAVE_SCOPE::emit(VM& vm) {
     vm.cache.leave_scope();
     LOG("LEAVE_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
 }
-
-namespace {
 
 Value eval_param_default(VM& vm, const std::vector<Opcode>& ir) {
     const size_t stack_depth = vm.op_stack.size();
@@ -874,6 +1055,8 @@ Value eval_param_default(VM& vm, const std::vector<Opcode>& ir) {
     }
     return vm.op_stack.popValue();
 }
+
+namespace {
 
 std::vector<Value> pop_positional_args(VM& vm, const size_t count) {
     std::vector<Value> positional;
@@ -891,6 +1074,8 @@ Value pop_kwargs_dict(VM& vm, const bool has_kwargs) {
     }
     return vm.op_stack.popValue();
 }
+
+} // namespace
 
 std::vector<Value> resolve_user_function_args(
     VM& vm,
@@ -967,13 +1152,14 @@ std::vector<Value> resolve_user_function_args(
             );
         }
         resolved[i] = eval_param_default(vm, func_obj.param_default_ir[i]);
-        filled[i] = true;
     }
 
     return resolved;
 }
 
-void invoke_user_function_with_args(VM& vm, const std::shared_ptr<FunctionObject>& func_obj, std::vector<Value> args) {
+namespace {
+
+void invoke_user_function_with_args_impl(VM& vm, const std::shared_ptr<FunctionObject>& func_obj, std::vector<Value> args) {
     if (!func_obj->owner_vm) {
         func_obj->owner_vm = &vm;
     }
@@ -1006,9 +1192,31 @@ void invoke_user_function_with_args(VM& vm, const std::shared_ptr<FunctionObject
 
 } // namespace
 
+void invoke_user_function_with_args(
+    VM& vm,
+    const std::shared_ptr<FunctionObject>& func_obj,
+    std::vector<Value> args
+) {
+    invoke_user_function_with_args_impl(vm, func_obj, std::move(args));
+}
+
 inline void CALL::emit(VM& vm) const {
     Value func = vm.op_stack.popValue();
     LOG(ITIS(,func,.toString()) << ", true val type: " << func.deref().type_name());
+
+    if (func.isTypeHandle()) {
+        const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
+        std::vector<Value> positional = pop_positional_args(vm, arg_count);
+        vm.op_stack.push(type_call(vm, func.asTypeDef(), positional, kwargs));
+        return;
+    }
+
+    if (func.isFriendFunction()) {
+        const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
+        std::vector<Value> positional = pop_positional_args(vm, arg_count);
+        friend_invoke_dispatch(vm, func.asFriendFunction(), positional, kwargs);
+        return;
+    }
 
     if (!func.isFunction()) {
         VM_RUNTIME_ERROR(vm,"Not a function");
@@ -1027,11 +1235,7 @@ inline void CALL::emit(VM& vm) const {
         VM_RUNTIME_ERROR(vm, "keyword arguments are not supported for builtin functions");
     }
 
-    std::vector<Value> args;
-    args.reserve(arg_count);
-    for (ptrdiff_t i = 0; i < static_cast<ptrdiff_t>(arg_count); ++i) {
-        args.emplace_back(vm.op_stack.popValue());
-    }
+    const std::vector<Value> args = pop_positional_args(vm, arg_count);
 
     auto builtin_func = func.asFunction();
     auto result = builtin_func(vm, args);
@@ -1104,6 +1308,26 @@ inline void GETATTR::emit(VM& vm) const {
             push_module_attr(val.asModule());
             return;
         }
+        if (val.getType() == Value::Type::TypeHandle) {
+            if (const auto attr = type_get_attr(vm, val.asTypeDef(), attr_name)) {
+                vm.op_stack.push(*attr);
+                return;
+            }
+            VM_RUNTIME_ERROR(
+                vm,
+                std::format("Attribute '{}' not found on type {}", attr_name, val.asTypeDef()->name)
+            );
+        }
+        if (val.getType() == Value::Type::FriendFunction) {
+            if (const auto attr = friend_get_attr(vm, val.asFriendFunction(), attr_name)) {
+                vm.op_stack.push(*attr);
+                return;
+            }
+            VM_RUNTIME_ERROR(
+                vm,
+                std::format("Attribute '{}' not found on friend func {}", attr_name, val.asFriendFunction()->name)
+            );
+        }
         VM_RUNTIME_ERROR(
             vm,
             std::format("Attribute '{}' not found on {}", attr_name, val.type_name())
@@ -1122,6 +1346,26 @@ inline void GETATTR::emit(VM& vm) const {
     if (val.getType() == Value::Type::Module) {
         push_module_attr(val.asModule());
         return;
+    }
+    if (val.getType() == Value::Type::TypeHandle) {
+        if (const auto attr = type_get_attr(vm, val.asTypeDef(), attr_name)) {
+            vm.op_stack.push(*attr);
+            return;
+        }
+        VM_RUNTIME_ERROR(
+            vm,
+            std::format("Attribute '{}' not found on type {}", attr_name, val.asTypeDef()->name)
+        );
+    }
+    if (val.getType() == Value::Type::FriendFunction) {
+        if (const auto attr = friend_get_attr(vm, val.asFriendFunction(), attr_name)) {
+            vm.op_stack.push(*attr);
+            return;
+        }
+        VM_RUNTIME_ERROR(
+            vm,
+            std::format("Attribute '{}' not found on friend func {}", attr_name, val.asFriendFunction()->name)
+        );
     }
 
     const auto temp = vm.cell_pool.allocateCopy(val);
@@ -1146,7 +1390,9 @@ void STRUCT_NEW::emit(VM& vm) const {
     }
     std::ranges::reverse(args);
 
-    vm.op_stack.push(make_struct_instance(struct_name, std::move(args)));
+    vm.op_stack.push(make_struct_instance(vm, struct_name, std::move(args), Value(
+        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{}
+    )));
 }
 
 void SET_FIELD::emit(VM& vm) const {
@@ -1507,7 +1753,7 @@ Value ModuleObject::import(const std::string& module_name) {
                     (std::istreambuf_iterator<char>(file)),
                     std::istreambuf_iterator<char>()
                 );
-                auto module_obj = std::make_shared<ModuleObject>(code_str);
+                auto module_obj = std::make_shared<ModuleObject>(code_str, last_component);
                 module_obj->name = last_component;
                 module_obj->full_name = this->full_name.empty() ? module_name : this->full_name + "." + module_name;
                 set_attr(last_component, Value(module_obj));
@@ -1520,7 +1766,7 @@ Value ModuleObject::import(const std::string& module_name) {
                     (std::istreambuf_iterator<char>(file)),
                     std::istreambuf_iterator<char>()
                 );
-                auto module_obj = std::make_shared<ModuleObject>(code_str);
+                auto module_obj = std::make_shared<ModuleObject>(code_str, last_component);
                 module_obj->name = last_component;
                 module_obj->full_name = this->full_name.empty() ? module_name : this->full_name + "." + module_name;
                 set_attr(last_component, Value(module_obj));
@@ -1537,6 +1783,8 @@ inline void LABEL::set_label(VM& vm, const std::optional<size_t> on) const {
     vm.label_table[label_id] = on.value_or(vm.pc);
 }
 
+FunctionObject::~FunctionObject() = default;
+
 Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
     if (!owner_vm) {
         VM_RUNTIME_ERROR(caller_vm, "Function has no owner VM");
@@ -1549,7 +1797,9 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
 
     VM& target_vm = *owner_vm;
 
-    size_t old_pc = target_vm.pc;
+    const size_t old_pc = target_vm.pc;
+    const size_t symbol_stack_base = target_vm.symbol_stack.size();
+    const size_t op_stack_base = target_vm.op_stack.size();
 
     for (const auto& arg : resolved) {
         target_vm.op_stack.push(arg);
@@ -1567,7 +1817,21 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         VM_RUNTIME_ERROR(target_vm, "Function label not found: " + std::to_string(location));
     }
 
-    target_vm.run();
+    try {
+        target_vm.run();
+    } catch (...) {
+        while (target_vm.symbol_stack.size() > symbol_stack_base) {
+            target_vm.symbol_stack.pop_back();
+        }
+        if (!target_vm.call_stack.empty()) {
+            target_vm.call_stack.pop_back();
+        }
+        target_vm.pc = old_pc;
+        while (target_vm.op_stack.size() > op_stack_base) {
+            target_vm.op_stack.pop();
+        }
+        throw;
+    }
 
     for (size_t i = 0; i < closure.size(); i++) {
         if (!target_vm.symbol_stack.empty()) {
@@ -1583,16 +1847,22 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
 
     if (!target_vm.op_stack.empty()) {
         Value result = target_vm.op_stack.popValue();
-        target_vm.op_stack.clear();
+        while (target_vm.op_stack.size() > op_stack_base) {
+            target_vm.op_stack.pop();
+        }
         return result;
+    }
+    while (target_vm.op_stack.size() > op_stack_base) {
+        target_vm.op_stack.pop();
     }
     return {};
 }
 
 template<StringType string>
-ModuleObject::ModuleObject(string code) : is_user(true) {
+ModuleObject::ModuleObject(string code, string package_name) : is_user(true) {
     const auto codes = lm::irgen::Generator(parse(code)).gen();
     owner_vm = new VM(codes);
+    owner_vm->set_symbol("__package__", Value(std::move(package_name)));
     owner_vm->run();
 
     for (const auto& [expname, value] : owner_vm->main_module->exports) {
@@ -1608,61 +1878,23 @@ ModuleObject::ModuleObject(string code) : is_user(true) {
 }
 }
 
-bool irgen::IteratorObject::next(Value& out) {
-    Value& iterable_ref = iterable->deref();
-
-    if (iterable_ref.isVector()) {
-        auto& vec = iterable_ref.asVector();
-        if (index < vec.size()) {
-            if (cell_pool == nullptr) {
-                throw RuntimeError("iterator has no cell pool");
-            }
-            out = Value::makeRef(vec[index++], *cell_pool);
-            return true;
-        }
-    } else if (iterable_ref.isString()) {
-        const std::string& str = iterable_ref.asString();
-        if (index < str.size()) {
-            out = Value(std::string(1, str[index++]));
-            return true;
-        }
-    } else if (iterable_ref.isDictionary()) {
-        auto& dict = iterable_ref.asDictionary();
-        size_t i = 0;
-        for (const auto& key : dict | std::views::keys) {
-            if (i == index) {
-                if (cell_pool == nullptr) {
-                    throw RuntimeError("iterator has no cell pool");
-                }
-                out = Value::makeRef(key, *cell_pool);
-                index++;
-                return true;
-            }
-            i++;
-        }
-    }
-
-    return false;
-}
-
 inline void irgen::ITER_NEW::emit(VM& vm) const {
     Value iterable = vm.op_stack.popValue();
-    auto iter_obj = std::make_shared<IteratorObject>(vm.cell_pool.allocateValue(std::move(iterable)));
-    iter_obj->cell_pool = &vm.cell_pool;
-    vm.op_stack.push(Value(iter_obj));
+    vm.op_stack.push(make_iter(vm, iterable));
 }
 
 inline void irgen::ITER_NEXT::emit(VM& vm) const {
     Value iter_val = vm.op_stack.popValue();
-    Value& iter_deref = iter_val.deref();
-
-    if (iter_deref.getType() != Value::Type::Iterator) {
-        VM_RUNTIME_ERROR(vm,"ITER_NEXT requires an iterator object");
-    }
-
-    auto iter = iter_deref.asIterator();
     Value result;
-    bool has_next = iter->next(result);
+    bool has_next = false;
+    {
+        struct IterNextGuard {
+            VM& vm;
+            explicit IterNextGuard(VM& target) : vm(target) { ++vm.iter_next_guard_depth; }
+            ~IterNextGuard() { --vm.iter_next_guard_depth; }
+        } guard{vm};
+        has_next = iterator_advance(vm, iter_val, result);
+    }
 
     vm.op_stack.push(iter_val);
     vm.op_stack.push(result);
@@ -1673,3 +1905,69 @@ inline void irgen::ITER_END::emit(VM& vm) const {
     vm.op_stack.pop();
 }
 
+inline void irgen::THROW::emit(VM& vm) const {
+    const Value exc = vm.op_stack.popValue();
+    throw_user_exception(vm, exc);
+}
+
+inline void irgen::ENTER_TRY::emit(VM& vm) const {
+    TryHandlerFrame frame;
+    frame.catch_label = catch_label;
+    frame.else_label = else_label;
+    frame.end_label = end_label;
+    frame.call_stack_sz = vm.call_stack.size();
+    frame.call_func_stack_sz = vm.call_func_stack.size();
+    frame.symbol_stack_sz = vm.symbol_stack.size();
+    frame.locals_stack_sz = vm.locals_stack.size();
+    vm.try_stack.push_back(frame);
+}
+
+inline void irgen::END_TRY::emit(VM& vm) const {
+    if (vm.try_stack.empty()) {
+        VM_RUNTIME_ERROR(vm, "END_TRY without matching ENTER_TRY");
+    }
+    const TryHandlerFrame& frame = vm.try_stack.back();
+    const size_t target_label = frame.else_label != 0 ? frame.else_label : frame.end_label;
+    if (!vm.label_table.contains(target_label)) {
+        VM_RUNTIME_ERROR(vm, "Unknown label: " + std::to_string(target_label));
+    }
+    vm.pc = vm.label_table.at(target_label);
+}
+
+inline void irgen::POP_TRY::emit(VM& vm) const {
+    if (!vm.try_stack.empty()) {
+        vm.try_stack.pop_back();
+    }
+    vm.active_exception.reset();
+}
+
+inline void irgen::PUSH_EXC::emit(VM& vm) const {
+    if (!vm.active_exception) {
+        VM_RUNTIME_ERROR(vm, "no active exception");
+    }
+    vm.op_stack.push(Value::makeRef(vm.active_exception, vm.cell_pool));
+}
+
+inline void irgen::EXC_MATCH::emit(VM& vm) const {
+    if (!vm.active_exception) {
+        vm.op_stack.push(Value(false));
+        return;
+    }
+    const std::string& type_name = g_string_pool.get_string(type_name_id);
+    const Value exc = Value::makeRef(vm.active_exception, vm.cell_pool);
+    vm.op_stack.push(Value(struct_instance_is_a(exc, type_name)));
+}
+
+inline void irgen::RETHROW::emit(VM& vm) const {
+    if (!vm.active_exception) {
+        VM_RUNTIME_ERROR(vm, "rethrow outside except handler");
+    }
+    const Value exc = Value::makeRef(vm.active_exception, vm.cell_pool);
+    if (!vm.try_stack.empty()) {
+        vm.try_stack.pop_back();
+    }
+    if (dispatch_exception(vm, exc)) {
+        return;
+    }
+    throw_user_exception(vm, exc);
+}

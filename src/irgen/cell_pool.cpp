@@ -1,5 +1,6 @@
 #include "cell_pool.hpp"
 
+#include "friend_function.hpp"
 #include "opcode.hpp"
 
 #include <new>
@@ -72,6 +73,13 @@ void CellPool::bindOwner(VM* vm) {
 
 void CellPool::releaseCell(Value* cell) const {
     impl_->recycle(cell);
+}
+
+void CellPool::releaseAll() {
+    impl_->free_list.clear();
+    impl_->cell_index.clear();
+    impl_->chunks.clear();
+    impl_->allocations_since_gc = 0;
 }
 
 size_t CellPool::totalCells() const {
@@ -230,6 +238,18 @@ void CellPool::Impl::markFromValue(const Value& value) {
                     if (ptr) {
                         markCell(ptr.get());
                     }
+                }
+            }
+        }
+        return;
+    }
+    if (value.getType() == Value::Type::FriendFunction) {
+        const auto& ff = value.asFriendFunction();
+        if (ff->dispatch_list_holder) {
+            markCell(ff->dispatch_list_holder.get());
+            for (const auto& handler : ff->dispatch_list_holder->asVector()) {
+                if (handler) {
+                    markFromValue(*handler);
                 }
             }
         }

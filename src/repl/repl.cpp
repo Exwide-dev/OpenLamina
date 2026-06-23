@@ -68,11 +68,14 @@ void repl::REPL::update_state(const std::string& line) {
             if (!prev_token.empty()) {
                 static const std::string func_keywords[] = {
                     "func",
+                    "friend",
                     "do",
                     "if",
                     "else",
                     "loop",
-                    "while"
+                    "while",
+                    "try",
+                    "catch"
                 };
                 for (const auto& kw : func_keywords) {
                     if (prev_token == kw) {

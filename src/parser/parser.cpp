@@ -47,6 +47,13 @@ ExprNode* cloneExpr(const ExprNode* node) {
             const auto* access = dynamic_cast<const MemberAccessNode*>(node);
             return new MemberAccessNode(cloneExpr(access->object), access->member);
         }
+        case ASTNodeType::TypeConvert: {
+            const auto* convert = dynamic_cast<const TypeConvertExprNode*>(node);
+            return new TypeConvertExprNode(
+                cloneExpr(convert->type_expr),
+                cloneExpr(convert->value_expr)
+            );
+        }
         case ASTNodeType::IndexAccess: {
             const auto* access = dynamic_cast<const IndexAccessNode*>(node);
             return new IndexAccessNode(cloneExpr(access->object), cloneExpr(access->index));
@@ -252,6 +259,7 @@ std::string Parser::getTokenTypeName(const TokenType type) {
         case TokenType::STRING_LITERAL: return "string";
         case TokenType::KW_LET: return "'let'";
         case TokenType::KW_FUNC: return "'func'";
+        case TokenType::KW_FRIEND: return "'friend'";
         case TokenType::KW_DO: return "'do'";
         case TokenType::KW_RETURN: return "'return'";
         case TokenType::KW_IF: return "'if'";
@@ -272,6 +280,9 @@ std::string Parser::getTokenTypeName(const TokenType type) {
         case TokenType::KW_MAKE: return "'make'";
         case TokenType::KW_MATCH: return "'match'";
         case TokenType::KW_CASE: return "'case'";
+        case TokenType::KW_TRY: return "'try'";
+        case TokenType::KW_CATCH: return "'catch'";
+        case TokenType::KW_THROW: return "'throw'";
         case TokenType::OPER_PLUS: return "'+'";
         case TokenType::OPER_MINUS: return "'-'";
         case TokenType::OPER_MUL: return "'*'";
@@ -286,6 +297,7 @@ std::string Parser::getTokenTypeName(const TokenType type) {
         case TokenType::OPER_COMMA: return "','";
         case TokenType::OPER_DOT: return "'.'";
         case TokenType::OPER_COLON: return "':'";
+        case TokenType::OPER_ARROW: return "'->'";
         case TokenType::OPER_PIPE: return "'|>'";
         case TokenType::OPER_BAR: return "'|'";
         case TokenType::ASSIGN: return "'='";
@@ -499,6 +511,11 @@ ASTNode* Parser::parseStatement() {
 
     TokenType current = current_token().type;
 
+    if (current == TokenType::KW_FUNC || looksLikeDecoratedFuncDecl() ||
+        looksLikeFuncDeclWithLeadingModifier()) {
+        return parseFuncDecl();
+    }
+
     if (current == TokenType::KW_LET || current == TokenType::KW_CONST ||
         current == TokenType::KW_INTERN || current == TokenType::KW_EXPORT) {
         return parseVarDecl();
@@ -512,6 +529,10 @@ ASTNode* Parser::parseStatement() {
         return parseStructDecl();
     }
 
+    if (current == TokenType::KW_FRIEND) {
+        return parseFriendFuncDecl();
+    }
+
     if (current == TokenType::KW_WITH) {
         const ParserState saved = save_state();
         parseWithDecoratorList();
@@ -520,16 +541,20 @@ ASTNode* Parser::parseStatement() {
         return is_do ? parseDecoratedDoDecl() : parseFuncDecl();
     }
 
-    if (current == TokenType::KW_FUNC || looksLikeDecoratedFuncDecl()) {
-        return parseFuncDecl();
-    }
-
     if (current == TokenType::KW_DO || looksLikeDecoratedDoDecl()) {
         return parseExpression();
     }
 
     if (current == TokenType::KW_RETURN) {
         return parseReturnStmt();
+    }
+
+    if (current == TokenType::KW_THROW) {
+        return parseThrowStmt();
+    }
+
+    if (current == TokenType::KW_TRY) {
+        return parseTryStmt();
     }
 
     if (current == TokenType::KW_IF) {
@@ -681,6 +706,30 @@ bool Parser::looksLikeDecoratedFuncDecl() {
     return is_decorated;
 }
 
+bool Parser::looksLikeFuncDeclWithLeadingModifier() {
+    if (!check(TokenType::KW_INTERN) && !check(TokenType::KW_EXPORT)) {
+        return false;
+    }
+
+    const ParserState saved = save_state();
+    advance();
+    const bool is_func = check(TokenType::KW_FUNC) || looksLikeDecoratedFuncDecl();
+    restore_state(saved);
+    return is_func;
+}
+
+bool Parser::parseFuncVisibilityModifier(Visibility& visibility) {
+    if (match(TokenType::KW_INTERN)) {
+        visibility = Visibility::Internal;
+        return true;
+    }
+    if (match(TokenType::KW_EXPORT)) {
+        visibility = Visibility::Exported;
+        return true;
+    }
+    return false;
+}
+
 bool Parser::looksLikeDecoratedDoDecl() {
     if (isAtEnd() || check(TokenType::KW_DO) || check(TokenType::KW_WITH)) {
         return false;
@@ -718,6 +767,13 @@ TypeNode* Parser::parseTypeName() {
     return make_node_at<TypeNode>(line, name);
 }
 
+TypeNode* Parser::parseOptionalReturnType() {
+    if (!match(TokenType::OPER_ARROW)) {
+        return nullptr;
+    }
+    return parseTypeName();
+}
+
 ASTNode* Parser::parseStructDecl() {
     LOG("Parsing struct_decl");
     bool typed = false;
@@ -728,6 +784,13 @@ ASTNode* Parser::parseStructDecl() {
     consume(TokenType::KW_STRUCT);
     std::string name = current_token().value;
     consume(TokenType::IDENTIFIER);
+
+    std::string base_name;
+    if (match(TokenType::OPER_COLON)) {
+        base_name = current_token().value;
+        consume(TokenType::IDENTIFIER);
+    }
+
     consume(TokenType::LBRACE);
 
     std::vector<StructField> fields;
@@ -790,7 +853,14 @@ ASTNode* Parser::parseStructDecl() {
     }
 
     consume(TokenType::RBRACE);
-    return make_node_at<StructDeclNode>(struct_line, name, typed, std::move(fields), std::move(methods));
+    return make_node_at<StructDeclNode>(
+        struct_line,
+        name,
+        typed,
+        std::move(fields),
+        std::move(methods),
+        std::move(base_name)
+    );
 }
 
 FuncDeclNode* Parser::parseStructMethod() {
@@ -802,6 +872,7 @@ FuncDeclNode* Parser::parseStructMethod() {
     consume(TokenType::LPAREN);
     auto params = parseParamList();
     consume(TokenType::RPAREN);
+    TypeNode* ret_type = parseOptionalReturnType();
 
     if (params.empty() || params[0].name != "self") {
         throw_error_at("struct method first parameter must be 'self'", current_token());
@@ -814,13 +885,15 @@ FuncDeclNode* Parser::parseStructMethod() {
     pop_context();
     consume(TokenType::RBRACE);
 
-    return make_node_at<FuncDeclNode>(
+    auto* node = make_node_at<FuncDeclNode>(
         func_line,
         name,
         params,
         make_node_at<BlockStmtNode>(body_line, body),
         Visibility::Internal
     );
+    node->ret_type = ret_type;
+    return node;
 }
 
 std::vector<ForLoopNode::IterationItem*> Parser::parseComprehensionBindings() {
@@ -870,17 +943,47 @@ ExprNode* Parser::finishComprehensionAfterFor(ExprNode* result_expr, const int l
     return make_node_at<ComprehensionNode>(line, result_expr, std::move(items), guard);
 }
 
+ASTNode* Parser::parseFriendFuncDecl() {
+    LOG("Parsing friend_func_decl");
+    const int decl_line = current_token().line;
+    consume(TokenType::KW_FRIEND);
+    consume(TokenType::KW_FUNC);
+    std::string name = current_token().value;
+    consume(TokenType::IDENTIFIER);
+
+    std::vector<FuncParam> params;
+    BlockStmtNode* body = nullptr;
+    TypeNode* ret_type = nullptr;
+
+    if (match(TokenType::LPAREN)) {
+        params = parseParamList();
+        consume(TokenType::RPAREN);
+        ret_type = parseOptionalReturnType();
+        const int body_line = current_token().line;
+        consume(TokenType::LBRACE);
+        push_context(ParserContext::FunctionBody);
+        auto body_stmts = parseBlockStatementList();
+        pop_context();
+        consume(TokenType::RBRACE);
+        body = make_node_at<BlockStmtNode>(body_line, body_stmts);
+    }
+
+    return make_node_at<FriendFuncDeclNode>(decl_line, name, std::move(params), body, ret_type);
+}
+
 ASTNode* Parser::parseFuncDecl() {
     LOG("Parsing func_decl");
-    std::vector<ExprNode*> decorators;
+    Visibility visibility = Visibility::Exported;
+    (void)parseFuncVisibilityModifier(visibility);
 
+    std::vector<ExprNode*> decorators;
     if (check(TokenType::KW_WITH)) {
         decorators = parseWithDecoratorList();
-        if (check(TokenType::KW_MAKE)) {
-            consume(TokenType::KW_MAKE);
-        }
     } else if (!check(TokenType::KW_FUNC)) {
-        while (!check(TokenType::KW_FUNC)) {
+        while (!check(TokenType::KW_FUNC) && !isAtEnd()) {
+            if (check(TokenType::KW_INTERN) || check(TokenType::KW_EXPORT)) {
+                break;
+            }
             decorators.push_back(parsePostfixExpr(false));
         }
     }
@@ -892,6 +995,9 @@ ASTNode* Parser::parseFuncDecl() {
     consume(TokenType::LPAREN);
     auto params = parseParamList();
     consume(TokenType::RPAREN);
+    TypeNode* ret_type = parseOptionalReturnType();
+    (void)parseFuncVisibilityModifier(visibility);
+
     const int body_line = current_token().line;
     consume(TokenType::LBRACE);
     push_context(ParserContext::FunctionBody);
@@ -899,14 +1005,16 @@ ASTNode* Parser::parseFuncDecl() {
     pop_context();
     consume(TokenType::RBRACE);
 
-    return make_node_at<FuncDeclNode>(
+    auto* node = make_node_at<FuncDeclNode>(
         func_line,
         name,
         params,
         make_node_at<BlockStmtNode>(body_line, body),
-        Visibility::Exported,
+        visibility,
         decorators
     );
+    node->ret_type = ret_type;
+    return node;
 }
 
 ASTNode* Parser::parseDecoratedDoDecl() {
@@ -931,6 +1039,7 @@ DoFuncDeclNode* Parser::finishDoFuncDecl(std::vector<ExprNode*> decorators, cons
     consume(TokenType::LPAREN);
     auto params = parseParamList();
     consume(TokenType::RPAREN);
+    TypeNode* ret_type = parseOptionalReturnType();
     const int body_line = current_token().line;
     consume(TokenType::LBRACE);
     push_context(ParserContext::DoBody);
@@ -938,12 +1047,14 @@ DoFuncDeclNode* Parser::finishDoFuncDecl(std::vector<ExprNode*> decorators, cons
     pop_context();
     consume(TokenType::RBRACE);
 
-    return make_node_at<DoFuncDeclNode>(
+    auto* node = make_node_at<DoFuncDeclNode>(
         decl_line,
         params,
         make_node_at<BlockStmtNode>(body_line, body),
         std::move(decorators)
     );
+    node->ret_type = ret_type;
+    return node;
 }
 
 ASTNode* Parser::parseReturnStmt() {
@@ -961,6 +1072,115 @@ ASTNode* Parser::parseReturnStmt() {
 
     ExprNode* value = parseExpression();
     return make_node_at<ReturnStmtNode>(ret_line, value);
+}
+
+ASTNode* Parser::parseThrowStmt() {
+    LOG("Parsing throw_stmt");
+    const int throw_line = current_token().line;
+    consume(TokenType::KW_THROW);
+
+    while (match(TokenType::NEWLINE)) {
+    }
+
+    ExprNode* value = parseExpression();
+    return make_node_at<ThrowStmtNode>(throw_line, value);
+}
+
+CatchClauseNode* Parser::parseCatchClause() {
+    LOG("Parsing catch_clause");
+    const int catch_line = current_token().line;
+    consume(TokenType::KW_CATCH);
+    consume(TokenType::LPAREN);
+
+    std::string var_name;
+    std::string type_name;
+    bool catch_all = false;
+
+    if (check(TokenType::OPER_DOT)) {
+        consume(TokenType::OPER_DOT);
+        consume(TokenType::OPER_DOT);
+        consume(TokenType::OPER_DOT);
+        catch_all = true;
+    } else {
+        var_name = current_token().value;
+        consume(TokenType::IDENTIFIER);
+        if (match(TokenType::OPER_COLON)) {
+            if (check(TokenType::OPER_DOT)) {
+                consume(TokenType::OPER_DOT);
+                consume(TokenType::OPER_DOT);
+                consume(TokenType::OPER_DOT);
+                catch_all = true;
+            } else {
+                TypeNode* type = parseTypeName();
+                type_name = type->name;
+                delete type;
+            }
+        } else {
+            catch_all = true;
+        }
+    }
+
+    consume(TokenType::RPAREN);
+
+    const int body_line = current_token().line;
+    consume(TokenType::LBRACE);
+    push_context(ParserContext::FunctionBody);
+    auto body_stmts = parseBlockStatementList();
+    pop_context();
+    consume(TokenType::RBRACE);
+
+    return make_node_at<CatchClauseNode>(
+        catch_line,
+        std::move(var_name),
+        std::move(type_name),
+        catch_all,
+        make_node_at<BlockStmtNode>(body_line, body_stmts)
+    );
+}
+
+ASTNode* Parser::parseTryStmt() {
+    LOG("Parsing try_stmt");
+    const int try_line = current_token().line;
+    consume(TokenType::KW_TRY);
+
+    const int try_body_line = current_token().line;
+    consume(TokenType::LBRACE);
+    push_context(ParserContext::FunctionBody);
+    auto try_stmts = parseBlockStatementList();
+    pop_context();
+    consume(TokenType::RBRACE);
+
+    while (match(TokenType::NEWLINE)) {
+    }
+
+    std::vector<CatchClauseNode*> catches;
+    while (check(TokenType::KW_CATCH)) {
+        catches.push_back(parseCatchClause());
+        while (match(TokenType::NEWLINE)) {
+        }
+    }
+
+    BlockStmtNode* else_body = nullptr;
+    if (match(TokenType::KW_ELSE)) {
+        const int else_line = current_token().line;
+        consume(TokenType::LBRACE);
+        push_context(ParserContext::FunctionBody);
+        auto else_stmts = parseBlockStatementList();
+        pop_context();
+        consume(TokenType::RBRACE);
+        else_body = make_node_at<BlockStmtNode>(else_line, else_stmts);
+    }
+
+    if (catches.empty()) {
+        throw_error_at("try statement requires at least one catch clause", current_token());
+    }
+
+    return make_node_at<TryStmtNode>(
+        try_line,
+        make_node_at<BlockStmtNode>(try_body_line, try_stmts),
+        std::move(catches),
+        else_body
+    );
 }
 
 ASTNode* Parser::parseIfStmt() {
@@ -1484,15 +1704,26 @@ ExprNode* Parser::parsePostfixExpr(const bool parse_do_suffix) {
         if (check(TokenType::LPAREN)) {
             const int line = current_token().line;
             match(TokenType::LPAREN);
+            skipNewlines();
             auto args = parseArgList();
+            skipNewlines();
             consume(TokenType::RPAREN);
             expr = make_node_at<FuncCallExprNode>(line, expr, args);
         } else if (check(TokenType::OPER_DOT)) {
             const int line = current_token().line;
             match(TokenType::OPER_DOT);
-            std::string name = current_token().value;
-            consume(TokenType::IDENTIFIER);
-            expr = make_node_at<MemberAccessNode>(line, expr, name);
+            if (check(TokenType::LPAREN)) {
+                match(TokenType::LPAREN);
+                skipNewlines();
+                ExprNode* value = parseExpression();
+                skipNewlines();
+                consume(TokenType::RPAREN);
+                expr = make_node_at<TypeConvertExprNode>(line, expr, value);
+            } else {
+                std::string name = current_token().value;
+                consume(TokenType::IDENTIFIER);
+                expr = make_node_at<MemberAccessNode>(line, expr, name);
+            }
         } else if (check(TokenType::LBRACKET)) {
             const int line = current_token().line;
             match(TokenType::LBRACKET);
@@ -1546,7 +1777,9 @@ ExprNode* Parser::parseFactor() {
     }
 
     if (match(TokenType::LPAREN)) {
+        skipNewlines();
         ExprNode* expr = pipeline_step_mode_ ? parseComparisonExpr() : parseExpression();
+        skipNewlines();
         consume(TokenType::RPAREN);
         return expr;
     }
@@ -1639,28 +1872,49 @@ std::vector<FuncParam> Parser::parseParamList() {
     LOG("Parsing param_list");
     std::vector<FuncParam> params;
 
+    skipNewlines();
     if (check(TokenType::RPAREN)) {
         return params;
     }
 
     std::string name = current_token().value;
     consume(TokenType::IDENTIFIER);
+
+    std::string type_name;
+    bool has_type = false;
+    if (match(TokenType::OPER_COLON)) {
+        TypeNode* param_type = parseTypeName();
+        type_name = param_type->name;
+        delete param_type;
+        has_type = true;
+    }
+
     ExprNode* default_value = nullptr;
     if (match(TokenType::ASSIGN)) {
         default_value = parseExpression();
     }
-    params.emplace_back(std::move(name), default_value);
+    params.emplace_back(std::move(name), default_value, std::move(type_name), has_type);
 
     while (match(TokenType::OPER_COMMA)) {
+        skipNewlines();
         name = current_token().value;
         consume(TokenType::IDENTIFIER);
+        type_name.clear();
+        has_type = false;
+        if (match(TokenType::OPER_COLON)) {
+            TypeNode* param_type = parseTypeName();
+            type_name = param_type->name;
+            delete param_type;
+            has_type = true;
+        }
         default_value = nullptr;
         if (match(TokenType::ASSIGN)) {
             default_value = parseExpression();
         }
-        params.emplace_back(std::move(name), default_value);
+        params.emplace_back(std::move(name), default_value, std::move(type_name), has_type);
     }
 
+    skipNewlines();
     return params;
 }
 
@@ -1668,11 +1922,13 @@ std::vector<CallArgument> Parser::parseArgList() {
     LOG("Parsing arg_list");
     std::vector<CallArgument> args;
 
+    skipNewlines();
     if (check(TokenType::RPAREN)) {
         return args;
     }
 
     while (true) {
+        skipNewlines();
         if (check(TokenType::IDENTIFIER)) {
             const ParserState saved = save_state();
             const std::string name = current_token().value;
@@ -1690,8 +1946,10 @@ std::vector<CallArgument> Parser::parseArgList() {
         if (!match(TokenType::OPER_COMMA)) {
             break;
         }
+        skipNewlines();
     }
 
+    skipNewlines();
     return args;
 }
 

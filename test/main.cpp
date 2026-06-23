@@ -9,6 +9,7 @@
 #include "front-end/front_end.hpp"
 #include "irgen/generator.hpp"
 #include "irgen/opcode.hpp"
+#include "irgen/optimizer.hpp"
 namespace {
 
 void test_vm_goto() {
@@ -56,8 +57,11 @@ void test_parse_and_execute() {
     const auto* manual_ast = parse("let a = 10 + 5 * 2\na");
     ASSERT(manual_ast != nullptr);
 
-    const irgen::Value manual_result = lm::irgen::execute(manual_ast);
-    ASSERT(!manual_result.isNone());
+    ASSERT(lm::irgen::execute(manual_ast, [&](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        ASSERT(!vm.op_stack.top().isNone());
+        return true;
+    }));
 
     delete ast;
     delete manual_ast;
@@ -68,6 +72,8 @@ std::string fib_format(const int n) {
 }
 
 void test_fib_speed() {
+    lm::irgen::bytecode_optimize_enabled = true;
+
     irgen::VM vm;
 
     const std::string input = R"(
@@ -82,7 +88,7 @@ func fib(n) {
     ASSERT(got_ast != nullptr);
 
     auto code = lm::irgen::Generator(got_ast).gen();
-    std::cout << "Fib code: " << std::endl;
+    std::cout << "Fib code (optimized, -O):\n";
     lm::irgen::print_code(code);
     vm.code.insert(vm.code.end(), code.begin(), code.end());
     vm.run();
@@ -113,6 +119,7 @@ func fib(n) {
     }
 
     delete got_ast;
+    lm::irgen::bytecode_optimize_enabled = false;
 }
 
 void test_decorators() {
@@ -125,9 +132,13 @@ void test_decorators() {
 
     lmx::ProgramASTNode* log_ast = parse(log_test);
     ASSERT(log_ast != nullptr);
-    const irgen::Value log_result = lm::irgen::execute(log_ast);
-    ASSERT(log_result.isString());
-    ASSERT(log_result.asString() == "Hello, World!");
+    ASSERT(lm::irgen::execute(log_ast, [&](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& log_result = vm.op_stack.top();
+        ASSERT(log_result.isString());
+        ASSERT(log_result.asString() == "Hello, World!");
+        return true;
+    }));
     delete log_ast;
 
     const std::string debug_test = R"(
@@ -139,9 +150,13 @@ void test_decorators() {
 
     lmx::ProgramASTNode* debug_ast = parse(debug_test);
     ASSERT(debug_ast != nullptr);
-    const irgen::Value debug_result = lm::irgen::execute(debug_ast);
-    ASSERT(debug_result.isNumber());
-    ASSERT(debug_result.asNumber() == irgen::Value(8).asNumber());
+    ASSERT(lm::irgen::execute(debug_ast, [&](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& debug_result = vm.op_stack.top();
+        ASSERT(debug_result.isNumber());
+        ASSERT(debug_result.asNumber() == irgen::Value(8).asNumber());
+        return true;
+    }));
     delete debug_ast;
 
     const std::string custom_test = R"(
@@ -159,19 +174,35 @@ void test_decorators() {
 
     lmx::ProgramASTNode* custom_ast = parse(custom_test);
     ASSERT(custom_ast != nullptr);
-    const irgen::Value custom_result = lm::irgen::execute(custom_ast);
-    ASSERT(custom_result.isString());
-    ASSERT(custom_result.asString() == "hello, Alice");
+    ASSERT(lm::irgen::execute(custom_ast, [&](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& custom_result = vm.op_stack.top();
+        ASSERT(custom_result.isString());
+        ASSERT(custom_result.asString() == "hello, Alice");
+        return true;
+    }));
     delete custom_ast;
 }
 
 } // namespace
 
+void test_gc_memory_trend();
+void test_bytecode_optimizer();
+void test_type_convert_sugar();
+void test_exceptions_and_try_catch();
+void test_friend_func_dispatch();
+void test_iter_stopiteration_edges();
+
 int main() {
     //test::run("vm_goto", test_vm_goto);
     //test::run("parse_and_execute", test_parse_and_execute);
-    test::run("fib_speed", test_fib_speed);
-    test::run("decorators", test_decorators);
-    std::cin.get();
+    //test::run("fib_speed", test_fib_speed);
+    //test::run("decorators", test_decorators);
+    // test::run("bytecode_optimizer", test_bytecode_optimizer);
+    // test::run("type_convert_sugar", test_type_convert_sugar);
+    // test::run("exceptions_and_try_catch", test_exceptions_and_try_catch);
+    test::run("friend_func_dispatch", test_friend_func_dispatch);
+    test::run("iter_stopiteration_edges", test_iter_stopiteration_edges);
+    //test::run("gc_memory_trend", test_gc_memory_trend);
     return test::summary();
 }

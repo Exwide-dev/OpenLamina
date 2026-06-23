@@ -109,6 +109,12 @@ private:
         context_stack = state.contexts;
     }
 
+    /** @brief 跳过括号/参数列表内的换行（空格由 lexer 处理） */
+    void skipNewlines() {
+        while (match(TokenType::NEWLINE)) {
+        }
+    }
+
     /**
      * @brief 压入上下文
      * @param ctx 上下文类型
@@ -229,16 +235,30 @@ private:
      * @brief 解析函数声明
      * @return 函数声明节点
      */
+    ASTNode* parseFriendFuncDecl();
+
     ASTNode* parseFuncDecl();
 
     ASTNode* parseStructDecl();
 
     TypeNode* parseTypeName();
 
+    TypeNode* parseOptionalReturnType();
+
     /**
      * @brief 判断当前位置是否为「装饰器表达式 + func」形式（如 std.decos.log func f）
      */
     [[nodiscard]] bool looksLikeDecoratedFuncDecl();
+
+    /**
+     * @brief 判断当前位置是否为「intern/export + [装饰器] + func」形式
+     */
+    [[nodiscard]] bool looksLikeFuncDeclWithLeadingModifier();
+
+    /**
+     * @brief 解析 func 声明前的 intern/export 修饰符；若匹配则写入 visibility 并返回 true
+     */
+    [[nodiscard]] bool parseFuncVisibilityModifier(Visibility& visibility);
 
     /**
      * @brief 判断当前位置是否为「装饰器表达式 + do」形式（如 std.decos.timer do(x)）
@@ -265,6 +285,12 @@ private:
      * @return 返回语句节点
      */
     ASTNode* parseReturnStmt();
+
+    ASTNode* parseThrowStmt();
+
+    ASTNode* parseTryStmt();
+
+    CatchClauseNode* parseCatchClause();
 
     /**
      * @brief 解析 if 语句
