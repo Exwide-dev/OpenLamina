@@ -184,6 +184,23 @@ std::vector<Value> resolve_call_args_with_splat(
 
 namespace {
 
+[[nodiscard]] bool is_text_type_ast(const RuntimeAstNode& type_node) {
+    return type_node.kind == lmx::ASTNodeType::VarRef && type_node.text == "text";
+}
+
+[[nodiscard]] bool is_type_convert_to_text(const RuntimeAstNode& node) {
+    return node.kind == lmx::ASTNodeType::TypeConvert &&
+           node.slot_a != nullptr &&
+           is_text_type_ast(*node.slot_a);
+}
+
+[[nodiscard]] Value eval_type_convert_text(const RuntimeAstNode& node) {
+    if (node.slot_b == nullptr) {
+        throw RuntimeError("text.(...) missing value expression");
+    }
+    return Value(ast_to_source(*node.slot_b));
+}
+
 struct EvalAstTrace {
     const char* label;
     explicit EvalAstTrace(const char* l) : label(l) {
@@ -204,6 +221,11 @@ Value eval_ast_value(VM& vm, const RuntimeAstNode& node) {
     const RuntimeAstNode* body = &node;
     if (node.kind == lmx::ASTNodeType::QuoteExpr && node.slot_a != nullptr) {
         body = &*node.slot_a;
+    }
+
+    if (is_type_convert_to_text(*body)) {
+        LOG("[eval_ast] text.(ast) fast path");
+        return eval_type_convert_text(*body);
     }
 
     TempParseTree tree;
@@ -271,6 +293,76 @@ RuntimeAstNode quote_ast(
     }
     out.slot_a = std::make_unique<RuntimeAstNode>(std::move(body));
     return out;
+}
+
+namespace {
+
+RuntimeAstNode expect_ast_node(const Value& value, const char* context) {
+    if (!value_is_ast(value)) {
+        throw RuntimeError(std::format("{} expects an AST value", context));
+    }
+    return value_as_ast(value);
+}
+
+void push_call_arg(RuntimeAstNode& out, RuntimeAstNode arg) {
+    RuntimeAstNode::CallArg ca;
+    ca.value = std::make_unique<RuntimeAstNode>(std::move(arg));
+    out.call_args.push_back(std::move(ca));
+}
+
+} // namespace
+
+Value clone_ast_value(const Value& value) {
+    return make_ast_value(expect_ast_node(value, "clone_ast"));
+}
+
+Value compose_ast_type_convert(const Value& type_ast, const Value& value_ast) {
+    RuntimeAstNode out;
+    out.kind = lmx::ASTNodeType::TypeConvert;
+    out.slot_a = std::make_unique<RuntimeAstNode>(expect_ast_node(type_ast, "type_convert"));
+    out.slot_b = std::make_unique<RuntimeAstNode>(expect_ast_node(value_ast, "type_convert"));
+    return make_ast_value(std::move(out));
+}
+
+Value compose_ast_func_call(const Value& callee_ast, const Value& args_vec) {
+    const Value& vec = args_vec.deref();
+    if (vec.getType() != Value::Type::Vector) {
+        throw RuntimeError("func_call AST composition expects a vec of AST nodes");
+    }
+    RuntimeAstNode out;
+    out.kind = lmx::ASTNodeType::FuncCallExpr;
+    out.slot_a = std::make_unique<RuntimeAstNode>(expect_ast_node(callee_ast, "func_call"));
+    for (const auto& elem : vec.asVector()) {
+        if (elem == nullptr || !value_is_ast(*elem)) {
+            throw RuntimeError("func_call AST composition expects AST elements");
+        }
+        push_call_arg(out, value_as_ast(*elem));
+    }
+    return make_ast_value(std::move(out));
+}
+
+Value compose_ast_macro_call(const Value& callee_ast, const Value& args_vec) {
+    const Value& vec = args_vec.deref();
+    if (vec.getType() != Value::Type::Vector) {
+        throw RuntimeError("macro_call AST composition expects a vec of AST nodes");
+    }
+    RuntimeAstNode out;
+    out.kind = lmx::ASTNodeType::MacroCallExpr;
+    out.slot_a = std::make_unique<RuntimeAstNode>(expect_ast_node(callee_ast, "macro_call"));
+    for (const auto& elem : vec.asVector()) {
+        if (elem == nullptr || !value_is_ast(*elem)) {
+            throw RuntimeError("macro_call AST composition expects AST elements");
+        }
+        push_call_arg(out, value_as_ast(*elem));
+    }
+    return make_ast_value(std::move(out));
+}
+
+Value ast_struct_value(VM& vm, const Value& value) {
+    if (!value_is_ast(value)) {
+        throw RuntimeError("ast_struct expects an AST value");
+    }
+    return runtime_ast_to_struct(vm, value_as_ast(value));
 }
 
 } // namespace irgen

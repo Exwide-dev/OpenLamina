@@ -318,6 +318,8 @@ private:
 
     MatchPatternNode* parseMatchVectorElement();
 
+    MatchPatternNode* parseMatchStructPattern();
+
     /**
      * @brief 解析 loop 循环语句
      * @return loop 语句节点
@@ -383,6 +385,24 @@ private:
      * @return 表达式节点
      */
     ExprNode* parsePipelineExpr();
+
+    /**
+     * @brief 解析逻辑或表达式
+     * @return 表达式节点
+     */
+    ExprNode* parseLogicalOrExpr();
+
+    /**
+     * @brief 解析逻辑与表达式
+     * @return 表达式节点
+     */
+    ExprNode* parseLogicalAndExpr();
+
+    /**
+     * @brief 解析 not 表达式
+     * @return 表达式节点
+     */
+    ExprNode* parseNotExpr();
 
     /**
      * @brief 解析比较表达式

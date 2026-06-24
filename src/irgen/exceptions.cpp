@@ -180,6 +180,8 @@ bool dispatch_exception(
 
     vm.active_exception = vm.cell_pool.allocateCopy(exc.deref());
 
+    vm.deferred_try_end_label = frame.end_label;
+
     const auto label_it = vm.label_table.find(frame.catch_label);
     if (label_it == vm.label_table.end()) {
         raise_cpp_runtime_error(vm, "internal error: try catch label not found");

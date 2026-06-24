@@ -144,6 +144,159 @@ std::optional<irgen::FunctionType> bind_method(
                 return {};
             };
         }
+        if (method_name == "get") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                if (args.size() != 1) {
+                    throw RuntimeError("get requires 1 argument");
+                }
+                const Value& idx_val = args[0].deref();
+                if (!idx_val.isNumber()) {
+                    throw RuntimeError("get index must be a number");
+                }
+                const ptrdiff_t idx = idx_val.asInt();
+                auto& vec = slot_value(receiver).asVector();
+                if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+                    throw RuntimeError("vector index out of range");
+                }
+                return *vec[static_cast<size_t>(idx)];
+            };
+        }
+        if (method_name == "set") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                if (args.size() != 2) {
+                    throw RuntimeError("set requires 2 arguments");
+                }
+                const Value& idx_val = args[0].deref();
+                if (!idx_val.isNumber()) {
+                    throw RuntimeError("set index must be a number");
+                }
+                const ptrdiff_t idx = idx_val.asInt();
+                auto& vec = slot_value(receiver).asVector();
+                if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+                    throw RuntimeError("vector index out of range");
+                }
+                vec[static_cast<size_t>(idx)] = vm.cell_pool.allocateCopy(args[1].deref());
+                return {};
+            };
+        }
+        if (method_name == "insert") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                if (args.size() != 2) {
+                    throw RuntimeError("insert requires 2 arguments");
+                }
+                const Value& idx_val = args[0].deref();
+                if (!idx_val.isNumber()) {
+                    throw RuntimeError("insert index must be a number");
+                }
+                const ptrdiff_t idx = idx_val.asInt();
+                auto& vec = slot_value(receiver).asVector();
+                if (idx < 0 || static_cast<size_t>(idx) > vec.size()) {
+                    throw RuntimeError("insert index out of range");
+                }
+                vec.insert(
+                    vec.begin() + static_cast<std::ptrdiff_t>(idx),
+                    vm.cell_pool.allocateCopy(args[1].deref())
+                );
+                return {};
+            };
+        }
+        if (method_name == "remove_at") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                if (args.size() != 1) {
+                    throw RuntimeError("remove_at requires 1 argument");
+                }
+                const Value& idx_val = args[0].deref();
+                if (!idx_val.isNumber()) {
+                    throw RuntimeError("remove_at index must be a number");
+                }
+                const ptrdiff_t idx = idx_val.asInt();
+                auto& vec = slot_value(receiver).asVector();
+                if (idx < 0 || static_cast<size_t>(idx) >= vec.size()) {
+                    throw RuntimeError("remove_at index out of range");
+                }
+                Value result = *vec[static_cast<size_t>(idx)];
+                vec.erase(vec.begin() + static_cast<std::ptrdiff_t>(idx));
+                return result;
+            };
+        }
+        if (method_name == "remove") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                if (args.size() != 1) {
+                    throw RuntimeError("remove requires 1 argument");
+                }
+                const Value& needle = args[0].deref();
+                auto& vec = slot_value(receiver).asVector();
+                for (auto it = vec.begin(); it != vec.end(); ++it) {
+                    if (**it == needle) {
+                        Value result = **it;
+                        vec.erase(it);
+                        return result;
+                    }
+                }
+                throw RuntimeError("value not found in vector");
+            };
+        }
+        if (method_name == "index") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                if (args.size() != 1) {
+                    throw RuntimeError("index requires 1 argument");
+                }
+                const Value& needle = args[0].deref();
+                const auto& vec = slot_value(receiver).asVector();
+                for (size_t i = 0; i < vec.size(); ++i) {
+                    if (*vec[i] == needle) {
+                        return Value(static_cast<int64_t>(i));
+                    }
+                }
+                return Value(static_cast<int64_t>(-1));
+            };
+        }
+        if (method_name == "first") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                (void)args;
+                const auto& vec = slot_value(receiver).asVector();
+                if (vec.empty()) {
+                    throw RuntimeError("first on empty vector");
+                }
+                return *vec.front();
+            };
+        }
+        if (method_name == "last") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                (void)args;
+                const auto& vec = slot_value(receiver).asVector();
+                if (vec.empty()) {
+                    throw RuntimeError("last on empty vector");
+                }
+                return *vec.back();
+            };
+        }
+        if (method_name == "empty") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                (void)args;
+                return Value(slot_value(receiver).asVector().empty());
+            };
+        }
+        if (method_name == "copy") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                (void)args;
+                std::vector<std::shared_ptr<Value>> out;
+                for (const auto& elem : slot_value(receiver).asVector()) {
+                    out.push_back(vm.cell_pool.allocateCopy(*elem));
+                }
+                return Value(std::move(out));
+            };
+        }
+        if (method_name == "sort") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                (void)args;
+                auto& vec = slot_value(receiver).asVector();
+                std::ranges::sort(vec, [](const std::shared_ptr<Value>& a, const std::shared_ptr<Value>& b) {
+                    return a->deref().printString() < b->deref().printString();
+                });
+                return {};
+            };
+        }
         return std::nullopt;
     }
 
@@ -261,6 +414,52 @@ std::optional<irgen::FunctionType> bind_method(
                     }
                 }
                 return {};
+            };
+        }
+        if (method_name == "put") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                if (args.size() != 2) {
+                    throw RuntimeError("put requires 2 arguments");
+                }
+                auto& dict = slot_value(receiver).asDictionary();
+                const Value& key = args[0].deref();
+                if (auto existing = dict_find_key_ptr(dict, key)) {
+                    *dict[existing] = args[1].deref();
+                } else {
+                    dict[vm.cell_pool.allocateCopy(key)] = vm.cell_pool.allocateCopy(args[1].deref());
+                }
+                return {};
+            };
+        }
+        if (method_name == "remove") {
+            return [receiver](VM&, const std::vector<Value>& args) -> Value {
+                if (args.size() != 1) {
+                    throw RuntimeError("remove requires 1 argument");
+                }
+                auto& dict = slot_value(receiver).asDictionary();
+                const Value& key = args[0].deref();
+                auto existing = dict_find_key_ptr(dict, key);
+                if (!existing) {
+                    throw RuntimeError("key " + key.toString() + " not found");
+                }
+                Value result = *dict[existing];
+                dict.erase(existing);
+                return result;
+            };
+        }
+        if (method_name == "items") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                (void)args;
+                std::vector<std::shared_ptr<Value>> pairs;
+                for (const auto& [k, v] : slot_value(receiver).asDictionary()) {
+                    pairs.push_back(vm.cell_pool.allocateCopy(
+                        Value(std::vector<std::shared_ptr<Value>>{
+                            vm.cell_pool.allocateCopy(*k),
+                            vm.cell_pool.allocateCopy(*v),
+                        })
+                    ));
+                }
+                return Value(std::move(pairs));
             };
         }
         return std::nullopt;

@@ -77,6 +77,12 @@ void printAST(const lmx::ASTNode* node, const int indent) {
             printAST(if_node->condition, indent + 2);
             std::cout << indent_str << "  Then:\n";
             printAST(if_node->then_block, indent + 2);
+            for (size_t i = 0; i < if_node->elif_blocks.size(); ++i) {
+                std::cout << indent_str << "  Elif[" << i << "] Condition:\n";
+                printAST(if_node->elif_blocks[i].condition, indent + 2);
+                std::cout << indent_str << "  Elif[" << i << "] Body:\n";
+                printAST(if_node->elif_blocks[i].block, indent + 2);
+            }
             if (if_node->else_block != nullptr) {
                 std::cout << indent_str << "  Else:\n";
                 printAST(if_node->else_block, indent + 2);
@@ -119,6 +125,16 @@ void printAST(const lmx::ASTNode* node, const int indent) {
                     for (const auto* elem : pat->elements) {
                         printAST(elem, indent + 2);
                     }
+                    break;
+                case lmx::MatchPatternKind::Struct:
+                    std::cout << indent_str << "Pattern: struct " << pat->struct_type_name << " { ";
+                    for (size_t i = 0; i < pat->struct_field_binds.size(); ++i) {
+                        if (i > 0) {
+                            std::cout << ", ";
+                        }
+                        std::cout << pat->struct_field_binds[i];
+                    }
+                    std::cout << " }\n";
                     break;
                 case lmx::MatchPatternKind::Or:
                     std::cout << indent_str << "Pattern: or\n";

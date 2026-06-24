@@ -72,6 +72,14 @@ public:
 
 [[nodiscard]] Value pack_ast_vec(std::vector<RuntimeAstNode> nodes, VM& vm);
 
+[[nodiscard]] Value ast_vec_push(const Value& vec_value, const Value& ast_value, VM& vm);
+
+[[nodiscard]] Value ast_vec_extend(const Value& vec_value, const Value& more_vec, VM& vm);
+
+[[nodiscard]] Value runtime_ast_to_struct(VM& vm, const RuntimeAstNode& node);
+
 void register_ast_type_converters();
+
+void register_ast_struct_types();
 
 } // namespace irgen

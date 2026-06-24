@@ -203,7 +203,7 @@ Value len(VM&, const std::vector<Value>& args) {
 
 Value type_of(VM&, const std::vector<Value>& args) {
     arg_must("type", 1);
-    return Value(args[0].deref().type_name());
+    return irgen::runtime_type_of(args[0]);
 }
 
 Value str_of(VM&, const std::vector<Value>& args) {
@@ -263,10 +263,10 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  input(prompt) - Read input from user\n";
     std::cout << "  now() - Get current time\n";
     std::cout << "  len(obj) - Get length of vector/dict/string\n";
-    std::cout << "  type(obj) - Get type name\n";
+    std::cout << "  type(obj) - Get type handle (compare with ==, e.g. type(x) == num)\n";
     std::cout << "  str(obj) - Convert to string (uses printString)\n";
     std::cout << "  int(obj) - Convert to integer\n";
-    std::cout << "  convert(type, obj) - Convert obj via type.__convert__ (most specific match)\n";
+    std::cout << "  convert(type, obj) - Convert obj via type.__convert__.__dispatch__ (most specific match)\n";
     std::cout << "  iter(obj) - Create iterator from iterable\n";
     std::cout << "  next(iter[, default]) - Advance iterator (__next__ protocol)\n";
     std::cout << "  exit() - Exit the program\n";
@@ -287,6 +287,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  std.iter.chain(a, b), std.iter.to_list(x)\n";
     std::cout << "  std.io.read_line(), std.io.read_file(path), std.io.write_file(path, text)\n";
     std::cout << "  std.io.write_line(...), std.io.eprint(...)\n";
+    std::cout << "  std.format.format(tmpl, ...), std.format.join(sep, items)\n";
     std::cout << "Decorators (std.decos.*):\n";
     std::cout << "  memoize(func) - Cache function results\n";
     std::cout << "  timer(func) - Measure execution time\n";
@@ -317,7 +318,8 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "\nType methods (call on mutable lvalue):\n";
     std::cout << "  all values: displayString(), printString()\n";
     std::cout << "  vector: append, extend, pop, clear, len, contains, reverse\n";
-    std::cout << "  dict: get, set, pop, clear, len, contains/has, keys, values, update\n";
+    std::cout << "          get, set, insert, remove, remove_at, index, first, last, empty, copy\n";
+    std::cout << "  dict: get, set, put, pop, remove, clear, len, contains/has, keys, values, items, update\n";
     std::cout << "  string: upper, lower, strip, split, contains, startswith, endswith, len\n";
     std::cout << "  number: abs\n";
     std::cout << "  func add(a, b) { return a + b }\n";
@@ -846,6 +848,9 @@ irgen::ModuleObject standard_mod = [] {
     std_symbols[irgen::g_string_pool.add("io")] = std::make_shared<irgen::Value>(
         Value(std::make_shared<irgen::ModuleObject>(make_io_module()))
     );
+    std_symbols[irgen::g_string_pool.add("format")] = std::make_shared<irgen::Value>(
+        Value(std::make_shared<irgen::ModuleObject>(make_format_module()))
+    );
 
     return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
 }();
@@ -856,6 +861,41 @@ Value eval_fn(VM& vm, const std::vector<Value>& args) {
         throw RuntimeError("eval expects an AST value");
     }
     return irgen::eval_ast_value(vm, irgen::value_as_ast(args[0]));
+}
+
+Value ast_clone_fn(VM&, const std::vector<Value>& args) {
+    arg_must("__ast_clone__", 1);
+    return irgen::clone_ast_value(args[0]);
+}
+
+Value ast_type_convert_fn(VM&, const std::vector<Value>& args) {
+    arg_must("__ast_type_convert__", 2);
+    return irgen::compose_ast_type_convert(args[1], args[0]);
+}
+
+Value ast_func_call_fn(VM&, const std::vector<Value>& args) {
+    arg_must("__ast_func_call__", 2);
+    return irgen::compose_ast_func_call(args[1], args[0]);
+}
+
+Value ast_macro_call_fn(VM&, const std::vector<Value>& args) {
+    arg_must("__ast_macro_call__", 2);
+    return irgen::compose_ast_macro_call(args[1], args[0]);
+}
+
+Value ast_vec_push_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("__ast_vec_push__", 2);
+    return irgen::ast_vec_push(args[1], args[0], vm);
+}
+
+Value ast_vec_extend_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("__ast_vec_extend__", 2);
+    return irgen::ast_vec_extend(args[1], args[0], vm);
+}
+
+Value ast_struct_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("ast_struct", 1);
+    return irgen::ast_struct_value(vm, args[0]);
 }
 
 Value quote_fn(VM& vm, const std::vector<Value>& args) {
@@ -922,4 +962,11 @@ void lang::init_builtins(irgen::SymbolTable& symbols, irgen::CellPool& pool) {
     symbols.set(irgen::g_string_pool.add("dict"), Value(irgen::FunctionType(dict_create)), pool);
     symbols.set(irgen::g_string_pool.add("eval"), Value(irgen::FunctionType(eval_fn)), pool);
     symbols.set(irgen::g_string_pool.add("quote"), Value(irgen::FunctionType(quote_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("__ast_clone__"), Value(irgen::FunctionType(ast_clone_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("__ast_type_convert__"), Value(irgen::FunctionType(ast_type_convert_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("__ast_func_call__"), Value(irgen::FunctionType(ast_func_call_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("__ast_macro_call__"), Value(irgen::FunctionType(ast_macro_call_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("__ast_vec_push__"), Value(irgen::FunctionType(ast_vec_push_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("__ast_vec_extend__"), Value(irgen::FunctionType(ast_vec_extend_fn)), pool);
+    symbols.set(irgen::g_string_pool.add("ast_struct"), Value(irgen::FunctionType(ast_struct_fn)), pool);
 }

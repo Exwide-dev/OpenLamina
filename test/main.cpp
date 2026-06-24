@@ -193,6 +193,19 @@ void test_exceptions_and_try_catch();
 void test_friend_func_dispatch();
 void test_iter_stopiteration_edges();
 void test_macro_system();
+void test_macro_identity();
+void test_macro_variadic_log();
+void test_macro_it_text();
+void test_macro_no_return();
+void test_macro_bug_eval_call_in_log();
+void test_macro_bug_nested_macro_compose();
+void test_macro_nested_splat();
+void test_macro_ast_struct_match();
+void test_type_handle();
+void test_quote_syntax_forms();
+void test_container_methods_and_format();
+void test_try_catch_skips_after_struct_throw();
+void test_elif_and_or_not();
 
 int main() {
     //test::run("vm_goto", test_vm_goto);
@@ -205,6 +218,19 @@ int main() {
     // test::run("friend_func_dispatch", test_friend_func_dispatch);
     // test::run("iter_stopiteration_edges", test_iter_stopiteration_edges);
     test::run("macro_system", test_macro_system);
+    test::run("macro_identity", test_macro_identity);
+    test::run("macro_variadic_log", test_macro_variadic_log);
+    test::run("macro_it_text", test_macro_it_text);
+    test::run("macro_no_return", test_macro_no_return);
+    test::run("macro_bug_eval_call_in_log", test_macro_bug_eval_call_in_log);
+    test::run("macro_bug_nested_macro_compose", test_macro_bug_nested_macro_compose);
+    test::run("macro_nested_splat", test_macro_nested_splat);
+    test::run("macro_ast_struct_match", test_macro_ast_struct_match);
+    test::run("type_handle", test_type_handle);
+    test::run("quote_syntax_forms", test_quote_syntax_forms);
+    test::run("container_methods_and_format", test_container_methods_and_format);
+    test::run("try_catch_skips_after_struct_throw", test_try_catch_skips_after_struct_throw);
+    test::run("elif_and_or_not", test_elif_and_or_not);
     //test::run("gc_memory_trend", test_gc_memory_trend);
     return test::summary();
 }

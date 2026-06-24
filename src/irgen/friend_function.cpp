@@ -74,6 +74,48 @@ namespace {
 
 } // namespace
 
+std::shared_ptr<FunctionObject> find_convert_dispatch_handler(
+    const std::vector<std::shared_ptr<Value>>& handlers,
+    const std::vector<Value>& args
+) {
+    if (args.size() < 2) {
+        return nullptr;
+    }
+    const Value& value = args[1];
+
+    size_t best_index = handlers.size();
+    int best_depth = -1;
+    bool found = false;
+
+    for (size_t i = 0; i < handlers.size(); ++i) {
+        const Value& entry = handlers[i]->deref();
+        if (!entry.isUserFunction()) {
+            continue;
+        }
+        const auto& handler = *entry.asFunctionObject();
+        if (!handler_matches(handler, args)) {
+            continue;
+        }
+        if (handler.param_types.size() <= 1 || !handler.param_types[1].has_value()) {
+            continue;
+        }
+        const int depth = struct_type_match_depth(value, *handler.param_types[1]);
+        if (depth < 0) {
+            continue;
+        }
+        if (!found || depth < best_depth || (depth == best_depth && i > best_index)) {
+            best_depth = depth;
+            best_index = i;
+            found = true;
+        }
+    }
+
+    if (best_index >= handlers.size()) {
+        return nullptr;
+    }
+    return handlers[best_index]->asFunctionObject();
+}
+
 void FriendFunctionObject::ensure_dispatch_list() {
     if (!dispatch_list_holder) {
         dispatch_list_holder = std::make_shared<Value>(std::vector<std::shared_ptr<Value>>{});
@@ -112,8 +154,19 @@ void friend_invoke_dispatch(
 ) {
     obj->ensure_dispatch_list();
     const auto& handlers = obj->dispatch_handlers();
-    const std::shared_ptr<FunctionObject> handler = find_dispatch_handler(handlers, positional);
+    const std::shared_ptr<FunctionObject> handler =
+        obj->name == "__convert__"
+            ? find_convert_dispatch_handler(handlers, positional)
+            : find_dispatch_handler(handlers, positional);
     if (handler == nullptr) {
+        if (obj->name == "__convert__") {
+            throw RuntimeError(
+                std::format(
+                    "type __convert__ has no matching __dispatch__ implementation for {} argument(s)",
+                    positional.size()
+                )
+            );
+        }
         throw RuntimeError(
             std::format(
                 "friend func '{}' has no matching __dispatch__ implementation for {} argument(s)",

@@ -4,6 +4,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -121,6 +122,77 @@ Value eprint_fn(VM&, const std::vector<Value>& args) {
     return {};
 }
 
+namespace {
+
+std::string format_template(const std::string& tmpl, const std::vector<Value>& args) {
+    std::string result;
+    result.reserve(tmpl.size());
+    size_t arg_idx = 0;
+
+    for (size_t i = 0; i < tmpl.size(); ++i) {
+        if (i + 1 < tmpl.size() && tmpl[i] == '{' && tmpl[i + 1] == '}') {
+            if (arg_idx >= args.size()) {
+                throw RuntimeError(
+                    std::format("format: not enough arguments for template (need at least {})", arg_idx + 1)
+                );
+            }
+            result += args[arg_idx].deref().printString();
+            ++arg_idx;
+            ++i;
+        } else {
+            result += tmpl[i];
+        }
+    }
+
+    if (arg_idx < args.size()) {
+        throw RuntimeError(
+            std::format("format: {} unused argument(s)", args.size() - arg_idx)
+        );
+    }
+
+    return result;
+}
+
+} // namespace
+
+Value format_fn(VM&, const std::vector<Value>& args) {
+    arg_at_least("format", 1);
+    const Value& tmpl_val = args[0].deref();
+    if (!tmpl_val.isString()) {
+        throw RuntimeError("format template must be text");
+    }
+    std::vector<Value> rest;
+    rest.reserve(args.size() - 1);
+    for (size_t i = 1; i < args.size(); ++i) {
+        rest.push_back(args[i]);
+    }
+    return Value(format_template(tmpl_val.asString(), rest));
+}
+
+Value join_fn(VM& vm, const std::vector<Value>& args) {
+    arg_must("join", 2);
+    const Value& sep_val = args[0].deref();
+    if (!sep_val.isString()) {
+        throw RuntimeError("join separator must be text");
+    }
+    const std::string& sep = sep_val.asString();
+    const Value iter = irgen::make_iter(vm, args[1]);
+    std::string result;
+    bool first = true;
+    while (true) {
+        Value item;
+        if (!irgen::iterator_advance(vm, iter, item)) {
+            break;
+        }
+        if (!first) {
+            result += sep;
+        }
+        first = false;
+        result += item.deref().printString();
+    }
+    return Value(std::move(result));
+}
+
 irgen::ModuleObject build_module(
     std::initializer_list<std::pair<const char*, irgen::FunctionType>> entries
 ) {
@@ -148,6 +220,13 @@ irgen::ModuleObject make_io_module() {
         {"write_file", write_file_fn},
         {"write_line", write_line_fn},
         {"eprint", eprint_fn},
+    });
+}
+
+irgen::ModuleObject make_format_module() {
+    return build_module({
+        {"format", format_fn},
+        {"join", join_fn},
     });
 }
 

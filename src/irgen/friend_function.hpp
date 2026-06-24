@@ -26,6 +26,11 @@ struct FriendFunctionObject {
     const std::string& attr_name
 );
 
+[[nodiscard]] std::shared_ptr<FunctionObject> find_convert_dispatch_handler(
+    const std::vector<std::shared_ptr<Value>>& handlers,
+    const std::vector<Value>& args
+);
+
 void friend_invoke_dispatch(
     VM& vm,
     const std::shared_ptr<FriendFunctionObject>& obj,

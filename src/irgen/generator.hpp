@@ -179,6 +179,7 @@ struct LoopLabels {
 struct FunctionContext {
     bool needs_closure = false;
     bool needs_symbol_bind = false;
+    bool is_macro = false;
     size_t func_depth = 0;
 };
 

@@ -71,6 +71,7 @@ class ADDR_OF;
 class DEREF_PTR;
 class PTR_TO_REF;
 class NOT;
+class TRUTHY_NOT;
 class AND;
 class OR;
 class EQ;
@@ -114,6 +115,7 @@ class END_TRY;
 class POP_TRY;
 class PUSH_EXC;
 class EXC_MATCH;
+class IS_INSTANCE;
 class RETHROW;
 class STRUCT_NEW;
 class SET_FIELD;
@@ -364,6 +366,7 @@ using Opcode = std::variant<
     DEREF_PTR,
     PTR_TO_REF,
     NOT,
+    TRUTHY_NOT,
     AND,
     OR,
     EQ,
@@ -406,6 +409,7 @@ using Opcode = std::variant<
     POP_TRY,
     PUSH_EXC,
     EXC_MATCH,
+    IS_INSTANCE,
     RETHROW,
     STRUCT_NEW,
     SET_FIELD,
@@ -457,6 +461,13 @@ struct FunctionObject {
 );
 
 void invoke_user_function_with_args(
+    VM& vm,
+    const std::shared_ptr<FunctionObject>& func_obj,
+    std::vector<Value> args
+);
+
+/** Run a user function to completion on the current VM (same interpreter loop as CALL). */
+Value call_user_function_sync(
     VM& vm,
     const std::shared_ptr<FunctionObject>& func_obj,
     std::vector<Value> args
@@ -1107,6 +1118,9 @@ return std::get<CppType>(data); \
         if (a.type == Type::String && b.type == Type::String) {
             return a.asString() == b.asString();
         }
+        if (a.type == Type::TypeHandle && b.type == Type::TypeHandle) {
+            return a.asTypeDef() == b.asTypeDef();
+        }
         throw RuntimeError(
             std::format("Unsupported == operation, left = {}, right = {}", a.type_name(), b.type_name())
         );
@@ -1133,6 +1147,9 @@ return std::get<CppType>(data); \
         }
         if (a.type == Type::String && b.type == Type::String) {
             return Value(a.asString() != b.asString());
+        }
+        if (a.type == Type::TypeHandle && b.type == Type::TypeHandle) {
+            return Value(a.asTypeDef() != b.asTypeDef());
         }
         throw RuntimeError("Unsupported != operation");
     }
@@ -1192,6 +1209,28 @@ return std::get<CppType>(data); \
 
     [[nodiscard]] bool isNone() const {
         return deref().type == Type::None;
+    }
+
+    [[nodiscard]] bool isTruthy() const {
+        const Value& self = deref();
+        switch (self.type) {
+            case Type::None:
+                return false;
+            case Type::Bool:
+                return self.asBool();
+            case Type::Number:
+                return !self.asNumber().isZero();
+            case Type::Rational:
+                return self.asRational() != lang::lammp::Rational();
+            case Type::String:
+                return !self.asString().empty();
+            case Type::Vector:
+                return !self.asVector().empty();
+            case Type::Dictionary:
+                return !self.asDictionary().empty();
+            default:
+                return true;
+        }
     }
 
     [[nodiscard]] bool isInt() const {
@@ -1364,19 +1403,10 @@ struct StructTypeDef {
     bool typed = false;
     std::vector<StructFieldDef> fields;
     std::unordered_map<std::string, std::shared_ptr<FunctionObject>> methods;
-    /// 运行时 __convert__ 处理器列表（通过引用暴露，append 会就地修改）
-    std::shared_ptr<Value> convert_list_holder;
+    /// 类型转换 friend func（`__convert__.__dispatch__`）
+    std::shared_ptr<FriendFunctionObject> convert_func;
 
-    void ensure_convert_list() {
-        if (!convert_list_holder) {
-            convert_list_holder = std::make_shared<Value>(std::vector<std::shared_ptr<Value>>{});
-        }
-    }
-
-    [[nodiscard]] std::vector<std::shared_ptr<Value>>& convert_handlers() {
-        ensure_convert_list();
-        return convert_list_holder->asVector();
-    }
+    void ensure_convert_func();
 
     [[nodiscard]] size_t required_field_count() const {
         size_t n = 0;
@@ -1516,6 +1546,18 @@ public:
     OPCODE_ARGS1(type_name_id)
 
     explicit EXC_MATCH(std::string type_name);
+
+    void emit(VM& vm) const;
+};
+
+/** 判断栈顶值是否为指定 struct 类型（含子类）。 */
+class IS_INSTANCE {
+public:
+    OPCODE_META(IS_INSTANCE)
+    size_t type_name_id = 0;
+    OPCODE_ARGS1(type_name_id)
+
+    explicit IS_INSTANCE(std::string type_name);
 
     void emit(VM& vm) const;
 };
@@ -2059,6 +2101,19 @@ public:
     OPCODE_ARGS0()
 
     NOT() = default;
+
+    void emit(VM& vm);
+};
+
+/**
+ * TRUTHY_NOT — Python 风格 not，按 truthiness 取反并压入 Bool。
+ */
+class TRUTHY_NOT {
+public:
+    OPCODE_META(TRUTHY_NOT)
+    OPCODE_ARGS0()
+
+    TRUTHY_NOT() = default;
 
     void emit(VM& vm);
 };
@@ -2858,6 +2913,8 @@ public:
     std::string source_filename = "<unknown>";                      ///< 当前执行的源文件名
     std::vector<std::shared_ptr<FunctionObject>> call_func_stack{}; ///< 函数调用栈
     std::vector<TryHandlerFrame> try_stack{};                       ///< try/catch 处理器栈
+    std::optional<size_t> deferred_try_end_label{};                 ///< struct 方法嵌套 run 已处理异常时，外层 END_TRY 跳转目标
+    size_t nested_function_run_depth = 0;                           ///< FunctionObject::call 嵌套 run 深度
     std::shared_ptr<Value> active_exception{};                      ///< 当前待匹配/绑定的异常对象
     std::vector<Opcode> code{};                                     ///< IR指令序列
     size_t label_scan_end = 0;                                      ///< 已扫描标签的 code 上界

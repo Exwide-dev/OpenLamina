@@ -23,7 +23,11 @@ enum class TokenType {
     KW_DO,       ///< do 关键字
     KW_RETURN,   ///< return 关键字
     KW_IF,       ///< if 关键字
+    KW_ELIF,     ///< elif 关键字
     KW_ELSE,     ///< else 关键字
+    KW_AND,      ///< and 关键字
+    KW_OR,       ///< or 关键字
+    KW_NOT,      ///< not 关键字
     KW_LOOP,     ///< loop 关键字
     KW_WHILE,    ///< while 关键字
     KW_BREAK,    ///< break 关键字

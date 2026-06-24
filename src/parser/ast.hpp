@@ -737,7 +737,7 @@ struct MacroCallExprNode final : ExprNode {
 
 /**
  * @struct QuoteExprNode
- * @brief quote(id...) with (binding...) { body }
+ * @brief quote [(id...)] [with (binding...)] { body }
  */
 struct QuoteExprNode final : ExprNode {
     std::vector<std::string> hygienic_names;
@@ -1273,28 +1273,45 @@ struct TryStmtNode final : ASTNode {
 };
 
 /**
+ * @struct ElifBranch
+ * @brief if 语句中的 elif 分支
+ */
+struct ElifBranch {
+    ExprNode* condition = nullptr;       ///< 条件表达式
+    BlockStmtNode* block = nullptr;      ///< 分支块
+
+    ElifBranch(ExprNode* cond, BlockStmtNode* body)
+        : condition(cond), block(body) {
+    }
+};
+
+/**
  * @struct IfStmtNode
  * @brief if 语句节点
  */
 struct IfStmtNode final : ASTNode {
     ExprNode* condition;       ///< 条件表达式
     BlockStmtNode* then_block; ///< then 块
+    std::vector<ElifBranch> elif_blocks; ///< elif 分支列表
     BlockStmtNode* else_block; ///< else 块
 
     /**
      * @brief 构造函数
      * @param cond 条件表达式
      * @param t then 块
+     * @param elifs elif 分支
      * @param e else 块
      */
     IfStmtNode(
         ExprNode* cond,
         BlockStmtNode* t,
+        std::vector<ElifBranch> elifs,
         BlockStmtNode* e
     )
         : ASTNode(ASTNodeType::IfStmt),
           condition(cond),
           then_block(t),
+          elif_blocks(std::move(elifs)),
           else_block(e) {
     }
 
@@ -1304,6 +1321,10 @@ struct IfStmtNode final : ASTNode {
     ~IfStmtNode() override {
         delete condition;
         delete then_block;
+        for (auto& branch : elif_blocks) {
+            delete branch.condition;
+            delete branch.block;
+        }
         delete else_block;
     }
 };
@@ -1316,6 +1337,7 @@ enum class MatchPatternKind {
     Expr,   ///< 值模式 (expr)
     Bind,   ///< 向量元素绑定
     Vector, ///< 向量解构 [a, b, x, ...]
+    Struct, ///< struct 解构 AstVarRef { name }
     Or      ///< 或模式 pat | pat | ...
 };
 
@@ -1329,20 +1351,26 @@ struct MatchPatternNode final : ASTNode {
     std::string bind_name;                    ///< Bind 模式的变量名
     std::vector<MatchPatternNode*> elements;   ///< Vector 模式的元素
     std::vector<MatchPatternNode*> alternatives; ///< Or 模式的备选
+    std::string struct_type_name;             ///< Struct 模式的类型名
+    std::vector<std::string> struct_field_binds; ///< Struct 模式要绑定的字段名
 
     MatchPatternNode(
         const MatchPatternKind kind,
         ExprNode* e = nullptr,
         std::string bind = {},
         std::vector<MatchPatternNode*> elems = {},
-        std::vector<MatchPatternNode*> alts = {}
+        std::vector<MatchPatternNode*> alts = {},
+        std::string struct_type = {},
+        std::vector<std::string> struct_fields = {}
     )
         : ASTNode(ASTNodeType::MatchPattern),
           pattern_kind(kind),
           expr(e),
           bind_name(std::move(bind)),
           elements(std::move(elems)),
-          alternatives(std::move(alts)) {
+          alternatives(std::move(alts)),
+          struct_type_name(std::move(struct_type)),
+          struct_field_binds(std::move(struct_fields)) {
     }
 
     ~MatchPatternNode() override {

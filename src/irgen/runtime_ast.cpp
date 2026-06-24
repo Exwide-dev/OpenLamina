@@ -12,6 +12,7 @@ namespace {
 RuntimeAstNode from_expr(const lmx::ExprNode* node);
 RuntimeAstNode from_stmt(const lmx::ASTNode* node);
 RuntimeAstNode from_any(const lmx::ASTNode* node);
+RuntimeAstNode from_match_pattern(const lmx::MatchPatternNode* pattern);
 
 RuntimeAstNode make_node(const lmx::ASTNode* node, const lmx::ASTNodeType kind) {
     RuntimeAstNode out;
@@ -180,6 +181,41 @@ RuntimeAstNode from_expr(const lmx::ExprNode* node) {
     }
 }
 
+RuntimeAstNode from_match_pattern(const lmx::MatchPatternNode* pattern) {
+    if (pattern == nullptr) {
+        return {};
+    }
+    RuntimeAstNode out = make_node(pattern, lmx::ASTNodeType::MatchPattern);
+    switch (pattern->pattern_kind) {
+        case lmx::MatchPatternKind::Expr:
+            out.text = "Expr";
+            set_a(out, from_expr(pattern->expr));
+            break;
+        case lmx::MatchPatternKind::Bind:
+            out.text = "Bind";
+            out.binding_names = {pattern->bind_name};
+            break;
+        case lmx::MatchPatternKind::Vector:
+            out.text = "Vector";
+            for (const auto* elem : pattern->elements) {
+                out.children.push_back(from_match_pattern(elem));
+            }
+            break;
+        case lmx::MatchPatternKind::Struct:
+            out.text = "Struct";
+            out.hygienic_names = {pattern->struct_type_name};
+            out.binding_names = pattern->struct_field_binds;
+            break;
+        case lmx::MatchPatternKind::Or:
+            out.text = "Or";
+            for (const auto* alt : pattern->alternatives) {
+                out.children.push_back(from_match_pattern(alt));
+            }
+            break;
+    }
+    return out;
+}
+
 RuntimeAstNode from_stmt(const lmx::ASTNode* node) {
     if (node == nullptr) {
         return {};
@@ -231,6 +267,25 @@ RuntimeAstNode from_stmt(const lmx::ASTNode* node) {
             }
             return out;
         }
+        case lmx::ASTNodeType::MatchCase: {
+            const auto* match_case = dynamic_cast<const lmx::MatchCaseNode*>(node);
+            auto out = make_node(node, node->kind);
+            set_a(out, from_match_pattern(match_case->pattern));
+            set_b(out, from_stmt(match_case->body));
+            return out;
+        }
+        case lmx::ASTNodeType::MatchStmt: {
+            const auto* match_stmt = dynamic_cast<const lmx::MatchStmtNode*>(node);
+            auto out = make_node(node, node->kind);
+            set_a(out, from_expr(match_stmt->subject));
+            for (const auto* match_case : match_stmt->cases) {
+                out.stmts.push_back(from_stmt(match_case));
+            }
+            if (match_stmt->else_block != nullptr) {
+                set_c(out, from_stmt(match_stmt->else_block));
+            }
+            return out;
+        }
         default:
             if (dynamic_cast<const lmx::ExprNode*>(node) != nullptr) {
                 return from_expr(dynamic_cast<const lmx::ExprNode*>(node));
@@ -254,6 +309,7 @@ RuntimeAstNode from_any(const lmx::ASTNode* node) {
 
 lmx::ExprNode* to_expr(TempParseTree& tree, const RuntimeAstNode& node);
 lmx::ASTNode* to_stmt(TempParseTree& tree, const RuntimeAstNode& node);
+lmx::MatchPatternNode* to_match_pattern(TempParseTree& tree, const RuntimeAstNode& node);
 
 lmx::ExprNode* to_expr(TempParseTree& tree, const RuntimeAstNode& node) {
     switch (node.kind) {
@@ -364,6 +420,66 @@ lmx::ExprNode* to_expr(TempParseTree& tree, const RuntimeAstNode& node) {
     }
 }
 
+lmx::MatchPatternNode* to_match_pattern(TempParseTree& tree, const RuntimeAstNode& node) {
+    if (node.text == "Expr") {
+        auto* n = new lmx::MatchPatternNode(lmx::MatchPatternKind::Expr, to_expr(tree, get_a(node)));
+        n->source_line = node.line;
+        return n;
+    }
+    if (node.text == "Bind") {
+        const std::string bind = node.binding_names.empty() ? std::string{} : node.binding_names.front();
+        auto* n = new lmx::MatchPatternNode(lmx::MatchPatternKind::Bind, nullptr, bind);
+        n->source_line = node.line;
+        return n;
+    }
+    if (node.text == "Vector") {
+        std::vector<lmx::MatchPatternNode*> elements;
+        elements.reserve(node.children.size());
+        for (const auto& child : node.children) {
+            elements.push_back(to_match_pattern(tree, child));
+        }
+        auto* n = new lmx::MatchPatternNode(
+            lmx::MatchPatternKind::Vector,
+            nullptr,
+            std::string{},
+            std::move(elements)
+        );
+        n->source_line = node.line;
+        return n;
+    }
+    if (node.text == "Struct") {
+        const std::string type_name = node.hygienic_names.empty() ? std::string{} : node.hygienic_names.front();
+        auto* n = new lmx::MatchPatternNode(
+            lmx::MatchPatternKind::Struct,
+            nullptr,
+            std::string{},
+            {},
+            {},
+            type_name,
+            node.binding_names
+        );
+        n->source_line = node.line;
+        return n;
+    }
+    if (node.text == "Or") {
+        std::vector<lmx::MatchPatternNode*> alternatives;
+        alternatives.reserve(node.children.size());
+        for (const auto& child : node.children) {
+            alternatives.push_back(to_match_pattern(tree, child));
+        }
+        auto* n = new lmx::MatchPatternNode(
+            lmx::MatchPatternKind::Or,
+            nullptr,
+            std::string{},
+            {},
+            std::move(alternatives)
+        );
+        n->source_line = node.line;
+        return n;
+    }
+    throw std::runtime_error("to_match_pattern: unknown match pattern tag");
+}
+
 lmx::ASTNode* to_stmt(TempParseTree& tree, const RuntimeAstNode& node) {
     switch (node.kind) {
         case lmx::ASTNodeType::BlockStmt: {
@@ -405,6 +521,31 @@ lmx::ASTNode* to_stmt(TempParseTree& tree, const RuntimeAstNode& node) {
             auto* n = new lmx::IfStmtNode(
                 to_expr(tree, get_a(node)),
                 dynamic_cast<lmx::BlockStmtNode*>(to_stmt(tree, get_b(node))),
+                {},
+                node.slot_c != nullptr
+                    ? dynamic_cast<lmx::BlockStmtNode*>(to_stmt(tree, *node.slot_c))
+                    : nullptr
+            );
+            n->source_line = node.line;
+            return n;
+        }
+        case lmx::ASTNodeType::MatchCase: {
+            auto* n = new lmx::MatchCaseNode(
+                to_match_pattern(tree, get_a(node)),
+                dynamic_cast<lmx::BlockStmtNode*>(to_stmt(tree, get_b(node)))
+            );
+            n->source_line = node.line;
+            return n;
+        }
+        case lmx::ASTNodeType::MatchStmt: {
+            std::vector<lmx::MatchCaseNode*> cases;
+            cases.reserve(node.stmts.size());
+            for (const auto& match_case : node.stmts) {
+                cases.push_back(dynamic_cast<lmx::MatchCaseNode*>(to_stmt(tree, match_case)));
+            }
+            auto* n = new lmx::MatchStmtNode(
+                to_expr(tree, get_a(node)),
+                std::move(cases),
                 node.slot_c != nullptr
                     ? dynamic_cast<lmx::BlockStmtNode*>(to_stmt(tree, *node.slot_c))
                     : nullptr
@@ -623,6 +764,196 @@ Value pack_ast_vec(std::vector<RuntimeAstNode> nodes, VM& vm) {
 
 void register_ast_type_converters() {
     // AST → text 由 coerce_primitive 在 type_call / convert 路径处理
+}
+
+namespace {
+
+void register_ast_struct(
+    const std::string& name,
+    const std::string& base,
+    const std::vector<std::pair<std::string, std::string>>& fields
+) {
+    if (is_type_name(name)) {
+        return;
+    }
+    StructTypeDef def;
+    def.name = name;
+    def.base_name = base;
+    def.kind = TypeKind::User;
+    def.typed = true;
+    for (const auto& [field_name, field_type] : fields) {
+        StructFieldDef fd;
+        fd.name = field_name;
+        fd.type_name = field_type;
+        fd.has_type_annotation = true;
+        fd.mutable_field = false;
+        def.fields.push_back(std::move(fd));
+    }
+    register_type_def(std::move(def));
+}
+
+Value ast_field_value(const RuntimeAstNode* slot) {
+    if (slot == nullptr) {
+        return make_ast_value(RuntimeAstNode{});
+    }
+    return make_ast_value(slot->clone());
+}
+
+Value pack_call_arg_nodes(const std::vector<RuntimeAstNode::CallArg>& call_args, VM& vm) {
+    std::vector<RuntimeAstNode> nodes;
+    nodes.reserve(call_args.size());
+    for (const auto& arg : call_args) {
+        if (arg.is_splat) {
+            throw RuntimeError("internal error: splat in materialized call arg list");
+        }
+        if (arg.value != nullptr) {
+            nodes.push_back(arg.value->clone());
+        }
+    }
+    return pack_ast_vec(std::move(nodes), vm);
+}
+
+Value pack_child_nodes(const std::vector<RuntimeAstNode>& children, VM& vm) {
+    std::vector<RuntimeAstNode> nodes;
+    nodes.reserve(children.size());
+    for (const auto& child : children) {
+        nodes.push_back(child.clone());
+    }
+    return pack_ast_vec(std::move(nodes), vm);
+}
+
+Value pack_binding_nodes(const std::vector<RuntimeAstNode>& bindings, VM& vm) {
+    std::vector<RuntimeAstNode> nodes;
+    nodes.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        nodes.push_back(binding.clone());
+    }
+    return pack_ast_vec(std::move(nodes), vm);
+}
+
+} // namespace
+
+Value ast_vec_push(const Value& vec_value, const Value& ast_value, VM& vm) {
+    const Value& vec = vec_value.deref();
+    if (vec.getType() != Value::Type::Vector) {
+        throw RuntimeError("__ast_vec_push__ expects a vector");
+    }
+    if (!value_is_ast(ast_value)) {
+        throw RuntimeError("__ast_vec_push__ expects an AST element");
+    }
+    std::vector<std::shared_ptr<Value>> out = vec.asVector();
+    out.push_back(vm.cell_pool.allocateCopy(ast_value));
+    return Value(std::move(out));
+}
+
+Value ast_vec_extend(const Value& vec_value, const Value& more_vec, VM& vm) {
+    const Value& base = vec_value.deref();
+    const Value& extra = more_vec.deref();
+    if (base.getType() != Value::Type::Vector || extra.getType() != Value::Type::Vector) {
+        throw RuntimeError("__ast_vec_extend__ expects two vectors");
+    }
+    std::vector<std::shared_ptr<Value>> out = base.asVector();
+    for (const auto& elem : extra.asVector()) {
+        if (elem == nullptr || !value_is_ast(*elem)) {
+            throw RuntimeError("__ast_vec_extend__ expects AST elements");
+        }
+        out.push_back(vm.cell_pool.allocateCopy(*elem));
+    }
+    return Value(std::move(out));
+}
+
+Value runtime_ast_to_struct(VM& vm, const RuntimeAstNode& node) {
+    switch (node.kind) {
+        case lmx::ASTNodeType::Number:
+            return make_struct_instance(vm, "AstNumber", {Value(node.text)});
+        case lmx::ASTNodeType::String:
+            return make_struct_instance(vm, "AstString", {Value(node.text)});
+        case lmx::ASTNodeType::Bool:
+            return make_struct_instance(vm, "AstBool", {Value(node.bool_val)});
+        case lmx::ASTNodeType::VarRef:
+            return make_struct_instance(vm, "AstVarRef", {Value(node.text)});
+        case lmx::ASTNodeType::Unary:
+            return make_struct_instance(
+                vm,
+                "AstUnary",
+                {Value(node.text), ast_field_value(node.slot_a.get())}
+            );
+        case lmx::ASTNodeType::Binary:
+            return make_struct_instance(
+                vm,
+                "AstBinary",
+                {
+                    Value(node.text),
+                    ast_field_value(node.slot_a.get()),
+                    ast_field_value(node.slot_b.get()),
+                }
+            );
+        case lmx::ASTNodeType::FuncCallExpr:
+            return make_struct_instance(
+                vm,
+                "AstFuncCall",
+                {ast_field_value(node.slot_a.get()), pack_call_arg_nodes(node.call_args, vm)}
+            );
+        case lmx::ASTNodeType::MacroCallExpr:
+            return make_struct_instance(
+                vm,
+                "AstMacroCall",
+                {ast_field_value(node.slot_a.get()), pack_call_arg_nodes(node.call_args, vm)}
+            );
+        case lmx::ASTNodeType::MemberAccess:
+            return make_struct_instance(
+                vm,
+                "AstMemberAccess",
+                {ast_field_value(node.slot_a.get()), Value(node.text)}
+            );
+        case lmx::ASTNodeType::TypeConvert:
+            return make_struct_instance(
+                vm,
+                "AstTypeConvert",
+                {ast_field_value(node.slot_a.get()), ast_field_value(node.slot_b.get())}
+            );
+        case lmx::ASTNodeType::IndexAccess:
+            return make_struct_instance(
+                vm,
+                "AstIndexAccess",
+                {ast_field_value(node.slot_a.get()), ast_field_value(node.slot_b.get())}
+            );
+        case lmx::ASTNodeType::Vector:
+            return make_struct_instance(
+                vm,
+                "AstVector",
+                {pack_child_nodes(node.children, vm)}
+            );
+        case lmx::ASTNodeType::QuoteExpr: {
+            std::vector<Value> positional = {
+                node.slot_a != nullptr ? make_ast_value(node.slot_a->clone()) : make_ast_value(RuntimeAstNode{}),
+                pack_binding_nodes(node.bindings, vm),
+            };
+            return make_struct_instance(vm, "AstQuote", std::move(positional));
+        }
+        default:
+            throw RuntimeError(
+                std::format("cannot convert AST kind {} to struct", static_cast<int>(node.kind))
+            );
+    }
+}
+
+void register_ast_struct_types() {
+    register_ast_struct("AstNode", "", {});
+
+    register_ast_struct("AstNumber", "AstNode", {{"value", "text"}});
+    register_ast_struct("AstString", "AstNode", {{"value", "text"}});
+    register_ast_struct("AstBool", "AstNode", {{"value", "bool"}});
+    register_ast_struct("AstVarRef", "AstNode", {{"name", "text"}});
+    register_ast_struct("AstUnary", "AstNode", {{"op", "text"}, {"operand", "AST"}});
+    register_ast_struct("AstBinary", "AstNode", {{"op", "text"}, {"left", "AST"}, {"right", "AST"}});
+    register_ast_struct("AstFuncCall", "AstNode", {{"callee", "AST"}, {"args", "vector"}});
+    register_ast_struct("AstMacroCall", "AstNode", {{"callee", "AST"}, {"args", "vector"}});
+    register_ast_struct("AstMemberAccess", "AstNode", {{"object", "AST"}, {"member", "text"}});
+    register_ast_struct("AstTypeConvert", "AstNode", {{"type_expr", "AST"}, {"value", "AST"}});
+    register_ast_struct("AstIndexAccess", "AstNode", {{"object", "AST"}, {"index", "AST"}});
+    register_ast_struct("AstVector", "AstNode", {{"elements", "vector"}});
+    register_ast_struct("AstQuote", "AstNode", {{"body", "AST"}, {"bindings", "vector"}});
 }
 
 } // namespace irgen

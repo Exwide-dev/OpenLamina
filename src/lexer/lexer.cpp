@@ -79,7 +79,11 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_DO: return "do";
         case TokenType::KW_RETURN: return "return";
         case TokenType::KW_IF: return "if";
+        case TokenType::KW_ELIF: return "elif";
         case TokenType::KW_ELSE: return "else";
+        case TokenType::KW_AND: return "and";
+        case TokenType::KW_OR: return "or";
+        case TokenType::KW_NOT: return "not";
         case TokenType::KW_LOOP: return "loop";
         case TokenType::KW_WHILE: return "while";
         case TokenType::KW_BREAK: return "break";
@@ -295,7 +299,11 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"do", TokenType::KW_DO},
         {"return", TokenType::KW_RETURN},
         {"if", TokenType::KW_IF},
+        {"elif", TokenType::KW_ELIF},
         {"else", TokenType::KW_ELSE},
+        {"and", TokenType::KW_AND},
+        {"or", TokenType::KW_OR},
+        {"not", TokenType::KW_NOT},
         {"loop", TokenType::KW_LOOP},
         {"while", TokenType::KW_WHILE},
         {"break", TokenType::KW_BREAK},

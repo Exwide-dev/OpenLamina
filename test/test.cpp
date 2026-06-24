@@ -241,7 +241,7 @@ void test_type_convert_sugar() {
     const std::string src = R"(
 struct A { var a }
 struct C { var c }
-A.__convert__.append(do(x: C) { return A(x.c) })
+A.__convert__.__dispatch__.append(do(self, x: C) { return A(x.c) })
 A.(C(1))
 )";
 
@@ -499,6 +499,438 @@ sq{n}
         const irgen::Value& result = vm.op_stack.top().deref();
         ASSERT(result.isNumber());
         ASSERT(result.asNumber() == irgen::Value(static_cast<int64_t>(36)).asNumber());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_macro_identity() {
+    const std::string src = R"(
+macro identity(x) {
+    return x
+}
+n = 6
+identity{n}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top().deref();
+        ASSERT(result.isNumber());
+        ASSERT(result.asNumber() == irgen::Value(static_cast<int64_t>(6)).asNumber());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_macro_variadic_log() {
+    const std::string src = R"(
+macro LOG(*msg) {
+    vals = []
+    for (ast in msg) {
+        vals.append(eval(ast))
+    }
+    print("[LOG]", *vals)
+}
+
+LOG{"a", ":", 5}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_macro_it_text() {
+    const std::string src = R"(
+macro LOG(*msg) {
+    vals = []
+    for (ast in msg) {
+        vals.append(eval(ast))
+    }
+    print("[LOG]", *vals)
+}
+
+macro it(x) {
+    LOG{text.(x), ":", x}
+}
+
+a = 5
+it{a}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_macro_no_return() {
+    const std::string src = R"(
+macro noop() {
+}
+noop{}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        ASSERT(vm.op_stack.top().deref().isNone());
+        return true;
+    }));
+    delete ast;
+}
+
+namespace {
+
+[[nodiscard]] bool execute_throws_substr(const std::string& src, const std::string& needle) {
+    lmx::ProgramASTNode* ast = parse(src);
+    if (ast == nullptr) {
+        return false;
+    }
+    bool matched = false;
+    try {
+        lm::irgen::execute(ast, [](irgen::VM&) { return true; });
+    } catch (const RuntimeError& e) {
+        matched = std::string(e.what()).find(needle) != std::string::npos;
+    }
+    delete ast;
+    return matched;
+}
+
+} // namespace
+
+// eval(MacroCallExpr/FuncCallExpr) inside LOG while outer macro runs.
+void test_macro_bug_eval_call_in_log() {
+    const std::string setup = R"(
+macro LOG(*msg) {
+    vals = []
+    for (ast in msg) {
+        vals.append(eval(ast))
+    }
+    print("[LOG]", *vals)
+}
+
+macro it(x) {
+    LOG{text.(x), ":", x}
+}
+
+macro square(x) {
+    return quote(ex) with (x) {
+        var ex = eval(x)
+        ex * ex
+    }
+}
+
+func double_it(x) {
+    return x * x
+}
+)";
+
+    lmx::ProgramASTNode* ast1 = parse(setup + R"(
+a = 5
+it{square{a}}
+)");
+    ASSERT(ast1 != nullptr);
+    ASSERT(lm::irgen::execute(ast1, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast1;
+
+    lmx::ProgramASTNode* ast2 = parse(setup + R"(
+k = 3
+it{double_it(k)}
+)");
+    ASSERT(ast2 != nullptr);
+    ASSERT(lm::irgen::execute(ast2, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast2;
+}
+
+// nested macro{} in macro body during AST materialization.
+void test_macro_bug_nested_macro_compose() {
+    const std::string src = R"(
+macro square(x) {
+    return quote(ex) with (x) {
+        var ex = eval(x)
+        ex * ex
+    }
+}
+
+macro pow4_bad(x) {
+    return square{square{x}}
+}
+
+pow4_bad{2}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top().deref();
+        ASSERT(result.isNumber());
+        ASSERT(result.asNumber() == irgen::Value(static_cast<int64_t>(16)).asNumber());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_macro_nested_splat() {
+    const std::string src = R"(
+macro LOG(*msg) {
+    vals = []
+    for (ast in msg) {
+        vals.append(eval(ast))
+    }
+    print("[LOG]", *vals)
+}
+
+macro bundle(*items) {
+    return LOG{*items}
+}
+
+bundle{"x", ":", 2}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_macro_ast_struct_match() {
+    const std::string src = R"(
+macro inspect(x) {
+    return quote(ex) with (x) {
+        match (ast_struct(x)) {
+            case AstVarRef { name } {
+                print("var", name)
+            }
+            case AstNumber { value } {
+                print("num", value)
+            }
+        } else {
+            print("other")
+        }
+    }
+}
+
+inspect{a}
+a = 5
+inspect{7}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_type_handle() {
+    const std::string src = R"(
+print(type(42) == num)
+print(type("x") == text)
+print(type(vec[]) == vector)
+
+macro inspect(x) {
+    return quote(ex) with (x) {
+        print(type(x) == AST)
+        print(type(ast_struct(x)) == AstVarRef)
+    }
+}
+sym = 0
+inspect{sym}
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_quote_syntax_forms() {
+    const std::string src = R"(
+macro double_it(x) {
+    return quote(a) with (x) {
+        var a = eval(x)
+        a + a
+    }
+}
+
+macro shadow_demo() {
+    return quote(a) {
+        var a = 99
+        a + 1
+    }
+}
+
+macro inc(x) {
+    return quote with (x) {
+        eval(x) + 1
+    }
+}
+
+macro forty_two() {
+    return quote {
+        42
+    }
+}
+
+print(double_it{5})
+print(shadow_demo{})
+print(inc{10})
+print(forty_two{})
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_container_methods_and_format() {
+    const std::string src = R"(
+use std.format.{format, join}
+let v = vec[10, 20, 30]
+v.set(1, 99)
+v.insert(0, 5)
+let a = v.get(2)
+let d = {"x": 1}
+d.put("y", 2)
+d.set("x", 9)
+let got = d.get("x")
+let items = d.items().len()
+let fmt = format("{} + {} = {}", 1, 2, 3)
+let joined = join("-", vec["a", "b"])
+struct Box { var n func fail(self) { throw ValueError("boom") } }
+let caught = 0
+let after_fail = 0
+try {
+    Box(1).fail()
+    after_fail = 1
+} catch (e: ValueError) {
+    caught = 1
+}
+print(a, got, items, fmt, joined, caught, after_fail)
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        (void)vm;
+        return true;
+    }));
+    delete ast;
+}
+
+void test_try_catch_skips_after_struct_throw() {
+    const std::string src = R"(
+struct Lib {
+    func fail(self) { throw ValueError("err") }
+}
+let lib = Lib()
+let flag = 0
+try {
+    lib.fail()
+    flag = 1
+} catch (e: ValueError) {
+    flag = 2
+}
+flag
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isNumber());
+        ASSERT(result.asNumber() == irgen::Value(static_cast<int64_t>(2)).asNumber());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_elif_and_or_not() {
+    const std::string src = R"(
+let side = vec[]
+
+func bump(tag) {
+    side.append(tag)
+}
+
+let branch = 0
+if (false) {
+    branch = 1
+} elif (true) {
+    branch = 2
+} else {
+    branch = 3
+}
+
+let and_val = 0 and bump("and_lhs") or bump("or_lhs")
+let sc = vec[]
+if (1 and bump("sc_and") and 0) {
+    sc.append(1)
+} else {
+    sc.append(2)
+}
+
+let not_ok = not ""
+let not_fail = not 0
+
+let summary = vec[]
+summary.append(branch)
+summary.append(and_val)
+summary.append(side.len())
+summary.append(sc[0])
+summary.append(not_ok)
+summary.append(not_fail)
+summary
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 6);
+        ASSERT(slots[0]->deref().asNumber() == irgen::Value(static_cast<int64_t>(2)).asNumber());
+        ASSERT(slots[1]->deref().isNone());
+        ASSERT(slots[2]->deref().asNumber() == irgen::Value(static_cast<int64_t>(2)).asNumber());
+        ASSERT(slots[3]->deref().asNumber() == irgen::Value(static_cast<int64_t>(2)).asNumber());
+        ASSERT(slots[4]->deref().isBool());
+        ASSERT(slots[4]->deref().asBool());
+        ASSERT(slots[5]->deref().isBool());
+        ASSERT(slots[5]->deref().asBool());
         return true;
     }));
     delete ast;

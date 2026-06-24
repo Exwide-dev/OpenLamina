@@ -1235,6 +1235,23 @@ ASTNode* Parser::parseIfStmt() {
     pop_context();
     consume(TokenType::RBRACE);
 
+    std::vector<ElifBranch> elif_branches;
+    while (match(TokenType::KW_ELIF)) {
+        consume(TokenType::LPAREN);
+        ExprNode* elif_cond = parseExpression();
+        consume(TokenType::RPAREN);
+        const int elif_line = current_token().line;
+        consume(TokenType::LBRACE);
+        push_context(ParserContext::FunctionBody);
+        auto elif_body = parseBlockStatementList();
+        pop_context();
+        consume(TokenType::RBRACE);
+        elif_branches.emplace_back(
+            elif_cond,
+            make_node_at<BlockStmtNode>(elif_line, elif_body)
+        );
+    }
+
     BlockStmtNode* else_body = nullptr;
     if (match(TokenType::KW_ELSE)) {
         const int else_line = current_token().line;
@@ -1249,6 +1266,7 @@ ASTNode* Parser::parseIfStmt() {
         if_line,
         condition,
         make_node_at<BlockStmtNode>(then_line, then_body),
+        std::move(elif_branches),
         else_body
     );
 }
@@ -1371,9 +1389,58 @@ MatchPatternNode* Parser::parseMatchVectorPattern() {
     );
 }
 
+MatchPatternNode* Parser::parseMatchStructPattern() {
+    const int pat_line = current_token().line;
+    const std::string type_name = current_token().value;
+    consume(TokenType::IDENTIFIER);
+    consume(TokenType::LBRACE);
+
+    while (match(TokenType::NEWLINE)) {
+    }
+
+    std::vector<std::string> field_binds;
+    if (!check(TokenType::RBRACE)) {
+        while (true) {
+            while (match(TokenType::NEWLINE)) {
+            }
+
+            if (!check(TokenType::IDENTIFIER)) {
+                throw std::runtime_error("expected field name in struct match pattern");
+            }
+            field_binds.push_back(current_token().value);
+            consume(TokenType::IDENTIFIER);
+
+            while (match(TokenType::NEWLINE)) {
+            }
+
+            if (!match(TokenType::OPER_COMMA)) {
+                break;
+            }
+        }
+    }
+
+    while (match(TokenType::NEWLINE)) {
+    }
+
+    consume(TokenType::RBRACE);
+    return make_node_at<MatchPatternNode>(
+        pat_line,
+        MatchPatternKind::Struct,
+        nullptr,
+        std::string{},
+        std::vector<MatchPatternNode*>{},
+        std::vector<MatchPatternNode*>{},
+        type_name,
+        std::move(field_binds)
+    );
+}
+
 MatchPatternNode* Parser::parseMatchPatternUnit() {
     if (check(TokenType::LBRACKET)) {
         return parseMatchVectorPattern();
+    }
+    if (check(TokenType::IDENTIFIER) && peek(1).type == TokenType::LBRACE) {
+        return parseMatchStructPattern();
     }
     return parseMatchValuePattern();
 }
@@ -1577,7 +1644,7 @@ bool Parser::atPipelineStepBoundary() const {
 
 ExprNode* Parser::parsePipelineExpr() {
     LOG("Parsing pipeline_expr");
-    ExprNode* expr = parseComparisonExpr();
+    ExprNode* expr = parseLogicalOrExpr();
 
     while (true) {
         while (match(TokenType::NEWLINE)) {
@@ -1601,7 +1668,7 @@ ExprNode* Parser::parsePipelineExpr() {
 
         pipeline_step_mode_ = true;
         pipeline_step_line_ = pipe_line;
-        ExprNode* step = parseComparisonExpr();
+        ExprNode* step = parseLogicalOrExpr();
         pipeline_step_mode_ = false;
 
         if (!containsPlaceholder(step)) {
@@ -1612,6 +1679,49 @@ ExprNode* Parser::parsePipelineExpr() {
     }
 
     return expr;
+}
+
+ExprNode* Parser::parseLogicalOrExpr() {
+    LOG("Parsing logical_or_expr");
+    ExprNode* left = parseLogicalAndExpr();
+
+    while (!atPipelineStepBoundary()) {
+        if (!match(TokenType::KW_OR)) {
+            break;
+        }
+        const int op_line = current_token().line;
+        ExprNode* right = parseLogicalAndExpr();
+        left = make_node_at<BinaryNode>(op_line, left, right, "or");
+    }
+
+    return left;
+}
+
+ExprNode* Parser::parseLogicalAndExpr() {
+    LOG("Parsing logical_and_expr");
+    ExprNode* left = parseNotExpr();
+
+    while (!atPipelineStepBoundary()) {
+        if (!match(TokenType::KW_AND)) {
+            break;
+        }
+        const int op_line = current_token().line;
+        ExprNode* right = parseNotExpr();
+        left = make_node_at<BinaryNode>(op_line, left, right, "and");
+    }
+
+    return left;
+}
+
+ExprNode* Parser::parseNotExpr() {
+    LOG("Parsing not_expr");
+    if (check(TokenType::KW_NOT)) {
+        const int op_line = current_token().line;
+        match(TokenType::KW_NOT);
+        ExprNode* operand = parseNotExpr();
+        return make_node_at<UnaryNode>(op_line, "not", operand);
+    }
+    return parseComparisonExpr();
 }
 
 ExprNode* Parser::parseComparisonExpr() {
@@ -1918,36 +2028,37 @@ ExprNode* Parser::parseQuoteExpr() {
     LOG("Parsing quote_expr");
     const int line = current_token().line;
     consume(TokenType::KW_QUOTE);
-    consume(TokenType::LPAREN);
 
     std::vector<std::string> hygienic;
-    skipNewlines();
-    if (!check(TokenType::RPAREN)) {
-        hygienic.push_back(current_token().value);
-        consume(TokenType::IDENTIFIER);
-        while (match(TokenType::OPER_COMMA)) {
-            skipNewlines();
+    if (match(TokenType::LPAREN)) {
+        skipNewlines();
+        if (!check(TokenType::RPAREN)) {
             hygienic.push_back(current_token().value);
             consume(TokenType::IDENTIFIER);
+            while (match(TokenType::OPER_COMMA)) {
+                skipNewlines();
+                hygienic.push_back(current_token().value);
+                consume(TokenType::IDENTIFIER);
+            }
         }
+        skipNewlines();
+        consume(TokenType::RPAREN);
     }
-    skipNewlines();
-    consume(TokenType::RPAREN);
-
-    consume(TokenType::KW_WITH);
-    consume(TokenType::LPAREN);
 
     std::vector<ExprNode*> bindings;
-    skipNewlines();
-    if (!check(TokenType::RPAREN)) {
-        bindings.push_back(parseExpression());
-        while (match(TokenType::OPER_COMMA)) {
-            skipNewlines();
+    if (match(TokenType::KW_WITH)) {
+        consume(TokenType::LPAREN);
+        skipNewlines();
+        if (!check(TokenType::RPAREN)) {
             bindings.push_back(parseExpression());
+            while (match(TokenType::OPER_COMMA)) {
+                skipNewlines();
+                bindings.push_back(parseExpression());
+            }
         }
+        skipNewlines();
+        consume(TokenType::RPAREN);
     }
-    skipNewlines();
-    consume(TokenType::RPAREN);
 
     const int body_line = current_token().line;
     consume(TokenType::LBRACE);

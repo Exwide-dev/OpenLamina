@@ -533,13 +533,23 @@ void VM::init_builtins() {
         main_module->set_attr(g_string_pool.get_string(id), *val);
     }
 
-    for (const char* type_name : {"text", "num", "bool"}) {
+    for (const char* type_name : {"text", "num", "bool", "nonetype", "vector", "table", "AST"}) {
         main_module->set_attr(type_name, make_type_value(type_name));
     }
 
     for (const char* type_name :
          {"BaseException", "Exception", "StopIteration", "RuntimeError", "ValueError", "TypeError"}) {
         main_module->set_attr(type_name, make_type_value(type_name));
+    }
+
+    for (const char* type_name : {
+             "AstNode", "AstNumber", "AstString", "AstBool", "AstVarRef", "AstUnary", "AstBinary",
+             "AstFuncCall", "AstMacroCall", "AstMemberAccess", "AstTypeConvert", "AstIndexAccess",
+             "AstVector", "AstQuote",
+         }) {
+        if (is_type_name(type_name)) {
+            main_module->set_attr(type_name, make_type_value(type_name));
+        }
     }
 
     auto std_module = std::make_shared<ModuleObject>(lang::standard_mod);
@@ -598,11 +608,10 @@ void VM::run() {
             op_stack.clear();
             op_stack.push(std::move(top));
         }
-        std::cerr << "[OpenLamina] vm.run done: op_stack=" << op_stack.size()
-                  << " symbol_stack=" << symbol_stack.size()
-                  << " locals_stack=" << locals_stack.size()
-                  << " cache_scopes=" << cache.scope_depth()
-                  << std::endl << std::flush;
+        LOG("vm.run done: op_stack=" << op_stack.size()
+            << " symbol_stack=" << symbol_stack.size()
+            << " locals_stack=" << locals_stack.size()
+            << " cache_scopes=" << cache.scope_depth());
     } catch ([[maybe_unused]] const std::exception& e) {
         op_stack.clear();
         throw;
@@ -709,7 +718,7 @@ void VM::shutdown() {
 }
 
 VM::~VM() {
-    std::cerr << "[OpenLamina] ~VM\n" << std::flush;
+    LOG("~VM");
 }
 
 std::optional<Value> VM::get_symbol(const std::string& name) const {
@@ -741,6 +750,10 @@ GETATTR::GETATTR(const std::string& name) : name_id(g_string_pool.add(name)) {}
 SET_FIELD::SET_FIELD(const std::string& field_name) : name_id(g_string_pool.add(field_name)) {}
 
 EXC_MATCH::EXC_MATCH(std::string type_name) : type_name_id(g_string_pool.add(std::move(type_name))) {}
+
+IS_INSTANCE::IS_INSTANCE(std::string type_name)
+    : type_name_id(g_string_pool.add(std::move(type_name))) {
+}
 
 STRUCT_NEW::STRUCT_NEW(const std::string& struct_name, const size_t arg_count)
     : struct_id(g_string_pool.add(struct_name)), arg_count(arg_count) {}
@@ -843,6 +856,11 @@ inline void PTR_TO_REF::emit(VM& vm) const {
 inline void NOT::emit(VM& vm) {
     auto value = vm.op_stack.popValue();
     vm.op_stack.push(!value.deref());
+}
+
+inline void TRUTHY_NOT::emit(VM& vm) {
+    auto value = vm.op_stack.popValue();
+    vm.op_stack.push(Value(!value.deref().isTruthy()));
 }
 
 inline void AND::emit(VM& vm) {
@@ -1019,7 +1037,7 @@ inline void GOTO::emit(VM& vm) const {
 }
 
 inline void GOTOIF::emit(VM& vm) const {
-    if (vm.op_stack.popValue().asBool()) {
+    if (vm.op_stack.popValue().isTruthy()) {
         if (not vm.label_table.contains(label_id)) {
             VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
         }
@@ -1028,7 +1046,7 @@ inline void GOTOIF::emit(VM& vm) const {
 }
 
 inline void GOTOIFNOT::emit(VM& vm) const {
-    if (!vm.op_stack.popValue().asBool()) {
+    if (!vm.op_stack.popValue().isTruthy()) {
         if (not vm.label_table.contains(label_id)) {
             VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
         }
@@ -1097,6 +1115,27 @@ void log_snippet_op_vm(const size_t ipc, const Opcode& op, const VM& vm) {
     }, op);
 }
 
+void run_vm_until_call_depth(VM& vm, const size_t target_depth) {
+    while (vm.call_stack.size() > target_depth) {
+        if (vm.pc >= vm.code.size()) {
+            throw RuntimeError("nested call ran past end of bytecode");
+        }
+        try {
+            std::visit([&](auto& op) { op.emit(vm); }, vm.code[vm.pc]);
+        } catch (const RuntimeError& e) {
+            vm.op_stack.clear();
+            if (is_stop_iteration(e)) {
+                throw;
+            }
+            if (dispatch_runtime_error(vm, e)) {
+                continue;
+            }
+            throw;
+        }
+        ++vm.pc;
+    }
+}
+
 } // namespace
 
 Value run_ir_snippet(VM& vm, const std::vector<Opcode>& ir) {
@@ -1122,12 +1161,12 @@ Value run_ir_snippet(VM& vm, const std::vector<Opcode>& ir) {
                 ipc = labels.at(opcode.label_id);
                 advance = false;
             } else if constexpr (std::is_same_v<T, GOTOIF>) {
-                if (vm.op_stack.popValue().asBool()) {
+                if (vm.op_stack.popValue().isTruthy()) {
                     ipc = labels.at(opcode.label_id);
                     advance = false;
                 }
             } else if constexpr (std::is_same_v<T, GOTOIFNOT>) {
-                if (!vm.op_stack.popValue().asBool()) {
+                if (!vm.op_stack.popValue().isTruthy()) {
                     ipc = labels.at(opcode.label_id);
                     advance = false;
                 }
@@ -1135,11 +1174,14 @@ Value run_ir_snippet(VM& vm, const std::vector<Opcode>& ir) {
                 LOG("[snippet] hit RET at ipc=" << ipc);
                 ipc = ir.size();
                 advance = false;
-            } else if constexpr (std::is_same_v<T, MUL>) {
-                LOG("[snippet] MUL before stack=" << vm.op_stack.size());
-                emit_ir_op(vm, op);
-                LOG("[snippet] MUL after stack=" << vm.op_stack.size()
-                    << " top=" << (vm.op_stack.empty() ? "empty" : vm.op_stack.top().deref().printString()));
+            } else if constexpr (std::is_same_v<T, CALL>) {
+                const size_t call_depth = vm.call_stack.size();
+                const size_t saved_pc = vm.pc;
+                opcode.emit(vm);
+                if (vm.call_stack.size() > call_depth) {
+                    run_vm_until_call_depth(vm, call_depth);
+                }
+                vm.pc = saved_pc;
             } else {
                 emit_ir_op(vm, op);
             }
@@ -1301,8 +1343,8 @@ void invoke_user_function_with_args_impl(VM& vm, const std::shared_ptr<FunctionO
     vm.call_func_stack.push_back(func_obj);
     vm.call_stack.push_back(vm.pc);
 
-    for (auto& arg : args) {
-        vm.op_stack.push(std::move(arg));
+    for (auto it = args.rbegin(); it != args.rend(); ++it) {
+        vm.op_stack.push(*it);
     }
 
     if (!func_obj->closure.empty()) {
@@ -1326,6 +1368,39 @@ void invoke_user_function_with_args(
     std::vector<Value> args
 ) {
     invoke_user_function_with_args_impl(vm, func_obj, std::move(args));
+}
+
+Value call_user_function_sync(
+    VM& vm,
+    const std::shared_ptr<FunctionObject>& func_obj,
+    std::vector<Value> args
+) {
+    if (!func_obj) {
+        VM_RUNTIME_ERROR(vm, "call_user_function_sync: null function");
+    }
+
+    if (!func_obj->owner_vm) {
+        func_obj->owner_vm = &vm;
+    }
+
+    if (func_obj->owner_vm != &vm) {
+        return func_obj->call(vm, args);
+    }
+
+    const size_t call_depth = vm.call_stack.size();
+    const size_t op_depth = vm.op_stack.size();
+
+    invoke_user_function_with_args_impl(vm, func_obj, std::move(args));
+    run_vm_until_call_depth(vm, call_depth);
+
+    if (vm.op_stack.size() > op_depth) {
+        Value result = vm.op_stack.popValue();
+        while (vm.op_stack.size() > op_depth) {
+            vm.op_stack.pop();
+        }
+        return result;
+    }
+    return Value();
 }
 
 inline void CALL::emit(VM& vm) const {
@@ -1429,6 +1504,8 @@ inline void RET::emit(VM& vm) {
             LOG("[macro_ret] step7 push result onto op_stack");
             vm.op_stack.push(top);
             LOG("[macro_ret] step8 pushed op_stack=" << vm.op_stack.size());
+        } else {
+            vm.op_stack.push(Value());
         }
         if (!vm.macro_eval_scope_stack.empty()) {
             LOG("[macro_ret] step9 pop macro_eval_scope");
@@ -1575,7 +1652,7 @@ void SET_FIELD::emit(VM& vm) const {
     const std::string& field_name = g_string_pool.get_string(name_id);
     Value obj = vm.op_stack.popValue();
     Value value = vm.op_stack.popValue();
-    struct_set_field(obj, field_name, value);
+    struct_set_field(vm, obj, field_name, value);
     vm.op_stack.push(obj);
 }
 
@@ -1984,9 +2061,10 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
     const size_t old_pc = target_vm.pc;
     const size_t symbol_stack_base = target_vm.symbol_stack.size();
     const size_t op_stack_base = target_vm.op_stack.size();
+    const size_t call_stack_depth = target_vm.call_stack.size();
 
-    for (const auto& arg : resolved) {
-        target_vm.op_stack.push(arg);
+    for (auto it = resolved.rbegin(); it != resolved.rend(); ++it) {
+        target_vm.op_stack.push(*it);
     }
 
     target_vm.call_stack.push_back(target_vm.code.size());
@@ -2002,12 +2080,17 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
     }
 
     try {
+        ++target_vm.nested_function_run_depth;
         target_vm.run();
+        --target_vm.nested_function_run_depth;
     } catch (...) {
+        if (target_vm.nested_function_run_depth > 0) {
+            --target_vm.nested_function_run_depth;
+        }
         while (target_vm.symbol_stack.size() > symbol_stack_base) {
             target_vm.symbol_stack.pop_back();
         }
-        if (!target_vm.call_stack.empty()) {
+        if (target_vm.call_stack.size() > call_stack_depth) {
             target_vm.call_stack.pop_back();
         }
         target_vm.pc = old_pc;
@@ -2023,11 +2106,24 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         }
     }
 
-    if (!target_vm.call_stack.empty()) {
+    if (target_vm.call_stack.size() > call_stack_depth) {
         target_vm.call_stack.pop_back();
     }
 
-    target_vm.pc = old_pc;
+    // Nested run() may dispatch to an enclosing try/catch and run the handler
+    // inside the same bytecode. Resume at try_end so the outer loop skips the
+    // rest of the try body (e.g. success print after a failed method call).
+    size_t resume_pc = old_pc;
+    if (target_vm.deferred_try_end_label) {
+        const auto end_it = target_vm.label_table.find(*target_vm.deferred_try_end_label);
+        if (end_it == target_vm.label_table.end()) {
+            VM_RUNTIME_ERROR(target_vm, "internal error: try end label not found");
+        }
+        resume_pc = end_it->second > 0 ? end_it->second - 1 : end_it->second;
+        target_vm.deferred_try_end_label.reset();
+    }
+
+    target_vm.pc = resume_pc;
 
     if (!target_vm.op_stack.empty()) {
         Value result = target_vm.op_stack.popValue();
@@ -2095,6 +2191,7 @@ inline void irgen::THROW::emit(VM& vm) const {
 }
 
 inline void irgen::ENTER_TRY::emit(VM& vm) const {
+    vm.deferred_try_end_label.reset();
     TryHandlerFrame frame;
     frame.catch_label = catch_label;
     frame.else_label = else_label;
@@ -2108,6 +2205,15 @@ inline void irgen::ENTER_TRY::emit(VM& vm) const {
 
 inline void irgen::END_TRY::emit(VM& vm) const {
     if (vm.try_stack.empty()) {
+        if (vm.deferred_try_end_label) {
+            const size_t end_label = *vm.deferred_try_end_label;
+            vm.deferred_try_end_label.reset();
+            if (!vm.label_table.contains(end_label)) {
+                VM_RUNTIME_ERROR(vm, "Unknown label: " + std::to_string(end_label));
+            }
+            vm.pc = vm.label_table.at(end_label);
+            return;
+        }
         VM_RUNTIME_ERROR(vm, "END_TRY without matching ENTER_TRY");
     }
     const TryHandlerFrame& frame = vm.try_stack.back();
@@ -2123,6 +2229,9 @@ inline void irgen::POP_TRY::emit(VM& vm) const {
         vm.try_stack.pop_back();
     }
     vm.active_exception.reset();
+    if (vm.nested_function_run_depth > 0 && vm.deferred_try_end_label) {
+        vm.pc = vm.code.size();
+    }
 }
 
 inline void irgen::PUSH_EXC::emit(VM& vm) const {
@@ -2140,6 +2249,12 @@ inline void irgen::EXC_MATCH::emit(VM& vm) const {
     const std::string& type_name = g_string_pool.get_string(type_name_id);
     const Value exc = Value::makeRef(vm.active_exception, vm.cell_pool);
     vm.op_stack.push(Value(struct_instance_is_a(exc, type_name)));
+}
+
+inline void irgen::IS_INSTANCE::emit(VM& vm) const {
+    const std::string& type_name = g_string_pool.get_string(type_name_id);
+    const Value subject = vm.op_stack.popValue();
+    vm.op_stack.push(Value(struct_instance_is_a(subject, type_name)));
 }
 
 inline void irgen::RETHROW::emit(VM& vm) const {
