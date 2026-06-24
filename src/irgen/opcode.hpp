@@ -2885,6 +2885,21 @@ public:
         id_to_string.clear();
         counter = 0;
     }
+
+    /** @brief 导出池中全部字符串（按下标顺序） */
+    [[nodiscard]] const std::vector<std::string>& export_strings() const {
+        return id_to_string;
+    }
+
+    /** @brief 用给定字符串表重建池（下标即 ID） */
+    void rebuild(const std::vector<std::string>& strings) {
+        string_to_id.clear();
+        id_to_string = strings;
+        counter = strings.size();
+        for (size_t i = 0; i < strings.size(); ++i) {
+            string_to_id[strings[i]] = i;
+        }
+    }
 };
 
 inline StringPool g_string_pool{}; ///< 全局字符串池

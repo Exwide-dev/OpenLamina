@@ -33,6 +33,8 @@ set(OPENLAMINA_CORE_SOURCES
         src/irgen/generator.hpp
         src/irgen/optimizer.cpp
         src/irgen/optimizer.hpp
+        src/irgen/bytecode_file.cpp
+        src/irgen/bytecode_file.hpp
         src/lexer/lexer.cpp
         src/lexer/lexer.hpp
         src/parser/parser.cpp
@@ -77,6 +79,7 @@ set(OPENLAMINA_TEST_SOURCES
         tools/lang/std_modules.cpp
         src/irgen/generator.cpp
         src/irgen/optimizer.cpp
+        src/irgen/bytecode_file.cpp
         src/lexer/lexer.cpp
         src/parser/parser.cpp
         src/front-end/front_end.cpp

@@ -1,6 +1,7 @@
 #include "cli.hpp"
 #include "error.hpp"
 #include "front-end/front_end.hpp"
+#include "irgen/bytecode_file.hpp"
 #include "irgen/generator.hpp"
 #include "irgen/optimizer.hpp"
 #include "repl/repl.hpp"
@@ -23,6 +24,15 @@ Args parse_args(const int argc, char* argv[]) {
             args.show_version = true;
         } else if (arg == "-O") {
             args.optimize = true;
+        } else if (arg == "-c" || arg == "--compile") {
+            args.compile = true;
+        } else if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: " << arg << " requires an argument\n";
+                args.show_help = true;
+                break;
+            }
+            args.output_path = argv[++i];
         } else if (args.file_path.empty()) {
             args.file_path = arg;
         } else {
@@ -38,6 +48,13 @@ void apply_runtime_flags(const Args& args) {
 }
 
 namespace {
+
+std::string default_lmc_output(const std::string& source_path) {
+    if (source_path.size() >= 3 && source_path.ends_with(".lm")) {
+        return source_path.substr(0, source_path.size() - 3) + ".lmc";
+    }
+    return source_path + ".lmc";
+}
 
 void print_runtime_error(std::ostream& out, const RuntimeError& e) {
     out << RED_BOLD << "Error: " << RESET << format_runtime_error_message(e) << "\n";
@@ -74,6 +91,62 @@ int run_file(const std::string& file_path, const std::vector<std::string>& args)
         }
         delete ast;
 
+        return 0;
+    } catch (const RuntimeError& e) {
+        std::cerr << "Error: " << format_runtime_error_message(e) << std::endl;
+        std::cerr << format_runtime_traceback(e);
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+int compile_file(const std::string& file_path, const std::string& output_path) {
+    try {
+        if (!std::filesystem::exists(file_path)) {
+            std::cerr << "Error: File not found: " << file_path << std::endl;
+            return 1;
+        }
+
+        const std::string source = lm::utf8_io::read_file_utf8(file_path);
+        lmx::ProgramASTNode* ast = parse(source, file_path);
+        if (!ast) {
+            std::cerr << "\nParsing failed:" << std::endl;
+            std::cerr << detail_msg << std::endl;
+            return 1;
+        }
+
+        const lm::irgen::CompiledModule module = lm::irgen::compile_ast_optimized(ast);
+        delete ast;
+
+        const std::string out_path = output_path.empty() ? default_lmc_output(file_path) : output_path;
+        lm::irgen::save_lmc(out_path, module);
+        std::cout << "Compiled " << file_path << " -> " << out_path;
+        if (module.optimized) {
+            std::cout << " (optimized: "
+                      << module.optimize_report.ops_before << " -> "
+                      << module.optimize_report.ops_after << " ops)";
+        }
+        std::cout << std::endl;
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
+int run_bytecode_file(const std::string& file_path) {
+    try {
+        if (!std::filesystem::exists(file_path)) {
+            std::cerr << "Error: File not found: " << file_path << std::endl;
+            return 1;
+        }
+
+        lm::irgen::CompiledModule module = lm::irgen::load_lmc(file_path);
+        if (!lm::irgen::run_compiled_module(module, [](::irgen::VM&) { return true; })) {
+            return 1;
+        }
         return 0;
     } catch (const RuntimeError& e) {
         std::cerr << "Error: " << format_runtime_error_message(e) << std::endl;
@@ -197,11 +270,13 @@ void show_help() {
     std::cout <<
             "Usage: OpenLamina [options] [file]\n\n"
             "Options:\n"
-            "  -h, --help     Show this help message\n"
-            "  -v, --version  Show version information\n"
-            "  -O             Optimize bytecode before execution\n\n"
+            "  -h, --help       Show this help message\n"
+            "  -v, --version    Show version information\n"
+            "  -O               Optimize bytecode before execution (.lm)\n"
+            "  -c, --compile    Compile .lm source to .lmc bytecode (always optimized)\n"
+            "  -o, --output     Output path for -c (default: input name with .lmc)\n\n"
             "If no file is specified, the REPL will start.\n"
-            "If a file is specified, it will be executed.\n"
+            ".lm files are interpreted; .lmc files run precompiled bytecode.\n"
             << std::endl;
 }
 

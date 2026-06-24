@@ -3,9 +3,10 @@
 #include "irgen/generator.hpp"
 #include "irgen/value_copy.hpp"
 #include "irgen/opcode.hpp"
-#include "irgen/optimizer.hpp"
+#include "irgen/bytecode_file.hpp"
 
 #include <format>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -235,6 +236,33 @@ void test_bytecode_optimizer() {
     ASSERT(raw_result.asNumber() == irgen::Value(static_cast<int64_t>(60)).asNumber());
 
     delete ast;
+}
+
+void test_bytecode_lmc_roundtrip() {
+    const std::string src = R"(
+func add(a, b) {
+    return a + b
+}
+let x = 10 + 20
+let y = add(x, 5)
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+
+    const lm::irgen::CompiledModule module = lm::irgen::compile_ast_optimized(ast);
+    delete ast;
+
+    ASSERT(module.optimized);
+    ASSERT(!module.code.empty());
+
+    const std::string path = "test_roundtrip.lmc";
+    lm::irgen::save_lmc(path, module);
+    lm::irgen::CompiledModule loaded = lm::irgen::load_lmc(path);
+    std::filesystem::remove(path);
+
+    ASSERT(loaded.code.size() == module.code.size());
+    ASSERT(lm::irgen::run_compiled_module(loaded, [](irgen::VM&) { return true; }));
 }
 
 void test_type_convert_sugar() {

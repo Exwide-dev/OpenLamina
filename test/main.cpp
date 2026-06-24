@@ -188,6 +188,7 @@ void test_decorators() {
 
 void test_gc_memory_trend();
 void test_bytecode_optimizer();
+void test_bytecode_lmc_roundtrip();
 void test_type_convert_sugar();
 void test_exceptions_and_try_catch();
 void test_friend_func_dispatch();
@@ -217,6 +218,7 @@ int main() {
     // test::run("exceptions_and_try_catch", test_exceptions_and_try_catch);
     // test::run("friend_func_dispatch", test_friend_func_dispatch);
     // test::run("iter_stopiteration_edges", test_iter_stopiteration_edges);
+    test::run("bytecode_lmc_roundtrip", test_bytecode_lmc_roundtrip);
     test::run("macro_system", test_macro_system);
     test::run("macro_identity", test_macro_identity);
     test::run("macro_variadic_log", test_macro_variadic_log);

@@ -1,5 +1,7 @@
 #include "optimizer.hpp"
 
+#include "friend_function.hpp"
+
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -10,6 +12,7 @@ namespace {
 
 using ::irgen::ADD;
 using ::irgen::DIV;
+using ::irgen::ENTER_TRY;
 using ::irgen::GOTO;
 using ::irgen::GOTOIF;
 using ::irgen::GOTOIFNOT;
@@ -47,6 +50,84 @@ using ::irgen::Value;
            std::holds_alternative<GOTO>(op) ||
            std::holds_alternative<GOTOIF>(op) ||
            std::holds_alternative<GOTOIFNOT>(op);
+}
+
+void collect_implicit_jump_targets_from_opcodes(
+    const std::vector<Opcode>& code,
+    std::unordered_set<size_t>& jump_targets
+);
+
+void collect_implicit_jump_targets_from_value(
+    const Value& val,
+    std::unordered_set<size_t>& jump_targets
+) {
+    if (val.isUserFunction()) {
+        const auto& func = val.asFunctionObject();
+        jump_targets.insert(func->location);
+        for (const auto& ir : func->param_default_ir) {
+            collect_implicit_jump_targets_from_opcodes(ir, jump_targets);
+        }
+        collect_implicit_jump_targets_from_opcodes(func->body, jump_targets);
+        return;
+    }
+    if (val.isFriendFunction()) {
+        for (const auto& handler : val.asFriendFunction()->dispatch_handlers()) {
+            if (handler) {
+                collect_implicit_jump_targets_from_value(*handler, jump_targets);
+            }
+        }
+        return;
+    }
+    if (val.isTypeHandle()) {
+        const auto& def = val.asTypeDef();
+        for (const auto& [_, method] : def->methods) {
+            if (method) {
+                jump_targets.insert(method->location);
+                for (const auto& ir : method->param_default_ir) {
+                    collect_implicit_jump_targets_from_opcodes(ir, jump_targets);
+                }
+                collect_implicit_jump_targets_from_opcodes(method->body, jump_targets);
+            }
+        }
+        return;
+    }
+    if (val.isVector()) {
+        for (const auto& elem : val.asVector()) {
+            if (elem) {
+                collect_implicit_jump_targets_from_value(*elem, jump_targets);
+            }
+        }
+    }
+}
+
+void collect_implicit_jump_targets_from_opcodes(
+    const std::vector<Opcode>& code,
+    std::unordered_set<size_t>& jump_targets
+) {
+    for (const auto& op : code) {
+        if (const auto* push = std::get_if<PUSH>(&op)) {
+            collect_implicit_jump_targets_from_value(push->val, jump_targets);
+        } else if (const auto* try_op = std::get_if<ENTER_TRY>(&op)) {
+            jump_targets.insert(try_op->catch_label);
+            jump_targets.insert(try_op->else_label);
+            jump_targets.insert(try_op->end_label);
+        }
+    }
+}
+
+[[nodiscard]] std::unordered_set<size_t> collect_jump_targets(const std::vector<Opcode>& code) {
+    std::unordered_set<size_t> jump_targets;
+    for (const auto& op : code) {
+        if (const auto* jump = std::get_if<GOTO>(&op)) {
+            jump_targets.insert(jump->label_id);
+        } else if (const auto* jump = std::get_if<GOTOIF>(&op)) {
+            jump_targets.insert(jump->label_id);
+        } else if (const auto* jump = std::get_if<GOTOIFNOT>(&op)) {
+            jump_targets.insert(jump->label_id);
+        }
+    }
+    collect_implicit_jump_targets_from_opcodes(code, jump_targets);
+    return jump_targets;
 }
 
 size_t fold_constants(std::vector<Opcode>& code) {
@@ -144,16 +225,7 @@ size_t thread_jumps(std::vector<Opcode>& code) {
 
 size_t remove_dead_after_goto(std::vector<Opcode>& code) {
     const auto label_table = build_label_table(code);
-    std::unordered_set<size_t> jump_targets;
-    for (const auto& op : code) {
-        if (const auto* jump = std::get_if<GOTO>(&op)) {
-            jump_targets.insert(jump->label_id);
-        } else if (const auto* jump = std::get_if<GOTOIF>(&op)) {
-            jump_targets.insert(jump->label_id);
-        } else if (const auto* jump = std::get_if<GOTOIFNOT>(&op)) {
-            jump_targets.insert(jump->label_id);
-        }
-    }
+    const auto jump_targets = collect_jump_targets(code);
 
     std::vector<bool> keep(code.size(), true);
     size_t removed = 0;

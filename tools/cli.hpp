@@ -19,7 +19,9 @@ struct Args {
     bool show_help = false;
     bool show_version = false;
     bool optimize = false;
+    bool compile = false;
     std::string file_path;
+    std::string output_path;
     std::vector<std::string> script_args;
 };
 
@@ -36,11 +38,18 @@ void apply_runtime_flags(const Args& args);
 
 /**
      * @brief 运行脚本文件
-     * @param file_path 文件路径
-     * @param args 脚本参数
-     * @return 退出码
      */
 int run_file(const std::string& file_path, const std::vector<std::string>& args);
+
+/**
+     * @brief 运行已编译的 .lmc 字节码文件
+     */
+int run_bytecode_file(const std::string& file_path);
+
+/**
+     * @brief 将 .lm 源文件编译为 .lmc 字节码
+     */
+int compile_file(const std::string& file_path, const std::string& output_path);
 
 /**
      * @brief 启动 REPL 交互环境
