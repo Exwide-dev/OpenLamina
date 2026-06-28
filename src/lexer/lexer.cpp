@@ -104,6 +104,8 @@ std::string Lexer::getTokenTypeName(const TokenType type) {
         case TokenType::KW_MACRO: return "macro";
         case TokenType::KW_QUOTE: return "quote";
         case TokenType::KW_TYPED: return "typed";
+        case TokenType::KW_OUTSIDE: return "outside";
+        case TokenType::KW_OVERLOAD: return "overload";
         case TokenType::KW_MATCH: return "match";
         case TokenType::KW_CASE: return "case";
         case TokenType::KW_TRY: return "try";
@@ -324,6 +326,8 @@ Token Lexer::parseIdentifierOrKeyword() {
         {"macro", TokenType::KW_MACRO},
         {"quote", TokenType::KW_QUOTE},
         {"typed", TokenType::KW_TYPED},
+        {"outside", TokenType::KW_OUTSIDE},
+        {"overload", TokenType::KW_OVERLOAD},
         {"match", TokenType::KW_MATCH},
         {"case", TokenType::KW_CASE},
         {"try", TokenType::KW_TRY},
@@ -340,12 +344,79 @@ Token Lexer::parseIdentifierOrKeyword() {
     return {TokenType::IDENTIFIER, value, start_line, start_col};
 }
 
+Token Lexer::parseNumLiteral() {
+    const int start_line = line;
+    const int start_col = column;
+    std::string value;
+
+    if (peekChar() == '+' || peekChar() == '-') {
+        value += consumeChar();
+    }
+
+    bool has_int = false;
+    bool has_frac = false;
+
+    while (utf8::ascii_digit_at(full_source, pos)) {
+        has_int = true;
+        const size_t before = pos;
+        consumeCodepoint();
+        value.append(full_source, before, pos - before);
+    }
+
+    if (peekChar() == '.') {
+        const char next = pos + 1 < full_source.size() ? full_source[pos + 1] : '\0';
+        if (has_int || isDigit(next)) {
+            value += consumeChar();
+            has_frac = true;
+            while (utf8::ascii_digit_at(full_source, pos)) {
+                const size_t before = pos;
+                consumeCodepoint();
+                value.append(full_source, before, pos - before);
+            }
+        }
+    }
+
+    if (peekChar() == 'e' || peekChar() == 'E') {
+        if (!has_int && !has_frac) {
+            return {TokenType::MISMATCH, value, start_line, start_col};
+        }
+        value += consumeChar();
+        if (peekChar() == '+' || peekChar() == '-') {
+            value += consumeChar();
+        }
+        if (!utf8::ascii_digit_at(full_source, pos)) {
+            return {TokenType::MISMATCH, value, start_line, start_col};
+        }
+        while (utf8::ascii_digit_at(full_source, pos)) {
+            const size_t before = pos;
+            consumeCodepoint();
+            value.append(full_source, before, pos - before);
+        }
+    }
+
+    if (!has_int && !has_frac) {
+        return {TokenType::MISMATCH, value, start_line, start_col};
+    }
+
+    return {TokenType::NUM_LITERAL, value, start_line, start_col};
+}
+
 Token Lexer::tryMatchPatterns() {
     const int start_line = line;
     const int start_col = column;
 
     if (identifierStartsHere()) {
         return parseIdentifierOrKeyword();
+    }
+
+    if (utf8::ascii_digit_at(full_source, pos)) {
+        LOG("Find num");
+        return parseNumLiteral();
+    }
+
+    if (peekChar() == '.' && pos + 1 < full_source.size() && isDigit(full_source[pos + 1])) {
+        LOG("Find num");
+        return parseNumLiteral();
     }
 
     struct Candidate {
@@ -373,17 +444,6 @@ Token Lexer::tryMatchPatterns() {
             consumeChar();
         }
         return {best->type, best->value, start_line, start_col};
-    }
-
-    if (utf8::ascii_digit_at(full_source, pos)) {
-        LOG("Find num");
-        std::string value;
-        while (!isAtEnd() && utf8::ascii_digit_at(full_source, pos)) {
-            const size_t before = pos;
-            consumeCodepoint();
-            value.append(full_source, before, pos - before);
-        }
-        return {TokenType::NUM_LITERAL, value, start_line, start_col};
     }
 
     if (!isAtEnd()) {

@@ -11,8 +11,11 @@
 
 namespace lm::irgen {
 
-/** @brief .lmc 文件格式版本 */
-constexpr uint32_t LMC_FORMAT_VERSION = 1;
+/** @brief .lmc 文件格式版本（v2：varint + 可选 zlib 压缩） */
+constexpr uint32_t LMC_FORMAT_VERSION = 2;
+
+constexpr uint32_t LMC_FLAG_OPTIMIZED = 1u;
+constexpr uint32_t LMC_FLAG_COMPRESSED = 2u;
 
 /** @brief 已编译模块：字符串池、用户类型定义与主程序字节码 */
 struct CompiledModule {

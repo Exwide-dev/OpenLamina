@@ -158,32 +158,6 @@ struct ExprNode : ASTNode {
 };
 
 /**
- * @struct FuncParam
- * @brief 函数形参（可带默认值）
- */
-struct FuncParam {
-    std::string name;
-    std::string type_name;
-    bool has_type = false;
-    bool is_variadic = false;
-    ExprNode* default_value = nullptr;
-
-    FuncParam(
-        std::string n,
-        ExprNode* def = nullptr,
-        std::string ty = {},
-        const bool typed = false,
-        const bool variadic = false
-    )
-        : name(std::move(n)),
-          type_name(std::move(ty)),
-          has_type(typed),
-          is_variadic(variadic),
-          default_value(def) {
-    }
-};
-
-/**
  * @struct CallArgument
  * @brief 函数调用实参（可具名）
  */
@@ -241,6 +215,104 @@ struct CompositeTypeNode final : TypeNode {
         for (const auto type : subtypes) {
             delete type;
         }
+    }
+};
+
+[[nodiscard]] inline TypeNode* clone_type_node(const TypeNode* node) {
+    if (node == nullptr) {
+        return nullptr;
+    }
+    if (node->kind == ASTNodeType::CompositeType) {
+        const auto* composite = dynamic_cast<const CompositeTypeNode*>(node);
+        std::vector<TypeNode*> subtypes;
+        subtypes.reserve(composite->subtypes.size());
+        for (const TypeNode* sub : composite->subtypes) {
+            subtypes.push_back(clone_type_node(sub));
+        }
+        return new CompositeTypeNode(composite->name, std::move(subtypes));
+    }
+    return new TypeNode(node->name);
+}
+
+/**
+ * @struct FuncParam
+ * @brief 函数形参（可带默认值）
+ */
+struct FuncParam {
+    std::string name;
+    std::string type_name;
+    TypeNode* type_expr = nullptr;
+    bool has_type = false;
+    bool is_variadic = false;
+    ExprNode* default_value = nullptr;
+
+    FuncParam(
+        std::string n,
+        ExprNode* def = nullptr,
+        TypeNode* ty = nullptr,
+        const bool typed = false,
+        const bool variadic = false
+    )
+        : name(std::move(n)),
+          type_expr(ty),
+          has_type(typed),
+          is_variadic(variadic),
+          default_value(def) {
+        if (type_expr != nullptr) {
+            type_name = type_expr->name;
+        }
+    }
+
+    FuncParam(const FuncParam& other)
+        : name(other.name),
+          type_name(other.type_name),
+          type_expr(clone_type_node(other.type_expr)),
+          has_type(other.has_type),
+          is_variadic(other.is_variadic),
+          default_value(other.default_value) {
+    }
+
+    FuncParam& operator=(const FuncParam& other) {
+        if (this != &other) {
+            delete type_expr;
+            type_expr = clone_type_node(other.type_expr);
+            name = other.name;
+            type_name = other.type_name;
+            has_type = other.has_type;
+            is_variadic = other.is_variadic;
+            default_value = other.default_value;
+        }
+        return *this;
+    }
+
+    ~FuncParam() {
+        delete type_expr;
+    }
+
+    FuncParam(FuncParam&& other) noexcept
+        : name(std::move(other.name)),
+          type_name(std::move(other.type_name)),
+          type_expr(other.type_expr),
+          has_type(other.has_type),
+          is_variadic(other.is_variadic),
+          default_value(other.default_value) {
+        other.type_expr = nullptr;
+        other.default_value = nullptr;
+    }
+
+    FuncParam& operator=(FuncParam&& other) noexcept {
+        if (this != &other) {
+            delete type_expr;
+            name = std::move(other.name);
+            type_name = std::move(other.type_name);
+            type_expr = other.type_expr;
+            has_type = other.has_type;
+            is_variadic = other.is_variadic;
+            default_value = other.default_value;
+            other.type_expr = nullptr;
+            other.default_value = nullptr;
+        }
+        return *this;
     }
 };
 
@@ -870,6 +942,8 @@ struct FuncDeclNode final : ASTNode {
     TypeNode* ret_type{};                         ///< 返回类型
     std::vector<ExprNode*> decos;                 ///< 装饰器列表
     Visibility visibility = Visibility::Exported; ///< 可见性
+    bool outside = false;                         ///< outside 修饰符：注册到外层作用域
+    bool overload = false;                        ///< overload 修饰符：注册到 __convert__.__dispatch__
 
     /**
      * @brief 构造函数
@@ -1582,9 +1656,79 @@ struct UseNode final : ASTNode {
 struct StructField {
     std::string name;
     std::string type_name;
+    TypeNode* type_expr = nullptr;
     bool has_type_annotation = false;
     bool is_var = false;
     ExprNode* default_init = nullptr;
+
+    ~StructField() {
+        delete type_expr;
+    }
+
+    StructField(
+        std::string field_name,
+        TypeNode* ty,
+        const bool has_type,
+        const bool var,
+        ExprNode* def
+    )
+        : name(std::move(field_name)),
+          type_expr(ty),
+          has_type_annotation(has_type),
+          is_var(var),
+          default_init(def) {
+        if (type_expr != nullptr) {
+            type_name = type_expr->name;
+        }
+    }
+
+    StructField(const StructField& other)
+        : name(other.name),
+          type_name(other.type_name),
+          type_expr(clone_type_node(other.type_expr)),
+          has_type_annotation(other.has_type_annotation),
+          is_var(other.is_var),
+          default_init(other.default_init) {
+    }
+
+    StructField& operator=(const StructField& other) {
+        if (this != &other) {
+            delete type_expr;
+            type_expr = clone_type_node(other.type_expr);
+            name = other.name;
+            type_name = other.type_name;
+            has_type_annotation = other.has_type_annotation;
+            is_var = other.is_var;
+            default_init = other.default_init;
+        }
+        return *this;
+    }
+
+    StructField(StructField&& other) noexcept
+        : name(std::move(other.name)),
+          type_name(std::move(other.type_name)),
+          type_expr(other.type_expr),
+          has_type_annotation(other.has_type_annotation),
+          is_var(other.is_var),
+          default_init(other.default_init) {
+        other.type_expr = nullptr;
+        other.default_init = nullptr;
+    }
+
+    StructField& operator=(StructField&& other) noexcept {
+        if (this != &other) {
+            delete type_expr;
+            name = std::move(other.name);
+            type_name = std::move(other.type_name);
+            type_expr = other.type_expr;
+            has_type_annotation = other.has_type_annotation;
+            is_var = other.is_var;
+            default_init = other.default_init;
+            other.type_expr = nullptr;
+            other.default_init = nullptr;
+        }
+        return *this;
+    }
 };
 
 /**
@@ -1617,10 +1761,52 @@ struct ComprehensionNode final : ExprNode {
     }
 };
 
+struct StructTypeParam {
+    std::string name;
+    TypeNode* bound = nullptr;
+
+    StructTypeParam(std::string n, TypeNode* b)
+        : name(std::move(n)), bound(b) {
+    }
+
+    StructTypeParam(const StructTypeParam& other)
+        : name(other.name), bound(clone_type_node(other.bound)) {
+    }
+
+    StructTypeParam(StructTypeParam&& other) noexcept
+        : name(std::move(other.name)), bound(other.bound) {
+        other.bound = nullptr;
+    }
+
+    StructTypeParam& operator=(const StructTypeParam& other) {
+        if (this != &other) {
+            delete bound;
+            name = other.name;
+            bound = clone_type_node(other.bound);
+        }
+        return *this;
+    }
+
+    StructTypeParam& operator=(StructTypeParam&& other) noexcept {
+        if (this != &other) {
+            delete bound;
+            name = std::move(other.name);
+            bound = other.bound;
+            other.bound = nullptr;
+        }
+        return *this;
+    }
+
+    ~StructTypeParam() {
+        delete bound;
+    }
+};
+
 struct StructDeclNode final : ASTNode {
     std::string name;
     std::string base_name;
     bool typed = false;
+    std::vector<StructTypeParam> type_params;
     std::vector<StructField> fields;
     std::vector<FuncDeclNode*> methods;
 
@@ -1629,12 +1815,14 @@ struct StructDeclNode final : ASTNode {
         bool t,
         std::vector<StructField> f,
         std::vector<FuncDeclNode*> m = {},
-        std::string base = {}
+        std::string base = {},
+        std::vector<StructTypeParam> tparams = {}
     )
         : ASTNode(ASTNodeType::StructDecl),
           name(std::move(n)),
           base_name(std::move(base)),
           typed(t),
+          type_params(std::move(tparams)),
           fields(std::move(f)),
           methods(std::move(m)) {
     }

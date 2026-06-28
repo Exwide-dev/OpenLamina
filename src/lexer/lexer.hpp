@@ -53,6 +53,8 @@ enum class TokenType {
     KW_TRY,      ///< try 关键字
     KW_CATCH,    ///< catch 关键字
     KW_THROW,    ///< throw 关键字
+    KW_OUTSIDE,  ///< outside 函数修饰符（脱离当前层定义）
+    KW_OVERLOAD, ///< overload 函数修饰符（注册到 friend/__convert__ 分派）
     PLACEHOLDER, ///< 管道占位符 _
 
     OPER_PLUS,  ///< 加法运算符 +
@@ -299,6 +301,12 @@ private:
      * @return 解析出的 token
      */
     Token parseNewline();
+
+    /**
+     * @brief 解析整型或十进制浮点数字面量（如 42、3.14、.5、1e-3）
+     * @return 解析出的 token
+     */
+    Token parseNumLiteral();
 
     /**
      * @brief 尝试匹配正则模式

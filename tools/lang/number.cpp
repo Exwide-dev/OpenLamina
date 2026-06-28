@@ -5,8 +5,23 @@
 
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <mutex>
 
 namespace lang::lammp {
+namespace {
+
+void ensure_lmmp_initialized_once() {
+    static std::once_flag once;
+    std::call_once(once, lmmp_global_init);
+}
+
+} // namespace
+
+void ensure_lmmp_initialized() {
+    ensure_lmmp_initialized_once();
+}
+
 namespace {
 
 std::string trim_ascii_whitespace(const std::string& str) {
@@ -48,7 +63,7 @@ bool Number::BigNum::isZero() const {
 
 
 Number::BigNum::BigNum(const std::string& str, int base) {
-    lmmp_global_init();
+    ensure_lmmp_initialized();
     if (str.empty()) {
         init_zero();
         return;
@@ -89,7 +104,7 @@ Number::BigNum::BigNum(const std::string& str, int base) {
 }
 
 Number::BigNum::BigNum(const BigNum& other) {
-    lmmp_global_init();
+    ensure_lmmp_initialized();
     if (other.size > 0 && other.data) {
         allocate(other.size);
         lmmp_copy(data.get(), other.data.get(), other.size);
@@ -101,7 +116,7 @@ Number::BigNum::BigNum(const BigNum& other) {
 }
 
 Number::BigNum::BigNum(BigNum&& other) noexcept {
-    lmmp_global_init();
+    ensure_lmmp_initialized();
     data = std::move(other.data);
     size = other.size;
     is_negative = other.is_negative;
@@ -350,10 +365,10 @@ int Number::compare_big(const BigNum& a, const BigNum& b) {
     return cmp;
 }
 
-Number::Number() : value(0LL) { lmmp_global_init(); }
+Number::Number() : value(0LL) { ensure_lmmp_initialized(); }
 
 Number::Number(const std::string& str, int base) {
-    lmmp_global_init();
+    ensure_lmmp_initialized();
     const std::string trimmed = trim_ascii_whitespace(str);
     if (trimmed.empty()) {
         throw std::invalid_argument("empty string");
@@ -421,6 +436,32 @@ bool Number::isNegative() const {
         return get_small() < 0;
     }
     return get_big().is_negative;
+}
+
+bool Number::try_add_inplace(const int64_t y) {
+    if (!is_small()) {
+        return false;
+    }
+    const int64_t x = get_small();
+    if ((y > 0 && x > INT64_MAX - y) || (y < 0 && x < INT64_MIN - y)) {
+        *this = Number(x) + Number(y);
+        return true;
+    }
+    std::get<int64_t>(value) = x + y;
+    return true;
+}
+
+bool Number::try_sub_inplace(const int64_t y) {
+    if (!is_small()) {
+        return false;
+    }
+    const int64_t x = get_small();
+    if ((y < 0 && x > INT64_MAX + y) || (y > 0 && x < INT64_MIN + y)) {
+        *this = Number(x) - Number(y);
+        return true;
+    }
+    std::get<int64_t>(value) = x - y;
+    return true;
 }
 
 Number Number::operator-() const {

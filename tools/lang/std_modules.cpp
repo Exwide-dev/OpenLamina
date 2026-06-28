@@ -2,8 +2,11 @@
 
 #include "builtins.hpp"
 
+#include "irgen/typing.hpp"
+
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -193,6 +196,53 @@ Value join_fn(VM& vm, const std::vector<Value>& args) {
     return Value(std::move(result));
 }
 
+namespace {
+
+std::mt19937_64& random_engine() {
+    static std::mt19937_64 engine{std::random_device{}()};
+    return engine;
+}
+
+} // namespace
+
+Value randint_fn(VM&, const std::vector<Value>& args) {
+    arg_must("randint", 2);
+    const Value& lo_val = args[0].deref();
+    const Value& hi_val = args[1].deref();
+    if (!lo_val.isNumber() || !hi_val.isNumber()) {
+        throw RuntimeError("randint requires integer bounds");
+    }
+    const int64_t lo = lo_val.asInt();
+    const int64_t hi = hi_val.asInt();
+    if (lo > hi) {
+        throw RuntimeError("randint lower bound must not exceed upper bound");
+    }
+    std::uniform_int_distribution<int64_t> dist(lo, hi);
+    return Value(dist(random_engine()));
+}
+
+Value randstring_fn(VM&, const std::vector<Value>& args) {
+    arg_must("randstring", 1);
+    const Value& len_val = args[0].deref();
+    if (!len_val.isNumber()) {
+        throw RuntimeError("randstring requires an integer length");
+    }
+    const int64_t len = len_val.asInt();
+    if (len < 0) {
+        throw RuntimeError("randstring length must be non-negative");
+    }
+    static constexpr char kCharset[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    static constexpr size_t kCharsetSize = sizeof(kCharset) - 1;
+    std::uniform_int_distribution<size_t> dist(0, kCharsetSize - 1);
+    std::string out;
+    out.reserve(static_cast<size_t>(len));
+    for (int64_t i = 0; i < len; ++i) {
+        out.push_back(kCharset[dist(random_engine())]);
+    }
+    return Value(std::move(out));
+}
+
 irgen::ModuleObject build_module(
     std::initializer_list<std::pair<const char*, irgen::FunctionType>> entries
 ) {
@@ -228,6 +278,29 @@ irgen::ModuleObject make_format_module() {
         {"format", format_fn},
         {"join", join_fn},
     });
+}
+
+irgen::ModuleObject make_random_module() {
+    return build_module({
+        {"randint", randint_fn},
+        {"randstring", randstring_fn},
+    });
+}
+
+irgen::ModuleObject make_typing_module() {
+    irgen::register_typing_constructors();
+    std::map<size_t, std::shared_ptr<irgen::Value>> symbols;
+    symbols[irgen::g_string_pool.add("Union")] =
+        std::make_shared<irgen::Value>(irgen::make_type_value(irgen::get_type_constructor("Union")));
+    symbols[irgen::g_string_pool.add("Maybe")] =
+        std::make_shared<irgen::Value>(irgen::make_type_value(irgen::get_type_constructor("Maybe")));
+    symbols[irgen::g_string_pool.add("Covariant")] =
+        std::make_shared<irgen::Value>(irgen::make_type_value(irgen::get_type_constructor("Covariant")));
+    symbols[irgen::g_string_pool.add("Contravariant")] =
+        std::make_shared<irgen::Value>(irgen::make_type_value(irgen::get_type_constructor("Contravariant")));
+    symbols[irgen::g_string_pool.add("Invariant")] =
+        std::make_shared<irgen::Value>(irgen::make_type_value(irgen::get_type_constructor("Invariant")));
+    return irgen::ModuleObject(irgen::SymbolTable(symbols));
 }
 
 #undef arg_must

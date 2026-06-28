@@ -53,6 +53,13 @@
 namespace irgen {
 struct StructObject;
 struct StructTypeDef;
+struct TypeDescriptor;
+
+[[nodiscard]] bool type_handles_equal(
+    const std::shared_ptr<TypeDescriptor>& a,
+    const std::shared_ptr<TypeDescriptor>& b
+);
+
 struct FriendFunctionObject;
 class ModuleObject;
 class Value;
@@ -122,6 +129,7 @@ class SET_FIELD;
 class IS_VECTOR;
 class VEC_LEN;
 class MATCH_EQ;
+class POP;
 
 /**
  * @brief 数组映射模板类，使用索引访问的稀疏数组
@@ -415,7 +423,8 @@ using Opcode = std::variant<
     SET_FIELD,
     IS_VECTOR,
     VEC_LEN,
-    MATCH_EQ
+    MATCH_EQ,
+    POP
 >;
 
 class SymbolTable;
@@ -425,10 +434,11 @@ class SymbolTable;
  */
 struct FunctionObject {
     std::vector<std::string> params;                   ///< 函数参数列表
-    std::vector<std::optional<std::string>> param_types; ///< 参数类型名（可选）
+    std::vector<std::optional<std::shared_ptr<TypeDescriptor>>> param_types; ///< 参数类型对象（可选）
     std::vector<std::vector<Opcode>> param_default_ir; ///< 各参数默认值 IR（空表示无默认值）
     std::vector<Opcode> body;                          ///< 函数体的IR指令序列
     size_t location;                                   ///< 函数在源码中的位置
+    size_t entry_pc = static_cast<size_t>(-1);       ///< 函数 LABEL 在 bytecode 中的下标（CALL 直达）
     std::string name = "<anonymous>";                  ///< 函数名称
     VM* owner_vm = nullptr;                            ///< 所属虚拟机
     std::vector<SymbolTable> closure;                  ///< 闭包捕获的变量
@@ -436,8 +446,15 @@ struct FunctionObject {
     bool needs_symbol_bind = false;                    ///< 是否需将 fast 局部绑定到符号表（供嵌套闭包 LOAD）
     bool is_macro = false;                             ///< 是否为 macro（运行时 AST 展开）
     std::optional<size_t> variadic_param_index;        ///< *param 在 params 中的下标
+    size_t fast_local_slot_count = 0;                  ///< fast 局部槽位数（预分配 locals）
+    std::optional<size_t> self_local_slot;               ///< 递归自引用 fast 槽（ENTER 时填充）
+    mutable std::unordered_map<std::string, size_t> param_name_to_index; ///< kw 参数名 → 下标
 
     ~FunctionObject();
+
+    [[nodiscard]] bool uses_light_frame() const {
+        return !needs_closure && !needs_symbol_bind;
+    }
 
     /**
      * @brief 调用函数
@@ -459,6 +476,9 @@ struct FunctionObject {
     const std::vector<Value>& positional,
     const Value& kwargs_value
 );
+
+/** @brief 无 kwargs 时共用空字典，避免每次 CALL 分配 */
+[[nodiscard]] const Value& empty_kwargs_value();
 
 void invoke_user_function_with_args(
     VM& vm,
@@ -572,7 +592,7 @@ private:
         std::shared_ptr<IteratorObject>,
         std::shared_ptr<StructObject>,
         std::shared_ptr<FriendFunctionObject>,
-        std::shared_ptr<StructTypeDef>,
+        std::shared_ptr<TypeDescriptor>,
         std::shared_ptr<RuntimeAstNode>
     > data; ///< 存储实际值的变体
 
@@ -696,6 +716,8 @@ public:
     explicit Value(std::shared_ptr<FriendFunctionObject> value)
         : type(Type::FriendFunction), data(std::move(value)) {
     }
+
+    explicit Value(std::shared_ptr<TypeDescriptor> type_desc);
 
     explicit Value(std::shared_ptr<StructTypeDef> type_def);
 
@@ -1112,6 +1134,10 @@ return std::get<CppType>(data); \
         if (a.type == Type::Number && b.type == Type::Number) {
             return a.asNumber() == b.asNumber();
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return a.asRational() == b.asRational();
+        }
         if (a.type == Type::Bool && b.type == Type::Bool) {
             return a.asBool() == b.asBool();
         }
@@ -1119,7 +1145,7 @@ return std::get<CppType>(data); \
             return a.asString() == b.asString();
         }
         if (a.type == Type::TypeHandle && b.type == Type::TypeHandle) {
-            return a.asTypeDef() == b.asTypeDef();
+            return type_handles_equal(a.asTypeDesc(), b.asTypeDesc());
         }
         throw RuntimeError(
             std::format("Unsupported == operation, left = {}, right = {}", a.type_name(), b.type_name())
@@ -1142,6 +1168,10 @@ return std::get<CppType>(data); \
         if (a.type == Type::Number && b.type == Type::Number) {
             return Value(a.asNumber() != b.asNumber());
         }
+        if ((a.type == Type::Rational || a.type == Type::Number) &&
+            (b.type == Type::Rational || b.type == Type::Number)) {
+            return Value(a.asRational() != b.asRational());
+        }
         if (a.type == Type::Bool && b.type == Type::Bool) {
             return Value(a.asBool() != b.asBool());
         }
@@ -1149,7 +1179,7 @@ return std::get<CppType>(data); \
             return Value(a.asString() != b.asString());
         }
         if (a.type == Type::TypeHandle && b.type == Type::TypeHandle) {
-            return Value(a.asTypeDef() != b.asTypeDef());
+            return Value(!type_handles_equal(a.asTypeDesc(), b.asTypeDesc()));
         }
         throw RuntimeError("Unsupported != operation");
     }
@@ -1281,6 +1311,10 @@ return std::get<CppType>(data); \
 
     [[nodiscard]] std::shared_ptr<FriendFunctionObject>& asFriendFunction();
 
+    [[nodiscard]] const std::shared_ptr<TypeDescriptor>& asTypeDesc() const;
+
+    [[nodiscard]] std::shared_ptr<TypeDescriptor>& asTypeDesc();
+
     [[nodiscard]] const std::shared_ptr<StructTypeDef>& asTypeDef() const;
 
     [[nodiscard]] std::shared_ptr<StructTypeDef>& asTypeDef();
@@ -1384,7 +1418,8 @@ return std::get<CppType>(data); \
 
 struct StructFieldDef {
     std::string name;
-    std::string type_name;
+    std::string type_name; ///< 仅用于错误信息等展示；匹配用 type_desc
+    std::shared_ptr<TypeDescriptor> type_desc;
     bool has_type_annotation = false;
     bool mutable_field = false;
     bool has_default = false;
@@ -1396,11 +1431,21 @@ enum class TypeKind {
     Primitive   ///< 内置类型名（text/num/…，主要作转换目标）
 };
 
+enum class VarianceMode;
+
+struct StructTypeParamDef {
+    std::string name;
+    std::shared_ptr<TypeDescriptor> bound;
+    VarianceMode variance;
+};
+
 struct StructTypeDef {
     std::string name;
     std::string base_name;
     TypeKind kind = TypeKind::User;
     bool typed = false;
+    bool is_generic = false;
+    std::vector<StructTypeParamDef> type_params;
     std::vector<StructFieldDef> fields;
     std::unordered_map<std::string, std::shared_ptr<FunctionObject>> methods;
     /// 类型转换 friend func（`__convert__.__dispatch__`）
@@ -1706,7 +1751,7 @@ public:
      * @return 弹出的元素
      */
     [[nodiscard]] Stackable popValue() {
-        Stackable value = data.back();
+        Stackable value = std::move(data.back());
         data.pop_back();
         return value;
     }
@@ -1716,6 +1761,10 @@ public:
      * @return 栈顶元素引用
      */
     [[nodiscard]] const Stackable& top() const {
+        return data.back();
+    }
+
+    [[nodiscard]] Stackable& top() {
         return data.back();
     }
 
@@ -1860,12 +1909,11 @@ public:
      */
     [[nodiscard]] std::optional<std::shared_ptr<Value>> get(size_t id) const {
         const auto& scope = scopes.back();
-        for (const auto& [slot_id, val] : scope.slots) {
-            if (slot_id == id) {
-                return val;
-            }
+        const auto it = scope.id_to_index.find(id);
+        if (it == scope.id_to_index.end()) {
+            return std::nullopt;
         }
-        return std::nullopt;
+        return scope.slots[it->second].second;
     }
 
     /**
@@ -2764,6 +2812,19 @@ public:
 };
 
 /**
+ * POP — 弹出并丢弃栈顶值.
+ */
+class POP {
+public:
+    OPCODE_META(POP)
+    OPCODE_ARGS0()
+
+    POP() = default;
+
+    void emit(VM& vm) const;
+};
+
+/**
  * BIND_FAST — 将 fast 槽与符号表中的名字别名绑定.
  *
  * 作用：把 locals_stack 某槽与 symbol_stack 顶层的 var_id 指向同一 ref 单元
@@ -2900,9 +2961,45 @@ public:
             string_to_id[strings[i]] = i;
         }
     }
+
+    /** @brief 复制当前池状态（用于 RAII 恢复） */
+    [[nodiscard]] StringPool capture() const {
+        StringPool copy;
+        copy.string_to_id = string_to_id;
+        copy.id_to_string = id_to_string;
+        copy.counter = counter;
+        return copy;
+    }
+
+    /** @brief 从 capture() 的快照恢复 */
+    void restore(const StringPool& state) {
+        string_to_id = state.string_to_id;
+        id_to_string = state.id_to_string;
+        counter = state.counter;
+    }
 };
 
 inline StringPool g_string_pool{}; ///< 全局字符串池
+
+/** @brief 临时切换 g_string_pool，析构时恢复 */
+class StringPoolGuard {
+    StringPool saved_;
+
+public:
+    /** @brief 清空全局池，析构时恢复（隔离单次编译） */
+    StringPoolGuard() : saved_(g_string_pool.capture()) { g_string_pool.clear(); }
+
+    /** @brief 安装 module 池，析构时恢复 */
+    explicit StringPoolGuard(const std::vector<std::string>& module_pool)
+        : saved_(g_string_pool.capture()) {
+        g_string_pool.rebuild(module_pool);
+    }
+
+    ~StringPoolGuard() { g_string_pool.restore(saved_); }
+
+    StringPoolGuard(const StringPoolGuard&) = delete;
+    StringPoolGuard& operator=(const StringPoolGuard&) = delete;
+};
 
 /** @brief try/catch 栈帧：异常时沿 call_func_stack 回退到此深度 */
 struct TryHandlerFrame {
@@ -3029,6 +3126,7 @@ struct VmGcSuppress {
  */
 class ModuleObject : public std::enable_shared_from_this<ModuleObject> {
     bool is_user; ///< 是否为用户模块
+    std::unique_ptr<VM> owned_vm_; ///< import 时独占的 VM（析构自动释放）
 
 public:
     std::string name;                                                          ///< 模块名称
@@ -3087,6 +3185,54 @@ public:
         for (const auto& [atname, val] : exports) {
             LOG(atname << " : " << val);
         }
+    }
+
+    ModuleObject(const ModuleObject& other)
+        : is_user(other.is_user),
+          name(other.name),
+          full_name(other.full_name),
+          exports(other.exports),
+          submodules(other.submodules),
+          owner_vm(other.owner_vm) {}
+
+    ModuleObject(ModuleObject&& other) noexcept
+        : is_user(other.is_user),
+          name(std::move(other.name)),
+          full_name(std::move(other.full_name)),
+          exports(std::move(other.exports)),
+          submodules(std::move(other.submodules)),
+          owner_vm(other.owner_vm),
+          owned_vm_(std::move(other.owned_vm_)) {
+        other.owner_vm = nullptr;
+    }
+
+    ModuleObject& operator=(const ModuleObject& other) {
+        if (this == &other) {
+            return *this;
+        }
+        is_user = other.is_user;
+        name = other.name;
+        full_name = other.full_name;
+        exports = other.exports;
+        submodules = other.submodules;
+        owner_vm = other.owner_vm;
+        owned_vm_.reset();
+        return *this;
+    }
+
+    ModuleObject& operator=(ModuleObject&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        is_user = other.is_user;
+        name = std::move(other.name);
+        full_name = std::move(other.full_name);
+        exports = std::move(other.exports);
+        submodules = std::move(other.submodules);
+        owner_vm = other.owner_vm;
+        owned_vm_ = std::move(other.owned_vm_);
+        other.owner_vm = nullptr;
+        return *this;
     }
 
     /**

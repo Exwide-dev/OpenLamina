@@ -119,6 +119,12 @@ public:
     /** @brief 从浮点近似构造最简分数 */
     [[nodiscard]] static Rational fromDouble(long double x, long double epsilon = 1e-12L);
 
+    /** @brief 字面量是否应作为十进制小数/科学计数法解析（含 `.` 或 `e`/`E`） */
+    [[nodiscard]] static bool looksLikeDecimalLiteral(const std::string& str);
+
+    /** @brief 从十进制字面量字符串精确构造有理数（如 "3.14"、".5"、"1e-3"） */
+    [[nodiscard]] static Rational fromDecimalString(const std::string& str);
+
     /**
      * @brief 转换为字符串（分数形式）
      * @return 字符串表示

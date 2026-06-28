@@ -11,6 +11,10 @@
 #include <concepts>
 
 namespace lang::lammp {
+
+/** @brief 进程内只初始化一次 lammp 运行时 */
+void ensure_lmmp_initialized();
+
 /**
  * @brief 整数类型概念
  * @tparam T 类型参数
@@ -45,7 +49,7 @@ class Number {
          */
         template<std::integral T>
         explicit(false) BigNum(T value) {
-            lmmp_global_init();
+            ensure_lmmp_initialized();
             if constexpr (std::is_signed_v<T>) {
                 if (value == 0) {
                     init_zero();
@@ -294,7 +298,7 @@ public:
      */
     template<std::integral T>
     explicit Number(T value) {
-        lmmp_global_init();
+        ensure_lmmp_initialized();
         if constexpr (std::is_signed_v<T>) {
             this->value = static_cast<int64_t>(value);
         } else {
@@ -362,6 +366,18 @@ public:
      * @return 如果是小整数返回true
      */
     [[nodiscard]] bool isSmall() const { return is_small(); }
+
+    /**
+     * @brief 小整数原地 += y；溢出则原地升级为 BigNum 结果
+     * @return 非 small 时返回 false
+     */
+    bool try_add_inplace(int64_t y);
+
+    /**
+     * @brief 小整数原地 -= y；溢出则原地升级为 BigNum 结果
+     * @return 非 small 时返回 false
+     */
+    bool try_sub_inplace(int64_t y);
 
     /**
      * @brief 一元负号

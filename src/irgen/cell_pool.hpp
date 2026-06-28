@@ -33,6 +33,8 @@ public:
     void releaseCell(Value* cell) const;
     /** @brief 丢弃池中全部槽位（调用方须已释放所有 CellPtr） */
     void releaseAll();
+    /** @brief VM 关闭或池析构前标记，此后 CellDeleter 不再回收槽位 */
+    void markDestroying() noexcept;
 
     [[nodiscard]] size_t totalCells() const;
     [[nodiscard]] size_t freeCells() const;
@@ -42,6 +44,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     VM* owner_vm_ = nullptr;
+    bool destroying_ = false;
 };
 
 } // namespace irgen

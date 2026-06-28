@@ -228,7 +228,12 @@ Value int_of(VM&, const std::vector<Value>& args) {
 
 Value convert_fn(VM& vm, const std::vector<Value>& args) {
     arg_must("convert", 2);
-    return irgen::convert_to_type(vm, args[0], args[1]);
+    const size_t op_depth = vm.op_stack.size();
+    const Value result = irgen::convert_to_type(vm, args[0], args[1]);
+    while (vm.op_stack.size() > op_depth) {
+        vm.op_stack.pop();
+    }
+    return result;
 }
 
 Value iter_fn(VM& vm, const std::vector<Value>& args) {
@@ -288,6 +293,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  std.io.read_line(), std.io.read_file(path), std.io.write_file(path, text)\n";
     std::cout << "  std.io.write_line(...), std.io.eprint(...)\n";
     std::cout << "  std.format.format(tmpl, ...), std.format.join(sep, items)\n";
+    std::cout << "  std.random.randint(lo, hi), std.random.randstring(len)\n";
     std::cout << "Decorators (std.decos.*):\n";
     std::cout << "  memoize(func) - Cache function results\n";
     std::cout << "  timer(func) - Measure execution time\n";
@@ -311,7 +317,7 @@ Value help(VM&, const std::vector<Value>& args) {
     std::cout << "  friend func placeholder   // no body; append handlers later\n";
     std::cout << "\nSyntax examples:\n";
     std::cout << "  let x = 42\n";
-    std::cout << "  let arr = vec[1, 2, 3]\n";
+    std::cout << "  let arr = [1, 2, 3]\n";
     std::cout << "  let a = []\n";
     std::cout << "  a.append(1)\n";
     std::cout << "  let obj = {\"key\": value}\n";
@@ -850,6 +856,12 @@ irgen::ModuleObject standard_mod = [] {
     );
     std_symbols[irgen::g_string_pool.add("format")] = std::make_shared<irgen::Value>(
         Value(std::make_shared<irgen::ModuleObject>(make_format_module()))
+    );
+    std_symbols[irgen::g_string_pool.add("typing")] = std::make_shared<irgen::Value>(
+        Value(std::make_shared<irgen::ModuleObject>(make_typing_module()))
+    );
+    std_symbols[irgen::g_string_pool.add("random")] = std::make_shared<irgen::Value>(
+        Value(std::make_shared<irgen::ModuleObject>(make_random_module()))
     );
 
     return irgen::ModuleObject(irgen::SymbolTable(std_symbols));

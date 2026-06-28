@@ -49,6 +49,8 @@ set(OPENLAMINA_CORE_SOURCES
         src/irgen/opcode.hpp
         src/irgen/struct_types.cpp
         src/irgen/struct_types.hpp
+        src/irgen/typing.cpp
+        src/irgen/typing.hpp
         src/irgen/iterator_ops.cpp
         src/irgen/iterator_ops.hpp
         src/irgen/exceptions.cpp
@@ -88,6 +90,7 @@ set(OPENLAMINA_TEST_SOURCES
         src/irgen/cell_pool.cpp
         src/irgen/iterator_ops.cpp
         src/irgen/struct_types.cpp
+        src/irgen/typing.cpp
         src/irgen/exceptions.cpp
         src/irgen/friend_function.cpp
         src/irgen/value_copy.cpp
@@ -96,6 +99,27 @@ set(OPENLAMINA_TEST_SOURCES
 )
 
 add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})
+
+find_package(ZLIB QUIET)
+if (ZLIB_FOUND)
+    message(STATUS "OpenLamina: .lmc zlib compression enabled")
+    target_link_libraries(OpenLamina PRIVATE ZLIB::ZLIB)
+    target_compile_definitions(OpenLamina PRIVATE OPENLAMINA_LMC_ZLIB=1)
+elseif (MINGW)
+    find_library(OPENLAMINA_ZLIB z PATHS "D:/msys64/mingw64/lib" "C:/msys64/mingw64/lib")
+    find_path(OPENLAMINA_ZLIB_INCLUDE zlib.h PATHS "D:/msys64/mingw64/include" "C:/msys64/mingw64/include")
+    if (OPENLAMINA_ZLIB AND OPENLAMINA_ZLIB_INCLUDE)
+        message(STATUS "OpenLamina: .lmc zlib compression enabled (manual MinGW path)")
+        target_include_directories(OpenLamina PRIVATE ${OPENLAMINA_ZLIB_INCLUDE})
+        target_link_libraries(OpenLamina PRIVATE ${OPENLAMINA_ZLIB})
+        target_compile_definitions(OpenLamina PRIVATE OPENLAMINA_LMC_ZLIB=1)
+        set(OPENLAMINA_LMC_ZLIB_MANUAL TRUE)
+    else ()
+        message(STATUS "OpenLamina: ZLIB not found, .lmc uses varint only (no zlib)")
+    endif ()
+else ()
+    message(STATUS "OpenLamina: ZLIB not found, .lmc uses varint only (no zlib)")
+endif ()
 
 option(BUILD_TESTS "Build OpenLamina test runner" ON)
 if (BUILD_TESTS)
@@ -131,6 +155,14 @@ if (BUILD_TESTS)
     target_include_directories(OpenLaminaTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test)
     if (WIN32)
         target_link_libraries(OpenLaminaTests PRIVATE psapi)
+    endif ()
+    if (ZLIB_FOUND)
+        target_link_libraries(OpenLaminaTests PRIVATE ZLIB::ZLIB)
+        target_compile_definitions(OpenLaminaTests PRIVATE OPENLAMINA_LMC_ZLIB=1)
+    elseif (OPENLAMINA_LMC_ZLIB_MANUAL)
+        target_include_directories(OpenLaminaTests PRIVATE ${OPENLAMINA_ZLIB_INCLUDE})
+        target_link_libraries(OpenLaminaTests PRIVATE ${OPENLAMINA_ZLIB})
+        target_compile_definitions(OpenLaminaTests PRIVATE OPENLAMINA_LMC_ZLIB=1)
     endif ()
 endif ()
 

@@ -24,6 +24,8 @@ Args parse_args(const int argc, char* argv[]) {
             args.show_version = true;
         } else if (arg == "-O") {
             args.optimize = true;
+        } else if (arg == "-O0") {
+            args.optimize = false;
         } else if (arg == "-c" || arg == "--compile") {
             args.compile = true;
         } else if (arg == "-o" || arg == "--output") {
@@ -69,13 +71,6 @@ int run_file(const std::string& file_path, const std::vector<std::string>& args)
             return 1;
         }
 
-        std::ifstream file(file_path);
-        if (!file.is_open()) {
-            std::cerr << "Error: Could not open file: " << file_path << std::endl;
-            return 1;
-        }
-
-        file.close();
         const std::string source = lm::utf8_io::read_file_utf8(file_path);
 
         lmx::ProgramASTNode* ast = parse(source, file_path);
@@ -272,11 +267,12 @@ void show_help() {
             "Options:\n"
             "  -h, --help       Show this help message\n"
             "  -v, --version    Show version information\n"
-            "  -O               Optimize bytecode before execution (.lm)\n"
-            "  -c, --compile    Compile .lm source to .lmc bytecode (always optimized)\n"
-            "  -o, --output     Output path for -c (default: input name with .lmc)\n\n"
+            "  -O               Optimize bytecode when running .lm (default: on)\n"
+            "  -O0              Disable bytecode optimization for .lm\n"
+            "  -c, --compile    Compile .lm source to .lmc bytecode\n"
+            "  -o, --output     Output path for -c\n\n"
             "If no file is specified, the REPL will start.\n"
-            ".lm files are interpreted; .lmc files run precompiled bytecode.\n"
+            ".lm  interpreted  |  .lmc  binary bytecode\n"
             << std::endl;
 }
 

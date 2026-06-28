@@ -7,8 +7,8 @@
 
 namespace lm::irgen {
 
-/** @brief 命令行 -O 启用时为 true */
-inline bool bytecode_optimize_enabled = false;
+/** @brief 字节码优化开关（默认开启；-O 仍可显式控制） */
+inline bool bytecode_optimize_enabled = true;
 
 /** @brief execute() 是否打印 AST / 字节码（测试默认关闭） */
 inline bool execute_debug_output = false;

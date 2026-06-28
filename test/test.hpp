@@ -44,7 +44,9 @@ inline void run(const std::string_view name, const std::function<void()>& body) 
 
 [[nodiscard]] inline int summary() {
     std::cerr << "---\n" << ran << " test(s), " << failures << " failure(s)\n";
-    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    const int exit_code = failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    std::cerr << "Exit: " << exit_code << std::endl;
+    return exit_code;
 }
 
 } // namespace test

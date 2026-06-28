@@ -18,7 +18,7 @@ namespace cli {
 struct Args {
     bool show_help = false;
     bool show_version = false;
-    bool optimize = false;
+    bool optimize = true;
     bool compile = false;
     std::string file_path;
     std::string output_path;
@@ -33,7 +33,7 @@ struct Args {
      */
 Args parse_args(int argc, char* argv[]);
 
-/** @brief 根据 -O 设置全局字节码优化开关 */
+/** @brief 根据 -O / -O0 设置全局字节码优化开关（默认开启） */
 void apply_runtime_flags(const Args& args);
 
 /**

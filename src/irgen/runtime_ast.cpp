@@ -625,7 +625,7 @@ std::string expr_to_source(const RuntimeAstNode& node) {
                 }
                 inner += expr_to_source(node.children[i]);
             }
-            return std::format("vec[{}]", inner);
+            return std::format("[{}]", inner);
         }
         case lmx::ASTNodeType::BlockStmt:
             return stmt_to_source(node);
@@ -789,7 +789,7 @@ void register_ast_struct(
         fd.mutable_field = false;
         def.fields.push_back(std::move(fd));
     }
-    register_type_def(std::move(def));
+    (void)register_type_def(std::move(def));
 }
 
 Value ast_field_value(const RuntimeAstNode* slot) {

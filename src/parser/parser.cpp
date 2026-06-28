@@ -6,9 +6,26 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace lmx {
 namespace {
+
+[[nodiscard]] bool is_template_apply_target(const ExprNode* expr) {
+    if (expr == nullptr || expr->kind != ASTNodeType::VarRef) {
+        return false;
+    }
+    const auto* ref = dynamic_cast<const VarRefNode*>(expr);
+    static const std::unordered_set<std::string> k_template_names = {
+        "vec",
+        "Union",
+        "Maybe",
+        "Covariant",
+        "Contravariant",
+        "Invariant",
+    };
+    return k_template_names.contains(ref->name);
+}
 
 ExprNode* cloneExpr(const ExprNode* node) {
     if (node == nullptr) {
@@ -280,6 +297,8 @@ std::string Parser::getTokenTypeName(const TokenType type) {
         case TokenType::KW_MAKE: return "'make'";
         case TokenType::KW_MATCH: return "'match'";
         case TokenType::KW_CASE: return "'case'";
+        case TokenType::KW_OUTSIDE: return "'outside'";
+        case TokenType::KW_OVERLOAD: return "'overload'";
         case TokenType::KW_TRY: return "'try'";
         case TokenType::KW_CATCH: return "'catch'";
         case TokenType::KW_THROW: return "'throw'";
@@ -629,10 +648,19 @@ ASTNode* Parser::parseStatement() {
                 expr = make_node_at<MemberAccessNode>(line, expr, name);
             } else if (check(TokenType::LBRACKET)) {
                 const int line = current_token().line;
-                match(TokenType::LBRACKET);
-                ExprNode* index = parseExpression();
-                consume(TokenType::RBRACKET);
-                expr = make_node_at<IndexAccessNode>(line, expr, index);
+                if (is_template_apply_target(expr)) {
+                    match(TokenType::LBRACKET);
+                    skipNewlines();
+                    auto args = parseArgListUntil(TokenType::RBRACKET);
+                    skipNewlines();
+                    consume(TokenType::RBRACKET);
+                    expr = make_node_at<FuncCallExprNode>(line, expr, std::move(args));
+                } else {
+                    match(TokenType::LBRACKET);
+                    ExprNode* index = parseExpression();
+                    consume(TokenType::RBRACKET);
+                    expr = make_node_at<IndexAccessNode>(line, expr, index);
+                }
             } else {
                 break;
             }
@@ -773,11 +801,41 @@ bool Parser::looksLikeAssignStmt() {
     return is_assign;
 }
 
-TypeNode* Parser::parseTypeName() {
+TypeNode* Parser::parseType() {
     const int line = current_token().line;
-    std::string name = current_token().value;
-    consume(TokenType::IDENTIFIER);
-    return make_node_at<TypeNode>(line, name);
+    std::string name;
+    if (match(TokenType::KW_VEC)) {
+        name = "vec";
+    } else {
+        name = current_token().value;
+        consume(TokenType::IDENTIFIER);
+    }
+    while (match(TokenType::OPER_DOT)) {
+        name += ".";
+        name += current_token().value;
+        consume(TokenType::IDENTIFIER);
+    }
+
+    if (!match(TokenType::LBRACKET)) {
+        return make_node_at<TypeNode>(line, name);
+    }
+
+    std::vector<TypeNode*> subtypes;
+    skipNewlines();
+    if (!check(TokenType::RBRACKET)) {
+        subtypes.push_back(parseType());
+        while (match(TokenType::OPER_COMMA)) {
+            skipNewlines();
+            subtypes.push_back(parseType());
+        }
+    }
+    skipNewlines();
+    consume(TokenType::RBRACKET);
+    return make_node_at<CompositeTypeNode>(line, name, std::move(subtypes));
+}
+
+TypeNode* Parser::parseTypeName() {
+    return parseType();
 }
 
 TypeNode* Parser::parseOptionalReturnType() {
@@ -785,6 +843,14 @@ TypeNode* Parser::parseOptionalReturnType() {
         return nullptr;
     }
     return parseTypeName();
+}
+
+bool Parser::parseFuncOutsideModifier() {
+    return match(TokenType::KW_OUTSIDE);
+}
+
+bool Parser::parseFuncOverloadModifier() {
+    return match(TokenType::KW_OVERLOAD);
 }
 
 ASTNode* Parser::parseStructDecl() {
@@ -797,6 +863,26 @@ ASTNode* Parser::parseStructDecl() {
     consume(TokenType::KW_STRUCT);
     std::string name = current_token().value;
     consume(TokenType::IDENTIFIER);
+
+    std::vector<StructTypeParam> type_params;
+    if (match(TokenType::LBRACKET)) {
+        skipNewlines();
+        while (!check(TokenType::RBRACKET) && !isAtEnd()) {
+            skipNewlines();
+            if (check(TokenType::RBRACKET)) {
+                break;
+            }
+            std::string param_name = current_token().value;
+            consume(TokenType::IDENTIFIER);
+            consume(TokenType::OPER_COLON);
+            TypeNode* bound = parseType();
+            type_params.emplace_back(param_name, bound);
+            skipNewlines();
+            match(TokenType::OPER_COMMA);
+            skipNewlines();
+        }
+        consume(TokenType::RBRACKET);
+    }
 
     std::string base_name;
     if (match(TokenType::OPER_COLON)) {
@@ -834,12 +920,10 @@ ASTNode* Parser::parseStructDecl() {
         std::string field_name = current_token().value;
         consume(TokenType::IDENTIFIER);
 
-        std::string type_name;
         bool has_type_annotation = false;
+        TypeNode* field_type = nullptr;
         if (match(TokenType::OPER_COLON)) {
-            TypeNode* field_type = parseTypeName();
-            type_name = field_type->name;
-            delete field_type;
+            field_type = parseTypeName();
             has_type_annotation = true;
         } else if (typed) {
             throw_error_at("typed struct field must declare a type (e.g. a: num)", current_token());
@@ -853,7 +937,7 @@ ASTNode* Parser::parseStructDecl() {
         fields.push_back(
             StructField{
                 field_name,
-                type_name,
+                field_type,
                 has_type_annotation,
                 is_var,
                 default_init
@@ -872,7 +956,8 @@ ASTNode* Parser::parseStructDecl() {
         typed,
         std::move(fields),
         std::move(methods),
-        std::move(base_name)
+        std::move(base_name),
+        std::move(type_params)
     );
 }
 
@@ -882,12 +967,31 @@ FuncDeclNode* Parser::parseStructMethod() {
     consume(TokenType::KW_FUNC);
     std::string name = current_token().value;
     consume(TokenType::IDENTIFIER);
+    while (match(TokenType::OPER_DOT)) {
+        if (!check(TokenType::IDENTIFIER)) {
+            throw_error_at("expected identifier after '.'", current_token());
+        }
+        name += "." + current_token().value;
+        consume(TokenType::IDENTIFIER);
+    }
     consume(TokenType::LPAREN);
     auto params = parseParamList();
     consume(TokenType::RPAREN);
+    const bool outside = parseFuncOutsideModifier();
+    const bool overload = parseFuncOverloadModifier();
     TypeNode* ret_type = parseOptionalReturnType();
 
-    if (params.empty() || params[0].name != "self") {
+    if (overload && !outside) {
+        throw_error_at("'overload' requires 'outside'", current_token());
+    }
+    if (overload) {
+        const auto dot = name.rfind('.');
+        if (dot == std::string::npos || name.substr(dot + 1) != "__convert__") {
+            throw_error_at("'overload' is only supported on Type.__convert__ methods", current_token());
+        }
+    }
+
+    if (!outside && (params.empty() || params[0].name != "self")) {
         throw_error_at("struct method first parameter must be 'self'", current_token());
     }
 
@@ -903,9 +1007,11 @@ FuncDeclNode* Parser::parseStructMethod() {
         name,
         params,
         make_node_at<BlockStmtNode>(body_line, body),
-        Visibility::Internal
+        outside ? Visibility::Exported : Visibility::Internal
     );
     node->ret_type = ret_type;
+    node->outside = outside;
+    node->overload = overload;
     return node;
 }
 
@@ -1033,6 +1139,9 @@ ASTNode* Parser::parseFuncDecl() {
     consume(TokenType::LPAREN);
     auto params = parseParamList();
     consume(TokenType::RPAREN);
+    if (parseFuncOutsideModifier()) {
+        throw_error_at("'outside' cannot be used at module scope", current_token());
+    }
     TypeNode* ret_type = parseOptionalReturnType();
     (void)parseFuncVisibilityModifier(visibility);
 
@@ -1882,10 +1991,19 @@ ExprNode* Parser::parsePostfixExpr(const bool parse_do_suffix) {
             }
         } else if (check(TokenType::LBRACKET)) {
             const int line = current_token().line;
-            match(TokenType::LBRACKET);
-            ExprNode* index = pipeline_step_mode_ ? parseComparisonExpr() : parseExpression();
-            consume(TokenType::RBRACKET);
-            expr = make_node_at<IndexAccessNode>(line, expr, index);
+            if (is_template_apply_target(expr)) {
+                match(TokenType::LBRACKET);
+                skipNewlines();
+                auto args = parseArgListUntil(TokenType::RBRACKET);
+                skipNewlines();
+                consume(TokenType::RBRACKET);
+                expr = make_node_at<FuncCallExprNode>(line, expr, std::move(args));
+            } else {
+                match(TokenType::LBRACKET);
+                ExprNode* index = pipeline_step_mode_ ? parseComparisonExpr() : parseExpression();
+                consume(TokenType::RBRACKET);
+                expr = make_node_at<IndexAccessNode>(line, expr, index);
+            }
         } else if (parse_do_suffix && check(TokenType::KW_DO)) {
             std::vector<ExprNode*> decorators;
             decorators.push_back(expr);
@@ -1929,6 +2047,12 @@ ExprNode* Parser::parseFactor() {
         return parseQuoteExpr();
     }
 
+    if (check(TokenType::KW_VEC)) {
+        const int line = current_token().line;
+        advance();
+        return make_node_at<VarRefNode>(line, "vec");
+    }
+
     if (check(TokenType::IDENTIFIER)) {
         const int line = current_token().line;
         std::string value = current_token().value;
@@ -1944,9 +2068,8 @@ ExprNode* Parser::parseFactor() {
         return expr;
     }
 
-    if (check(TokenType::KW_VEC) || check(TokenType::LBRACKET)) {
+    if (check(TokenType::LBRACKET)) {
         const int vec_line = current_token().line;
-        match(TokenType::KW_VEC);
         consume(TokenType::LBRACKET);
         push_context(ParserContext::Vec);
 
@@ -2095,10 +2218,9 @@ std::vector<FuncParam> Parser::parseParamList() {
 
         std::string type_name;
         bool has_type = false;
+        TypeNode* param_type = nullptr;
         if (match(TokenType::OPER_COLON)) {
-            TypeNode* param_type = parseTypeName();
-            type_name = param_type->name;
-            delete param_type;
+            param_type = parseTypeName();
             has_type = true;
         }
 
@@ -2106,7 +2228,7 @@ std::vector<FuncParam> Parser::parseParamList() {
         if (match(TokenType::ASSIGN)) {
             default_value = parseExpression();
         }
-        params.emplace_back(std::move(name), default_value, std::move(type_name), has_type, variadic);
+        params.emplace_back(std::move(name), default_value, param_type, has_type, variadic);
     };
 
     parse_one();

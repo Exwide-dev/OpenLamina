@@ -122,6 +122,28 @@ std::optional<irgen::FunctionType> bind_method(
                 return Value(static_cast<int64_t>(slot_value(receiver).asVector().size()));
             };
         }
+        if (method_name == "join") {
+            return [receiver](VM& vm, const std::vector<Value>& args) -> Value {
+                if (args.size() != 1) {
+                    throw RuntimeError("join requires 1 argument");
+                }
+                const Value& sep_val = args[0].deref();
+                if (!sep_val.isString()) {
+                    throw RuntimeError("join separator must be text");
+                }
+                const std::string& sep = sep_val.asString();
+                std::string result;
+                bool first = true;
+                for (const auto& elem : slot_value(receiver).asVector()) {
+                    if (!first) {
+                        result += sep;
+                    }
+                    first = false;
+                    result += elem->deref().printString();
+                }
+                return Value(std::move(result));
+            };
+        }
         if (method_name == "contains") {
             return [receiver](VM&, const std::vector<Value>& args) -> Value {
                 if (args.size() != 1) {

@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "typing.hpp"
+
 namespace irgen {
 
 [[nodiscard]] const std::unordered_map<std::string, std::shared_ptr<StructTypeDef>>& type_registry();
@@ -48,6 +50,25 @@ void register_builtin_types();
 [[nodiscard]] int struct_type_match_depth(const Value& value, const std::string& type_name);
 
 void check_struct_field_type(const std::string& type_name, const Value& value);
+
+void check_struct_field_type(
+    const std::shared_ptr<TypeDescriptor>& type_desc,
+    const Value& value,
+    VM& vm
+);
+
+[[nodiscard]] std::optional<Value> type_get_attr(
+    VM& vm,
+    const std::shared_ptr<TypeDescriptor>& desc,
+    const std::string& attr_name
+);
+
+[[nodiscard]] Value type_call(
+    VM& vm,
+    const std::shared_ptr<TypeDescriptor>& desc,
+    const std::vector<Value>& positional,
+    const Value& kwargs = Value(std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{})
+);
 
 [[nodiscard]] Value make_struct_instance(
     VM& vm,

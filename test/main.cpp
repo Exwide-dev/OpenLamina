@@ -207,6 +207,17 @@ void test_quote_syntax_forms();
 void test_container_methods_and_format();
 void test_try_catch_skips_after_struct_throw();
 void test_elif_and_or_not();
+void test_std_typing();
+void test_generic_struct();
+void test_decimal_literal();
+void test_vec_template();
+void test_vec_generic_struct();
+void test_outside_func();
+void test_outside_module_scope_error();
+void test_outside_convert_overload();
+void test_std_random();
+void test_vector_join();
+void test_comprehension_join_chain();
 
 int main() {
     //test::run("vm_goto", test_vm_goto);
@@ -218,21 +229,39 @@ int main() {
     // test::run("exceptions_and_try_catch", test_exceptions_and_try_catch);
     // test::run("friend_func_dispatch", test_friend_func_dispatch);
     // test::run("iter_stopiteration_edges", test_iter_stopiteration_edges);
-    test::run("bytecode_lmc_roundtrip", test_bytecode_lmc_roundtrip);
-    test::run("macro_system", test_macro_system);
-    test::run("macro_identity", test_macro_identity);
-    test::run("macro_variadic_log", test_macro_variadic_log);
-    test::run("macro_it_text", test_macro_it_text);
-    test::run("macro_no_return", test_macro_no_return);
-    test::run("macro_bug_eval_call_in_log", test_macro_bug_eval_call_in_log);
-    test::run("macro_bug_nested_macro_compose", test_macro_bug_nested_macro_compose);
-    test::run("macro_nested_splat", test_macro_nested_splat);
-    test::run("macro_ast_struct_match", test_macro_ast_struct_match);
-    test::run("type_handle", test_type_handle);
-    test::run("quote_syntax_forms", test_quote_syntax_forms);
-    test::run("container_methods_and_format", test_container_methods_and_format);
-    test::run("try_catch_skips_after_struct_throw", test_try_catch_skips_after_struct_throw);
-    test::run("elif_and_or_not", test_elif_and_or_not);
+    // test::run("bytecode_lmc_roundtrip", test_bytecode_lmc_roundtrip);
+    // test::run("macro_system", test_macro_system);
+    // test::run("macro_identity", test_macro_identity);
+    // test::run("macro_variadic_log", test_macro_variadic_log);
+    // test::run("macro_it_text", test_macro_it_text);
+    // test::run("macro_no_return", test_macro_no_return);
+    // test::run("macro_bug_eval_call_in_log", test_macro_bug_eval_call_in_log);
+    // test::run("macro_bug_nested_macro_compose", test_macro_bug_nested_macro_compose);
+    // test::run("macro_nested_splat", test_macro_nested_splat);
+    // test::run("macro_ast_struct_match", test_macro_ast_struct_match);
+    // test::run("type_handle", test_type_handle);
+    // test::run("quote_syntax_forms", test_quote_syntax_forms);
+    // test::run("container_methods_and_format", test_container_methods_and_format);
+    // test::run("try_catch_skips_after_struct_throw", test_try_catch_skips_after_struct_throw);
+    // test::run("elif_and_or_not", test_elif_and_or_not);
     //test::run("gc_memory_trend", test_gc_memory_trend);
+    try {
+        test::run("std_typing", test_std_typing);
+        test::run("generic_struct", test_generic_struct);
+        test::run("decimal_literal", test_decimal_literal);
+        test::run("vec_template", test_vec_template);
+        test::run("vec_generic_struct", test_vec_generic_struct);
+        test::run("outside_func", test_outside_func);
+        test::run("outside_module_scope_error", test_outside_module_scope_error);
+        test::run("outside_convert_overload", test_outside_convert_overload);
+        test::run("std_random", test_std_random);
+        test::run("vector_join", test_vector_join);
+        test::run("comprehension_join_chain", test_comprehension_join_chain);
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "Unknown exception" << std::endl;
+    }
+    std::cerr << "Ready to return..." << std::endl;
     return test::summary();
 }

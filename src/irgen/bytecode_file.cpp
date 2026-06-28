@@ -4,12 +4,18 @@
 #include "generator.hpp"
 #include "runtime_ast.hpp"
 #include "struct_types.hpp"
+#include "typing.hpp"
 
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <unordered_set>
 #include <variant>
+#include <algorithm>
+
+#ifdef OPENLAMINA_LMC_ZLIB
+#include <zlib.h>
+#endif
 
 namespace lm::irgen {
 namespace {
@@ -23,7 +29,7 @@ using RuntimeAstNode = ::irgen::RuntimeAstNode;
 using FriendFunctionObject = ::irgen::FriendFunctionObject;
 
 constexpr char LMC_MAGIC[4] = {'L', 'M', 'C', '\x01'};
-constexpr uint32_t LMC_FLAG_OPTIMIZED = 1u;
+constexpr uint32_t LMC_FORMAT_VERSION_V1 = 1u;
 
 enum class ValueTag : uint8_t {
     None = 0,
@@ -69,8 +75,17 @@ public:
         write_bytes(b, 8);
     }
 
+    /** @brief ULEB128 无符号变长整数（小值 1 字节，无冗余 NUL） */
+    void write_varu64(uint64_t v) {
+        while (v >= 0x80) {
+            write_u8(static_cast<uint8_t>((v & 0x7F) | 0x80));
+            v >>= 7;
+        }
+        write_u8(static_cast<uint8_t>(v));
+    }
+
     void write_string(const std::string& s) {
-        write_u64(s.size());
+        write_varu64(s.size());
         if (!s.empty()) {
             write_bytes(s.data(), s.size());
         }
@@ -82,9 +97,11 @@ public:
 class ByteReader {
     const std::vector<uint8_t>& buf_;
     size_t pos_ = 0;
+    uint32_t format_version_ = LMC_FORMAT_VERSION;
 
 public:
-    explicit ByteReader(const std::vector<uint8_t>& buf) : buf_(buf) {}
+    explicit ByteReader(const std::vector<uint8_t>& buf, const uint32_t format_version = LMC_FORMAT_VERSION)
+        : buf_(buf), format_version_(format_version) {}
 
     [[nodiscard]] size_t remaining() const { return buf_.size() - pos_; }
 
@@ -121,8 +138,28 @@ public:
         return v;
     }
 
+    [[nodiscard]] uint64_t read_varu64() {
+        uint64_t result = 0;
+        unsigned shift = 0;
+        while (true) {
+            const uint8_t byte = read_u8();
+            result |= static_cast<uint64_t>(byte & 0x7F) << shift;
+            if ((byte & 0x80) == 0) {
+                return result;
+            }
+            shift += 7;
+            if (shift > 63) {
+                throw std::runtime_error("LMC: varint overflow");
+            }
+        }
+    }
+
+    [[nodiscard]] uint64_t read_count() {
+        return format_version_ >= 2u ? read_varu64() : read_u64();
+    }
+
     [[nodiscard]] std::string read_string() {
-        const uint64_t len = read_u64();
+        const uint64_t len = read_count();
         if (len == 0) {
             return {};
         }
@@ -135,6 +172,14 @@ public:
     }
 
     [[nodiscard]] bool read_bool() { return read_u8() != 0; }
+
+    [[nodiscard]] std::vector<uint8_t> read_bytes_vec(const size_t n) {
+        std::vector<uint8_t> out(n);
+        if (n > 0) {
+            read_bytes(out.data(), n);
+        }
+        return out;
+    }
 };
 
 void write_value(ByteWriter& w, const Value& val);
@@ -275,6 +320,168 @@ std::vector<StructTypeDef> collect_user_type_defs(const std::vector<Opcode>& cod
     return out;
 }
 
+void collect_string_ids_from_opcode(const Opcode& op, std::unordered_set<size_t>& ids) {
+    std::visit(
+        [&](const auto& instruction) {
+            using T = std::decay_t<decltype(instruction)>;
+            if constexpr (std::is_same_v<T, ::irgen::LOAD> || std::is_same_v<T, ::irgen::STORE_ARG> ||
+                          std::is_same_v<T, ::irgen::NEW_VAR> || std::is_same_v<T, ::irgen::NEW_CONST> ||
+                          std::is_same_v<T, ::irgen::NEW_INTERN_VAR> || std::is_same_v<T, ::irgen::NEW_INTERN_CONST> ||
+                          std::is_same_v<T, ::irgen::NEW_VAR_OR_LOAD>) {
+                ids.insert(instruction.var_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::FINDMOD>) {
+                ids.insert(instruction.module_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::GETATTR> || std::is_same_v<T, ::irgen::SET_FIELD>) {
+                ids.insert(instruction.name_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::EXC_MATCH> || std::is_same_v<T, ::irgen::IS_INSTANCE>) {
+                ids.insert(instruction.type_name_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::STRUCT_NEW>) {
+                ids.insert(instruction.struct_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::BIND_FAST>) {
+                ids.insert(instruction.var_id);
+            }
+        },
+        op
+    );
+}
+
+void collect_string_ids_from_value(const Value& val, std::unordered_set<size_t>& ids);
+
+void collect_string_ids_from_opcodes(const std::vector<Opcode>& code, std::unordered_set<size_t>& ids) {
+    for (const auto& op : code) {
+        collect_string_ids_from_opcode(op, ids);
+        if (const auto* push = std::get_if<::irgen::PUSH>(&op)) {
+            collect_string_ids_from_value(push->val, ids);
+        }
+    }
+}
+
+void collect_string_ids_from_value(const Value& val, std::unordered_set<size_t>& ids) {
+    if (val.isUserFunction()) {
+        const auto& func = val.asFunctionObject();
+        for (const auto& ir : func->param_default_ir) {
+            collect_string_ids_from_opcodes(ir, ids);
+        }
+        collect_string_ids_from_opcodes(func->body, ids);
+        return;
+    }
+    if (val.isFriendFunction()) {
+        for (const auto& handler : val.asFriendFunction()->dispatch_handlers()) {
+            if (handler) {
+                collect_string_ids_from_value(*handler, ids);
+            }
+        }
+        return;
+    }
+    if (val.isVector()) {
+        for (const auto& elem : val.asVector()) {
+            if (elem) {
+                collect_string_ids_from_value(*elem, ids);
+            }
+        }
+    }
+}
+
+void remap_string_ids_in_opcode(Opcode& op, const std::vector<size_t>& remap) {
+    const auto remap_id = [&](size_t id) -> size_t {
+        if (id >= remap.size() || remap[id] == static_cast<size_t>(-1)) {
+            throw std::runtime_error("LMC: string pool id remap out of range");
+        }
+        return remap[id];
+    };
+    std::visit(
+        [&](auto& instruction) {
+            using T = std::decay_t<decltype(instruction)>;
+            if constexpr (std::is_same_v<T, ::irgen::LOAD> || std::is_same_v<T, ::irgen::STORE_ARG> ||
+                          std::is_same_v<T, ::irgen::NEW_VAR> || std::is_same_v<T, ::irgen::NEW_CONST> ||
+                          std::is_same_v<T, ::irgen::NEW_INTERN_VAR> || std::is_same_v<T, ::irgen::NEW_INTERN_CONST> ||
+                          std::is_same_v<T, ::irgen::NEW_VAR_OR_LOAD>) {
+                instruction.var_id = remap_id(instruction.var_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::FINDMOD>) {
+                instruction.module_id = remap_id(instruction.module_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::GETATTR> || std::is_same_v<T, ::irgen::SET_FIELD>) {
+                instruction.name_id = remap_id(instruction.name_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::EXC_MATCH> || std::is_same_v<T, ::irgen::IS_INSTANCE>) {
+                instruction.type_name_id = remap_id(instruction.type_name_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::STRUCT_NEW>) {
+                instruction.struct_id = remap_id(instruction.struct_id);
+            } else if constexpr (std::is_same_v<T, ::irgen::BIND_FAST>) {
+                instruction.var_id = remap_id(instruction.var_id);
+            }
+        },
+        op
+    );
+}
+
+void remap_string_ids_in_value(Value& val, const std::vector<size_t>& remap) {
+    if (val.isUserFunction()) {
+        const auto func = val.asFunctionObject();
+        for (auto& ir : func->param_default_ir) {
+            for (auto& op : ir) {
+                remap_string_ids_in_opcode(op, remap);
+                if (auto* push = std::get_if<::irgen::PUSH>(&op)) {
+                    remap_string_ids_in_value(push->val, remap);
+                }
+            }
+        }
+        for (auto& op : func->body) {
+            remap_string_ids_in_opcode(op, remap);
+            if (auto* push = std::get_if<::irgen::PUSH>(&op)) {
+                remap_string_ids_in_value(push->val, remap);
+            }
+        }
+        return;
+    }
+    if (val.isFriendFunction()) {
+        for (const auto& handler : val.asFriendFunction()->dispatch_handlers()) {
+            if (handler) {
+                remap_string_ids_in_value(*handler, remap);
+            }
+        }
+        return;
+    }
+    if (val.isVector()) {
+        for (const auto& elem : val.asVector()) {
+            if (elem) {
+                remap_string_ids_in_value(*elem, remap);
+            }
+        }
+    }
+}
+
+void remap_string_ids_in_opcodes(std::vector<Opcode>& code, const std::vector<size_t>& remap) {
+    for (auto& op : code) {
+        remap_string_ids_in_opcode(op, remap);
+        if (auto* push = std::get_if<::irgen::PUSH>(&op)) {
+            remap_string_ids_in_value(push->val, remap);
+        }
+    }
+}
+
+[[nodiscard]] std::vector<std::string> finalize_module_string_pool(
+    std::vector<Opcode>& code,
+    const ::irgen::StringPool& compile_pool
+) {
+    std::unordered_set<size_t> ids;
+    collect_string_ids_from_opcodes(code, ids);
+    if (ids.empty()) {
+        return {};
+    }
+    std::vector<size_t> sorted(ids.begin(), ids.end());
+    std::ranges::sort(sorted);
+    const size_t max_id = sorted.back();
+    std::vector<size_t> remap(max_id + 1, static_cast<size_t>(-1));
+    std::vector<std::string> compact;
+    compact.reserve(sorted.size());
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        const size_t old_id = sorted[i];
+        remap[old_id] = i;
+        compact.push_back(compile_pool.get_string(old_id));
+    }
+    remap_string_ids_in_opcodes(code, remap);
+    return compact;
+}
+
 void write_opcode(ByteWriter& w, const Opcode& op) {
     w.write_u8(static_cast<uint8_t>(op.index()));
     std::visit(
@@ -289,40 +496,40 @@ void write_opcode(ByteWriter& w, const Opcode& op) {
                                  std::is_same_v<T, ::irgen::NEW_INTERN_VAR> ||
                                  std::is_same_v<T, ::irgen::NEW_INTERN_CONST> ||
                                  std::is_same_v<T, ::irgen::NEW_VAR_OR_LOAD>) {
-                w.write_u64(instruction.var_id);
+                w.write_varu64(instruction.var_id);
             } else if constexpr (std::is_same_v<T, ::irgen::FINDMOD>) {
-                w.write_u64(instruction.module_id);
+                w.write_varu64(instruction.module_id);
             } else if constexpr (std::is_same_v<T, ::irgen::GETATTR> ||
                                  std::is_same_v<T, ::irgen::SET_FIELD>) {
-                w.write_u64(instruction.name_id);
+                w.write_varu64(instruction.name_id);
             } else if constexpr (std::is_same_v<T, ::irgen::EXC_MATCH> ||
                                  std::is_same_v<T, ::irgen::IS_INSTANCE>) {
-                w.write_u64(instruction.type_name_id);
+                w.write_varu64(instruction.type_name_id);
             } else if constexpr (std::is_same_v<T, ::irgen::LABEL> ||
                                  std::is_same_v<T, ::irgen::GOTO> ||
                                  std::is_same_v<T, ::irgen::GOTOIF> ||
                                  std::is_same_v<T, ::irgen::GOTOIFNOT>) {
-                w.write_u64(instruction.label_id);
+                w.write_varu64(instruction.label_id);
             } else if constexpr (std::is_same_v<T, ::irgen::CALL>) {
-                w.write_u64(instruction.arg_count);
+                w.write_varu64(instruction.arg_count);
                 w.write_bool(instruction.has_kwargs);
-                w.write_u64(instruction.splat_mask);
+                w.write_varu64(instruction.splat_mask);
             } else if constexpr (std::is_same_v<T, ::irgen::LOAD_FAST> ||
                                  std::is_same_v<T, ::irgen::STORE_FAST>) {
-                w.write_u64(instruction.slot);
+                w.write_varu64(instruction.slot);
             } else if constexpr (std::is_same_v<T, ::irgen::BIND_FAST>) {
-                w.write_u64(instruction.slot);
-                w.write_u64(instruction.var_id);
+                w.write_varu64(instruction.slot);
+                w.write_varu64(instruction.var_id);
             } else if constexpr (std::is_same_v<T, ::irgen::VEC_NEW> ||
                                  std::is_same_v<T, ::irgen::DICT_NEW>) {
-                w.write_u64(instruction.count);
+                w.write_varu64(instruction.count);
             } else if constexpr (std::is_same_v<T, ::irgen::STRUCT_NEW>) {
-                w.write_u64(instruction.struct_id);
-                w.write_u64(instruction.arg_count);
+                w.write_varu64(instruction.struct_id);
+                w.write_varu64(instruction.arg_count);
             } else if constexpr (std::is_same_v<T, ::irgen::ENTER_TRY>) {
-                w.write_u64(instruction.catch_label);
-                w.write_u64(instruction.else_label);
-                w.write_u64(instruction.end_label);
+                w.write_varu64(instruction.catch_label);
+                w.write_varu64(instruction.else_label);
+                w.write_varu64(instruction.end_label);
             }
         },
         op
@@ -330,7 +537,7 @@ void write_opcode(ByteWriter& w, const Opcode& op) {
 }
 
 void write_opcodes(ByteWriter& w, const std::vector<Opcode>& code) {
-    w.write_u64(code.size());
+    w.write_varu64(code.size());
     for (const auto& op : code) {
         write_opcode(w, op);
     }
@@ -366,7 +573,7 @@ void write_value(ByteWriter& w, const Value& val) {
     if (val.isVector()) {
         w.write_u8(static_cast<uint8_t>(ValueTag::Vector));
         const auto& vec = val.asVector();
-        w.write_u64(vec.size());
+        w.write_varu64(vec.size());
         for (const auto& elem : vec) {
             write_value(w, elem ? *elem : Value());
         }
@@ -397,31 +604,31 @@ void write_value(ByteWriter& w, const Value& val) {
 
 void write_function(ByteWriter& w, const FunctionObject& func) {
     w.write_string(func.name);
-    w.write_u64(func.params.size());
+    w.write_varu64(func.params.size());
     for (const auto& p : func.params) {
         w.write_string(p);
     }
-    w.write_u64(func.param_types.size());
+    w.write_varu64(func.param_types.size());
     for (const auto& pt : func.param_types) {
         if (pt) {
             w.write_bool(true);
-            w.write_string(*pt);
+            w.write_string(pt.value()->repr());
         } else {
             w.write_bool(false);
         }
     }
-    w.write_u64(func.param_default_ir.size());
+    w.write_varu64(func.param_default_ir.size());
     for (const auto& ir : func.param_default_ir) {
         write_opcodes(w, ir);
     }
     write_opcodes(w, func.body);
-    w.write_u64(func.location);
+    w.write_varu64(func.location);
     w.write_bool(func.needs_closure);
     w.write_bool(func.needs_symbol_bind);
     w.write_bool(func.is_macro);
     if (func.variadic_param_index) {
         w.write_bool(true);
-        w.write_u64(*func.variadic_param_index);
+        w.write_varu64(*func.variadic_param_index);
     } else {
         w.write_bool(false);
     }
@@ -430,7 +637,7 @@ void write_function(ByteWriter& w, const FunctionObject& func) {
 void write_friend_function(ByteWriter& w, const FriendFunctionObject& obj) {
     w.write_string(obj.name);
     auto& handlers = const_cast<FriendFunctionObject&>(obj).dispatch_handlers();
-    w.write_u64(handlers.size());
+    w.write_varu64(handlers.size());
     for (const auto& handler : handlers) {
         if (!handler || !handler->isUserFunction()) {
             throw std::runtime_error("LMC: friend function handler must be a user function");
@@ -445,11 +652,11 @@ void write_runtime_ast(ByteWriter& w, const RuntimeAstNode& node) {
     w.write_string(node.text);
     w.write_bool(node.bool_val);
 
-    w.write_u64(node.stmts.size());
+    w.write_varu64(node.stmts.size());
     for (const auto& stmt : node.stmts) {
         write_runtime_ast(w, stmt);
     }
-    w.write_u64(node.children.size());
+    w.write_varu64(node.children.size());
     for (const auto& child : node.children) {
         write_runtime_ast(w, child);
     }
@@ -466,20 +673,20 @@ void write_runtime_ast(ByteWriter& w, const RuntimeAstNode& node) {
     write_optional(node.slot_b);
     write_optional(node.slot_c);
 
-    w.write_u64(node.hygienic_names.size());
+    w.write_varu64(node.hygienic_names.size());
     for (const auto& n : node.hygienic_names) {
         w.write_string(n);
     }
-    w.write_u64(node.binding_names.size());
+    w.write_varu64(node.binding_names.size());
     for (const auto& n : node.binding_names) {
         w.write_string(n);
     }
-    w.write_u64(node.bindings.size());
+    w.write_varu64(node.bindings.size());
     for (const auto& b : node.bindings) {
         write_runtime_ast(w, b);
     }
 
-    w.write_u64(node.call_args.size());
+    w.write_varu64(node.call_args.size());
     for (const auto& arg : node.call_args) {
         w.write_string(arg.kw_name);
         w.write_bool(arg.is_splat);
@@ -508,11 +715,11 @@ void write_type_def(ByteWriter& w, const StructTypeDef& def) {
     w.write_string(def.base_name);
     w.write_u8(static_cast<uint8_t>(def.kind));
     w.write_bool(def.typed);
-    w.write_u64(def.fields.size());
+    w.write_varu64(def.fields.size());
     for (const auto& field : def.fields) {
         write_struct_field(w, field);
     }
-    w.write_u64(def.methods.size());
+    w.write_varu64(def.methods.size());
     for (const auto& [name, method] : def.methods) {
         w.write_string(name);
         write_function(w, *method);
@@ -572,84 +779,84 @@ Opcode read_opcode(ByteReader& r) {
             return Opcode(::irgen::STORE{});
         case 21: {
             ::irgen::LOAD op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 22:
-            return Opcode(::irgen::LOAD_FAST(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::LOAD_FAST(static_cast<size_t>(r.read_count())));
         case 23:
-            return Opcode(::irgen::STORE_FAST(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::STORE_FAST(static_cast<size_t>(r.read_count())));
         case 24: {
-            const size_t slot = static_cast<size_t>(r.read_u64());
-            const size_t var_id = static_cast<size_t>(r.read_u64());
+            const size_t slot = static_cast<size_t>(r.read_count());
+            const size_t var_id = static_cast<size_t>(r.read_count());
             ::irgen::BIND_FAST op(slot, "");
             op.var_id = var_id;
             return Opcode(std::move(op));
         }
         case 25:
-            return Opcode(::irgen::LABEL(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::LABEL(static_cast<size_t>(r.read_count())));
         case 26:
-            return Opcode(::irgen::GOTO(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::GOTO(static_cast<size_t>(r.read_count())));
         case 27:
-            return Opcode(::irgen::GOTOIF(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::GOTOIF(static_cast<size_t>(r.read_count())));
         case 28:
-            return Opcode(::irgen::GOTOIFNOT(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::GOTOIFNOT(static_cast<size_t>(r.read_count())));
         case 29:
             return Opcode(::irgen::ENTER_SCOPE{});
         case 30:
             return Opcode(::irgen::LEAVE_SCOPE{});
         case 31: {
-            const size_t argc = static_cast<size_t>(r.read_u64());
+            const size_t argc = static_cast<size_t>(r.read_count());
             const bool kwargs = r.read_bool();
-            const uint64_t mask = r.read_u64();
+            const uint64_t mask = r.read_count();
             return Opcode(::irgen::CALL(argc, kwargs, mask));
         }
         case 32:
             return Opcode(::irgen::RET{});
         case 33: {
             ::irgen::FINDMOD op("");
-            op.module_id = static_cast<size_t>(r.read_u64());
+            op.module_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 34: {
             ::irgen::GETATTR op("");
-            op.name_id = static_cast<size_t>(r.read_u64());
+            op.name_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 35:
-            return Opcode(::irgen::VEC_NEW(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::VEC_NEW(static_cast<size_t>(r.read_count())));
         case 36:
-            return Opcode(::irgen::DICT_NEW(static_cast<size_t>(r.read_u64())));
+            return Opcode(::irgen::DICT_NEW(static_cast<size_t>(r.read_count())));
         case 37:
             return Opcode(::irgen::INDEX{});
         case 38: {
             ::irgen::STORE_ARG op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 39: {
             ::irgen::NEW_VAR op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 40: {
             ::irgen::NEW_CONST op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 41: {
             ::irgen::NEW_INTERN_VAR op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 42: {
             ::irgen::NEW_INTERN_CONST op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 43: {
             ::irgen::NEW_VAR_OR_LOAD op("");
-            op.var_id = static_cast<size_t>(r.read_u64());
+            op.var_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 44:
@@ -663,9 +870,9 @@ Opcode read_opcode(ByteReader& r) {
         case 48:
             return Opcode(::irgen::THROW{});
         case 49: {
-            const size_t catch_l = static_cast<size_t>(r.read_u64());
-            const size_t else_l = static_cast<size_t>(r.read_u64());
-            const size_t end_l = static_cast<size_t>(r.read_u64());
+            const size_t catch_l = static_cast<size_t>(r.read_count());
+            const size_t else_l = static_cast<size_t>(r.read_count());
+            const size_t end_l = static_cast<size_t>(r.read_count());
             return Opcode(::irgen::ENTER_TRY(catch_l, else_l, end_l));
         }
         case 50:
@@ -676,25 +883,25 @@ Opcode read_opcode(ByteReader& r) {
             return Opcode(::irgen::PUSH_EXC{});
         case 53: {
             ::irgen::EXC_MATCH op("");
-            op.type_name_id = static_cast<size_t>(r.read_u64());
+            op.type_name_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 54: {
             ::irgen::IS_INSTANCE op("");
-            op.type_name_id = static_cast<size_t>(r.read_u64());
+            op.type_name_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 55:
             return Opcode(::irgen::RETHROW{});
         case 56: {
             ::irgen::STRUCT_NEW op("", 0);
-            op.struct_id = static_cast<size_t>(r.read_u64());
-            op.arg_count = static_cast<size_t>(r.read_u64());
+            op.struct_id = static_cast<size_t>(r.read_count());
+            op.arg_count = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 57: {
             ::irgen::SET_FIELD op("");
-            op.name_id = static_cast<size_t>(r.read_u64());
+            op.name_id = static_cast<size_t>(r.read_count());
             return Opcode(std::move(op));
         }
         case 58:
@@ -703,13 +910,15 @@ Opcode read_opcode(ByteReader& r) {
             return Opcode(::irgen::VEC_LEN{});
         case 60:
             return Opcode(::irgen::MATCH_EQ{});
+        case 61:
+            return Opcode(::irgen::POP{});
         default:
             throw std::runtime_error("LMC: unknown opcode tag: " + std::to_string(tag));
     }
 }
 
 std::vector<Opcode> read_opcodes(ByteReader& r) {
-    const uint64_t count = r.read_u64();
+    const uint64_t count = r.read_count();
     std::vector<Opcode> code;
     code.reserve(static_cast<size_t>(count));
     for (uint64_t i = 0; i < count; ++i) {
@@ -735,7 +944,7 @@ Value read_value(ByteReader& r) {
             return Value(lang::lammp::Rational(num, den));
         }
         case ValueTag::Vector: {
-            const uint64_t count = r.read_u64();
+            const uint64_t count = r.read_count();
             std::vector<std::shared_ptr<Value>> vec;
             vec.reserve(static_cast<size_t>(count));
             for (uint64_t i = 0; i < count; ++i) {
@@ -759,39 +968,44 @@ Value read_value(ByteReader& r) {
 std::shared_ptr<FunctionObject> read_function(ByteReader& r) {
     auto func = std::make_shared<FunctionObject>();
     func->name = r.read_string();
-    const uint64_t param_count = r.read_u64();
+    const uint64_t param_count = r.read_count();
     func->params.reserve(static_cast<size_t>(param_count));
     for (uint64_t i = 0; i < param_count; ++i) {
         func->params.push_back(r.read_string());
     }
-    const uint64_t type_count = r.read_u64();
+    const uint64_t type_count = r.read_count();
     func->param_types.reserve(static_cast<size_t>(type_count));
     for (uint64_t i = 0; i < type_count; ++i) {
         if (r.read_bool()) {
-            func->param_types.emplace_back(r.read_string());
+            const std::string type_repr = r.read_string();
+            if (::irgen::is_type_name(type_repr)) {
+                func->param_types.emplace_back(::irgen::make_nominal_type(::irgen::get_type_def(type_repr)));
+            } else {
+                func->param_types.emplace_back();
+            }
         } else {
             func->param_types.emplace_back();
         }
     }
-    const uint64_t default_count = r.read_u64();
+    const uint64_t default_count = r.read_count();
     func->param_default_ir.resize(static_cast<size_t>(default_count));
     for (uint64_t i = 0; i < default_count; ++i) {
         func->param_default_ir[static_cast<size_t>(i)] = read_opcodes(r);
     }
     func->body = read_opcodes(r);
-    func->location = static_cast<size_t>(r.read_u64());
+    func->location = static_cast<size_t>(r.read_count());
     func->needs_closure = r.read_bool();
     func->needs_symbol_bind = r.read_bool();
     func->is_macro = r.read_bool();
     if (r.read_bool()) {
-        func->variadic_param_index = static_cast<size_t>(r.read_u64());
+        func->variadic_param_index = static_cast<size_t>(r.read_count());
     }
     return func;
 }
 
 std::shared_ptr<FriendFunctionObject> read_friend_function(ByteReader& r) {
     auto obj = ::irgen::make_friend_function(r.read_string());
-    const uint64_t count = r.read_u64();
+    const uint64_t count = r.read_count();
     for (uint64_t i = 0; i < count; ++i) {
         obj->dispatch_handlers().push_back(std::make_shared<Value>(Value(read_function(r))));
     }
@@ -805,12 +1019,12 @@ RuntimeAstNode read_runtime_ast(ByteReader& r) {
     node.text = r.read_string();
     node.bool_val = r.read_bool();
 
-    const uint64_t stmt_count = r.read_u64();
+    const uint64_t stmt_count = r.read_count();
     node.stmts.reserve(static_cast<size_t>(stmt_count));
     for (uint64_t i = 0; i < stmt_count; ++i) {
         node.stmts.push_back(read_runtime_ast(r));
     }
-    const uint64_t child_count = r.read_u64();
+    const uint64_t child_count = r.read_count();
     node.children.reserve(static_cast<size_t>(child_count));
     for (uint64_t i = 0; i < child_count; ++i) {
         node.children.push_back(read_runtime_ast(r));
@@ -826,20 +1040,20 @@ RuntimeAstNode read_runtime_ast(ByteReader& r) {
     node.slot_b = read_optional();
     node.slot_c = read_optional();
 
-    const uint64_t hygienic_count = r.read_u64();
+    const uint64_t hygienic_count = r.read_count();
     for (uint64_t i = 0; i < hygienic_count; ++i) {
         node.hygienic_names.push_back(r.read_string());
     }
-    const uint64_t binding_name_count = r.read_u64();
+    const uint64_t binding_name_count = r.read_count();
     for (uint64_t i = 0; i < binding_name_count; ++i) {
         node.binding_names.push_back(r.read_string());
     }
-    const uint64_t binding_count = r.read_u64();
+    const uint64_t binding_count = r.read_count();
     for (uint64_t i = 0; i < binding_count; ++i) {
         node.bindings.push_back(read_runtime_ast(r));
     }
 
-    const uint64_t arg_count = r.read_u64();
+    const uint64_t arg_count = r.read_count();
     for (uint64_t i = 0; i < arg_count; ++i) {
         RuntimeAstNode::CallArg arg;
         arg.kw_name = r.read_string();
@@ -871,11 +1085,11 @@ StructTypeDef read_type_def(ByteReader& r) {
     def.base_name = r.read_string();
     def.kind = static_cast<::irgen::TypeKind>(r.read_u8());
     def.typed = r.read_bool();
-    const uint64_t field_count = r.read_u64();
+    const uint64_t field_count = r.read_count();
     for (uint64_t i = 0; i < field_count; ++i) {
         def.fields.push_back(read_struct_field(r));
     }
-    const uint64_t method_count = r.read_u64();
+    const uint64_t method_count = r.read_count();
     for (uint64_t i = 0; i < method_count; ++i) {
         const std::string method_name = r.read_string();
         def.methods[method_name] = read_function(r);
@@ -884,6 +1098,73 @@ StructTypeDef read_type_def(ByteReader& r) {
         def.convert_func = read_friend_function(r);
     }
     return def;
+}
+
+#ifdef OPENLAMINA_LMC_ZLIB
+std::vector<uint8_t> lmc_zlib_compress(const std::vector<uint8_t>& input) {
+    if (input.empty()) {
+        return {};
+    }
+    const uLong src_len = static_cast<uLong>(input.size());
+    const uLong bound = compressBound(src_len);
+    std::vector<uint8_t> out(bound);
+    uLongf dest_len = bound;
+    if (compress2(out.data(), &dest_len, input.data(), src_len, Z_DEFAULT_COMPRESSION) != Z_OK) {
+        throw std::runtime_error("LMC: zlib compress failed");
+    }
+    out.resize(dest_len);
+    return out;
+}
+
+std::vector<uint8_t> lmc_zlib_decompress(const std::vector<uint8_t>& input, const size_t expected) {
+    std::vector<uint8_t> out(expected);
+    uLongf dest_len = static_cast<uLongf>(expected);
+    if (uncompress(out.data(), &dest_len, input.data(), static_cast<uLong>(input.size())) != Z_OK) {
+        throw std::runtime_error("LMC: zlib decompress failed");
+    }
+    out.resize(dest_len);
+    return out;
+}
+#endif
+
+void write_module_payload(ByteWriter& w, const CompiledModule& module) {
+    w.write_string(module.source_filename);
+    w.write_varu64(module.string_pool.size());
+    for (const auto& s : module.string_pool) {
+        w.write_string(s);
+    }
+    w.write_varu64(module.type_defs.size());
+    for (const auto& def : module.type_defs) {
+        write_type_def(w, def);
+    }
+    write_opcodes(w, module.code);
+}
+
+CompiledModule read_module_payload(ByteReader& r, const uint32_t flags) {
+    CompiledModule module;
+    module.optimized = (flags & LMC_FLAG_OPTIMIZED) != 0;
+    module.source_filename = r.read_string();
+
+    const uint64_t pool_count = r.read_count();
+    module.string_pool.reserve(static_cast<size_t>(pool_count));
+    for (uint64_t i = 0; i < pool_count; ++i) {
+        module.string_pool.push_back(r.read_string());
+    }
+
+    const uint64_t type_count = r.read_count();
+    for (uint64_t i = 0; i < type_count; ++i) {
+        module.type_defs.push_back(read_type_def(r));
+    }
+
+    for (auto& def : module.type_defs) {
+        (void)::irgen::register_type_def(std::move(def));
+    }
+
+    module.code = read_opcodes(r);
+    if (r.remaining() != 0) {
+        throw std::runtime_error("LMC: trailing bytes in payload");
+    }
+    return module;
 }
 
 } // namespace
@@ -903,14 +1184,14 @@ CompiledModule compile_ast(const lmx::ProgramASTNode* program) {
         throw std::runtime_error("compile_ast: null program");
     }
 
+    ::irgen::StringPoolGuard pool_scope;
     CompiledModule module;
     module.source_filename = program->source_filename.empty() ? "<input>" : program->source_filename;
     const bool prev_opt = bytecode_optimize_enabled;
     bytecode_optimize_enabled = false;
     module.code = Generator(const_cast<lmx::ProgramASTNode*>(program)).gen();
     bytecode_optimize_enabled = prev_opt;
-    Generator::replace_string(module.code);
-    module.string_pool = ::irgen::g_string_pool.export_strings();
+    module.string_pool = finalize_module_string_pool(module.code, ::irgen::g_string_pool);
     module.type_defs = collect_user_type_defs(module.code);
     return module;
 }
@@ -923,25 +1204,34 @@ CompiledModule compile_ast_optimized(const lmx::ProgramASTNode* program) {
 }
 
 void save_lmc(const std::string& path, const CompiledModule& module) {
-    ByteWriter w;
-    w.write_bytes(LMC_MAGIC, 4);
-    w.write_u32(LMC_FORMAT_VERSION);
-    w.write_u32(module.optimized ? LMC_FLAG_OPTIMIZED : 0u);
-    w.write_string(module.source_filename);
+    ByteWriter payload;
+    write_module_payload(payload, module);
+    const std::vector<uint8_t>& raw = payload.data();
 
-    w.write_u64(module.string_pool.size());
-    for (const auto& s : module.string_pool) {
-        w.write_string(s);
+    uint32_t flags = module.optimized ? LMC_FLAG_OPTIMIZED : 0u;
+    std::vector<uint8_t> body = raw;
+
+#ifdef OPENLAMINA_LMC_ZLIB
+    if (raw.size() > 64) {
+        const std::vector<uint8_t> compressed = lmc_zlib_compress(raw);
+        if (compressed.size() + 8 < raw.size()) {
+            body = compressed;
+            flags |= LMC_FLAG_COMPRESSED;
+        }
     }
+#endif
 
-    w.write_u64(module.type_defs.size());
-    for (const auto& def : module.type_defs) {
-        write_type_def(w, def);
+    ByteWriter file;
+    file.write_bytes(LMC_MAGIC, 4);
+    file.write_u32(LMC_FORMAT_VERSION);
+    file.write_u32(flags);
+    if ((flags & LMC_FLAG_COMPRESSED) != 0) {
+        file.write_varu64(raw.size());
+        file.write_varu64(body.size());
     }
+    file.write_bytes(body.data(), body.size());
 
-    write_opcodes(w, module.code);
-
-    const std::vector<uint8_t>& bytes = w.data();
+    const std::vector<uint8_t>& bytes = file.data();
     std::ofstream out(path, std::ios::binary);
     if (!out) {
         throw std::runtime_error("cannot open for write: " + path);
@@ -962,49 +1252,52 @@ CompiledModule load_lmc(const std::string& path) {
         throw std::runtime_error("LMC: file too small");
     }
 
-    ByteReader r(bytes);
+    ByteReader header(bytes);
     char magic[4]{};
-    r.read_bytes(magic, 4);
+    header.read_bytes(magic, 4);
     if (std::memcmp(magic, LMC_MAGIC, 4) != 0) {
         throw std::runtime_error("LMC: invalid magic");
     }
-    const uint32_t version = r.read_u32();
-    if (version != LMC_FORMAT_VERSION) {
+    const uint32_t version = header.read_u32();
+    if (version != LMC_FORMAT_VERSION_V1 && version != LMC_FORMAT_VERSION) {
         throw std::runtime_error("LMC: unsupported format version");
     }
-    const uint32_t flags = r.read_u32();
+    const uint32_t flags = header.read_u32();
 
-    CompiledModule module;
-    module.optimized = (flags & LMC_FLAG_OPTIMIZED) != 0;
-    module.source_filename = r.read_string();
-
-    const uint64_t pool_count = r.read_u64();
-    module.string_pool.reserve(static_cast<size_t>(pool_count));
-    for (uint64_t i = 0; i < pool_count; ++i) {
-        module.string_pool.push_back(r.read_string());
+    std::vector<uint8_t> payload_bytes;
+    if ((flags & LMC_FLAG_COMPRESSED) != 0) {
+        if (version < LMC_FORMAT_VERSION) {
+            throw std::runtime_error("LMC: compressed payload requires format v2");
+        }
+#ifdef OPENLAMINA_LMC_ZLIB
+        const uint64_t uncompressed_size = header.read_varu64();
+        const uint64_t compressed_size = header.read_varu64();
+        payload_bytes = lmc_zlib_decompress(
+            header.read_bytes_vec(static_cast<size_t>(compressed_size)),
+            static_cast<size_t>(uncompressed_size)
+        );
+#else
+        throw std::runtime_error("LMC: compressed file but zlib support is disabled");
+#endif
+    } else if (version >= LMC_FORMAT_VERSION) {
+        payload_bytes = header.read_bytes_vec(header.remaining());
+    } else {
+        ByteReader legacy(bytes, LMC_FORMAT_VERSION_V1);
+        legacy.read_bytes(magic, 4);
+        (void)legacy.read_u32();
+        (void)legacy.read_u32();
+        return read_module_payload(legacy, flags);
     }
-    ::irgen::g_string_pool.rebuild(module.string_pool);
 
-    const uint64_t type_count = r.read_u64();
-    for (uint64_t i = 0; i < type_count; ++i) {
-        module.type_defs.push_back(read_type_def(r));
-    }
-
-    for (auto& def : module.type_defs) {
-        (void)::irgen::register_type_def(std::move(def));
-    }
-
-    module.code = read_opcodes(r);
-    if (r.remaining() != 0) {
-        throw std::runtime_error("LMC: trailing bytes in file");
-    }
-    return module;
+    ByteReader payload(payload_bytes, version);
+    return read_module_payload(payload, flags);
 }
 
 bool run_compiled_module(
     CompiledModule& module,
     const std::function<bool(::irgen::VM& vm)>& on_result
 ) {
+    ::irgen::StringPoolGuard pool_guard(module.string_pool);
     auto vm = std::make_unique<::irgen::VM>(std::move(module.code));
     vm->source_filename = module.source_filename;
     vm->set_symbol("__package__", ::irgen::Value("__main__"));

@@ -2,19 +2,20 @@
 
 #include "struct_types.hpp"
 
+#include <limits>
+
 namespace irgen {
 namespace {
 
-[[nodiscard]] bool dispatch_param_matches(const Value& arg, const std::optional<std::string>& type_name) {
-    if (!type_name.has_value() || type_name->empty()) {
+[[nodiscard]] bool dispatch_param_matches(
+    const Value& arg,
+    const std::optional<std::shared_ptr<TypeDescriptor>>& type_desc
+) {
+    if (!type_desc.has_value() || type_desc->get() == nullptr) {
         return true;
     }
-    try {
-        check_struct_field_type(*type_name, arg);
-        return true;
-    } catch (const RuntimeError&) {
-        return false;
-    }
+    static VM scratch{};
+    return (*type_desc)->accepts(arg, scratch);
 }
 
 [[nodiscard]] bool handler_matches(const FunctionObject& handler, const std::vector<Value>& args) {
@@ -22,7 +23,7 @@ namespace {
         return false;
     }
     for (size_t i = 0; i < args.size(); ++i) {
-        std::optional<std::string> expected;
+        std::optional<std::shared_ptr<TypeDescriptor>> expected;
         if (i < handler.param_types.size()) {
             expected = handler.param_types[i];
         }
@@ -36,7 +37,7 @@ namespace {
 [[nodiscard]] int handler_specificity(const FunctionObject& handler) {
     int score = 0;
     for (const auto& param_type : handler.param_types) {
-        if (param_type.has_value() && !param_type->empty()) {
+        if (param_type.has_value() && param_type.value() != nullptr) {
             ++score;
         }
     }
@@ -84,8 +85,9 @@ std::shared_ptr<FunctionObject> find_convert_dispatch_handler(
     const Value& value = args[1];
 
     size_t best_index = handlers.size();
-    int best_depth = -1;
+    int best_score = std::numeric_limits<int>::max();
     bool found = false;
+    static VM scratch{};
 
     for (size_t i = 0; i < handlers.size(); ++i) {
         const Value& entry = handlers[i]->deref();
@@ -96,15 +98,25 @@ std::shared_ptr<FunctionObject> find_convert_dispatch_handler(
         if (!handler_matches(handler, args)) {
             continue;
         }
-        if (handler.param_types.size() <= 1 || !handler.param_types[1].has_value()) {
+        if (handler.param_types.size() <= 1 || !handler.param_types[1].has_value()
+            || handler.param_types[1].value() == nullptr) {
             continue;
         }
-        const int depth = struct_type_match_depth(value, *handler.param_types[1]);
-        if (depth < 0) {
+        const std::shared_ptr<TypeDescriptor>& param_type = handler.param_types[1].value();
+        int score = std::numeric_limits<int>::max();
+        if (const StructTypeDef* nominal = param_type->as_nominal_def()) {
+            const int depth = struct_type_match_depth(value, nominal->name);
+            if (depth < 0) {
+                continue;
+            }
+            score = depth * 1000 + handler_specificity(handler);
+        } else if (param_type->accepts(value, scratch)) {
+            score = 10000 + handler_specificity(handler);
+        } else {
             continue;
         }
-        if (!found || depth < best_depth || (depth == best_depth && i > best_index)) {
-            best_depth = depth;
+        if (!found || score < best_score || (score == best_score && i > best_index)) {
+            best_score = score;
             best_index = i;
             found = true;
         }

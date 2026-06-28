@@ -1,6 +1,16 @@
 #include "friend_function.hpp"
 
 #include "struct_types.hpp"
+#include "typing.hpp"
+
+#include "exceptions.hpp"
+#include "runtime_ast.hpp"
+#include "../tools/error.hpp"
+
+#include "friend_function.hpp"
+
+#include "struct_types.hpp"
+#include "typing.hpp"
 
 #include "exceptions.hpp"
 #include "runtime_ast.hpp"
@@ -82,10 +92,11 @@ Value convert_with_handlers(
     if (!handler->owner_vm) {
         handler->owner_vm = &vm;
     }
-    const Value empty_kwargs(
-        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{}
+    return call_user_function_sync(
+        vm,
+        handler,
+        resolve_user_function_args(vm, *handler, args, empty_kwargs_value())
     );
-    return handler->call(vm, resolve_user_function_args(vm, *handler, args, empty_kwargs));
 }
 
 Value coerce_primitive(const std::shared_ptr<StructTypeDef>& def, const Value& value) {
@@ -248,10 +259,11 @@ void register_builtin_types() {
     register_builtin_exceptions();
     register_ast_type_converters();
     register_ast_struct_types();
+    register_typing_constructors();
 }
 
 Value make_type_value(const std::shared_ptr<StructTypeDef>& def) {
-    return Value(def);
+    return make_type_value(make_nominal_type(def));
 }
 
 Value make_type_value(const std::string& name) {
@@ -269,7 +281,7 @@ Value runtime_type_of(const Value& value) {
             return runtime_type_of(ref.get());
         }
         case Value::Type::TypeHandle:
-            return Value(v.asTypeDef());
+            return Value(v.asTypeDesc());
         case Value::Type::StructObject:
             return make_type_value(v.asStruct()->type);
         case Value::Type::None:
@@ -296,14 +308,170 @@ Value runtime_type_of(const Value& value) {
 
 std::optional<Value> type_get_attr(
     VM& vm,
+    const std::shared_ptr<TypeDescriptor>& desc,
+    const std::string& attr_name
+) {
+    if (attr_name == "__check_type__") {
+        return Value(make_check_type_method(desc));
+    }
+    if (const StructTypeDef* def = desc->as_nominal_def()) {
+        return type_get_attr(vm, get_type_def(def->name), attr_name);
+    }
+    (void)vm;
+    return std::nullopt;
+}
+
+std::optional<Value> type_get_attr(
+    VM& vm,
     const std::shared_ptr<StructTypeDef>& def,
     const std::string& attr_name
 ) {
+    if (attr_name == "__check_type__") {
+        return Value(make_check_type_method(make_nominal_type(def)));
+    }
     if (attr_name == "__convert__") {
         def->ensure_convert_func();
         return Value(def->convert_func);
     }
     return std::nullopt;
+}
+
+namespace {
+
+void infer_type_var_from_field(
+    const StructFieldDef& field,
+    const Value& arg,
+    std::unordered_map<std::string, std::shared_ptr<TypeDescriptor>>& inferred,
+    VM& vm
+) {
+    if (!field.type_desc) {
+        return;
+    }
+    infer_type_params_from_field_value(*field.type_desc, arg, inferred, vm);
+}
+
+std::shared_ptr<StructTypeDef> instantiate_generic_struct_def(
+    VM& vm,
+    const std::shared_ptr<StructTypeDef>& template_def,
+    const std::vector<Value>& positional,
+    const Value& kwargs_value
+) {
+    (void)kwargs_value;
+    const Value& kwargs = kwargs_value.deref();
+    if (kwargs.isDictionary() && !kwargs.asDictionary().empty()) {
+        throw RuntimeError("keyword arguments are not supported for generic struct instantiation");
+    }
+
+    std::unordered_map<std::string, std::shared_ptr<TypeDescriptor>> inferred;
+    for (size_t i = 0; i < positional.size() && i < template_def->fields.size(); ++i) {
+        infer_type_var_from_field(template_def->fields[i], positional[i], inferred, vm);
+    }
+
+    std::vector<std::shared_ptr<TypeDescriptor>> type_args;
+    type_args.reserve(template_def->type_params.size());
+    for (const StructTypeParamDef& param : template_def->type_params) {
+        const auto it = inferred.find(param.name);
+        if (it == inferred.end()) {
+            throw RuntimeError(
+                std::format("cannot infer type parameter '{}' for struct {}", param.name, template_def->name)
+            );
+        }
+        for (size_t i = 0; i < template_def->fields.size() && i < positional.size(); ++i) {
+            if (!template_def->fields[i].type_desc) {
+                continue;
+            }
+            if (!type_descriptor_mentions_var(*template_def->fields[i].type_desc, param.name)) {
+                continue;
+            }
+            Value sample = positional[i];
+            const Value& sample_deref = sample.deref();
+            if (sample_deref.isVector() && !sample_deref.asVector().empty() && sample_deref.asVector()[0]) {
+                sample = *sample_deref.asVector()[0];
+            }
+            if (!check_inferred_type_for_param(
+                    *it->second,
+                    *param.bound,
+                    param.variance,
+                    sample,
+                    vm
+                )) {
+                throw RuntimeError(
+                    std::format(
+                        "type parameter '{}' does not satisfy bound {} for struct {}",
+                        param.name,
+                        param.bound->repr(),
+                        template_def->name
+                    )
+                );
+            }
+            break;
+        }
+        type_args.push_back(it->second);
+    }
+
+    const std::string mangled = mangle_generic_name(template_def->name, type_args);
+    if (is_type_name(mangled)) {
+        return get_type_def(mangled);
+    }
+
+    StructTypeDef instantiated;
+    instantiated.name = mangled;
+    instantiated.base_name = template_def->base_name;
+    instantiated.kind = TypeKind::User;
+    instantiated.typed = true;
+    instantiated.is_generic = false;
+    instantiated.methods = template_def->methods;
+
+    std::unordered_map<std::string, std::shared_ptr<TypeDescriptor>> subst;
+    for (size_t i = 0; i < template_def->type_params.size(); ++i) {
+        subst.emplace(template_def->type_params[i].name, type_args[i]);
+    }
+
+    for (const StructFieldDef& field : template_def->fields) {
+        StructFieldDef fd = field;
+        if (field.type_desc) {
+            fd.type_desc = substitute_type(*field.type_desc, subst);
+            fd.type_name = fd.type_desc->repr();
+        }
+        instantiated.fields.push_back(std::move(fd));
+    }
+
+    return register_type_def(std::move(instantiated));
+}
+
+Value instantiate_generic_struct(
+    VM& vm,
+    const std::shared_ptr<StructTypeDef>& template_def,
+    const std::vector<Value>& positional,
+    const Value& kwargs_value
+) {
+    const std::shared_ptr<StructTypeDef> concrete =
+        instantiate_generic_struct_def(vm, template_def, positional, kwargs_value);
+    return make_struct_instance(vm, concrete->name, positional, kwargs_value);
+}
+
+} // namespace
+
+Value type_call(
+    VM& vm,
+    const std::shared_ptr<TypeDescriptor>& desc,
+    const std::vector<Value>& positional,
+    const Value& kwargs_value
+) {
+    if (desc->is_callable()) {
+        const Value& kwargs = kwargs_value.deref();
+        if (kwargs.isDictionary() && !kwargs.asDictionary().empty()) {
+            throw RuntimeError("keyword arguments are not supported for type constructors");
+        }
+        const auto type_args = type_args_from_values(vm, positional);
+        return make_type_value(desc->instantiate(type_args, vm));
+    }
+
+    if (const StructTypeDef* raw = desc->as_nominal_def()) {
+        return type_call(vm, get_type_def(raw->name), positional, kwargs_value);
+    }
+
+    throw RuntimeError("type " + desc->repr() + " is not callable");
 }
 
 Value type_call(
@@ -328,6 +496,10 @@ Value type_call(
         return convert_with_handlers(vm, def, positional[0]);
     }
 
+    if (def->is_generic) {
+        return instantiate_generic_struct(vm, def, positional, kwargs_value);
+    }
+
     return make_struct_instance(vm, def->name, positional, kwargs_value);
 }
 
@@ -336,13 +508,19 @@ Value convert_to_type(VM& vm, const Value& type_val, const Value& value) {
     if (!ty.isTypeHandle()) {
         throw RuntimeError("convert() first argument must be a type");
     }
-    const std::shared_ptr<StructTypeDef>& def = ty.asTypeDef();
-    if (def->kind == TypeKind::Primitive) {
-        if (Value coerced = coerce_primitive(def, value); coerced.getType() != Value::Type::None) {
-            return coerced;
+    const std::shared_ptr<TypeDescriptor>& desc = ty.asTypeDesc();
+    if (const StructTypeDef* raw = desc->as_nominal_def()) {
+        const std::shared_ptr<StructTypeDef>& def = get_type_def(raw->name);
+        if (def->kind == TypeKind::Primitive) {
+            if (Value coerced = coerce_primitive(def, value); coerced.getType() != Value::Type::None) {
+                return coerced;
+            }
         }
+        return convert_with_handlers(vm, def, value);
     }
-    return convert_with_handlers(vm, def, value);
+    throw RuntimeError(
+        std::format("convert() does not support composite type {}", desc->repr())
+    );
 }
 
 bool struct_instance_is_a(const Value& value, const std::string& type_name) {
@@ -385,6 +563,26 @@ std::shared_ptr<StructObject>& Value::asStruct() {
     return std::get<std::shared_ptr<StructObject>>(data);
 }
 
+const std::shared_ptr<TypeDescriptor>& Value::asTypeDesc() const {
+    if (type == Type::Reference) {
+        return asReference().get().asTypeDesc();
+    }
+    if (type != Type::TypeHandle) {
+        throw RuntimeError("Value is not a type handle");
+    }
+    return std::get<std::shared_ptr<TypeDescriptor>>(data);
+}
+
+std::shared_ptr<TypeDescriptor>& Value::asTypeDesc() {
+    if (type == Type::Reference) {
+        return const_cast<std::shared_ptr<TypeDescriptor>&>(asReference().get().asTypeDesc());
+    }
+    if (type != Type::TypeHandle) {
+        throw RuntimeError("Value is not a type handle");
+    }
+    return std::get<std::shared_ptr<TypeDescriptor>>(data);
+}
+
 const std::shared_ptr<StructTypeDef>& Value::asTypeDef() const {
     if (type == Type::Reference) {
         return asReference().get().asTypeDef();
@@ -392,72 +590,29 @@ const std::shared_ptr<StructTypeDef>& Value::asTypeDef() const {
     if (type != Type::TypeHandle) {
         throw RuntimeError("Value is not a type handle");
     }
-    return std::get<std::shared_ptr<StructTypeDef>>(data);
+    if (const std::shared_ptr<StructTypeDef>* storage = asTypeDesc()->nominal_def_storage()) {
+        return *storage;
+    }
+    throw RuntimeError("type handle is not nominal: " + asTypeDesc()->repr());
 }
 
 std::shared_ptr<StructTypeDef>& Value::asTypeDef() {
-    if (type == Type::Reference) {
-        return const_cast<std::shared_ptr<StructTypeDef>&>(asReference().get().asTypeDef());
-    }
-    if (type != Type::TypeHandle) {
-        throw RuntimeError("Value is not a type handle");
-    }
-    return std::get<std::shared_ptr<StructTypeDef>>(data);
+    return const_cast<std::shared_ptr<StructTypeDef>&>(
+        const_cast<const Value*>(this)->asTypeDef()
+    );
+}
+
+void check_struct_field_type(const std::shared_ptr<TypeDescriptor>& type_desc, const Value& value, VM& vm) {
+    check_value_matches_type(type_desc, value, vm);
 }
 
 void check_struct_field_type(const std::string& type_name, const Value& value) {
-    const Value& v = value.deref();
-
-    if (type_name == "num") {
-        if (!v.isNumber() && !v.isRational()) {
-            throw RuntimeError("expected num, got " + v.type_name());
-        }
+    if (is_type_name(type_name)) {
+        static VM scratch{};
+        check_struct_field_type(make_nominal_type(get_type_def(type_name)), value, scratch);
         return;
     }
-    if (type_name == "text") {
-        if (!v.isString()) {
-            throw RuntimeError("expected text, got " + v.type_name());
-        }
-        return;
-    }
-    if (type_name == "bool") {
-        if (!v.isBool()) {
-            throw RuntimeError("expected bool, got " + v.type_name());
-        }
-        return;
-    }
-    if (type_name == "nonetype") {
-        if (!v.isNone()) {
-            throw RuntimeError("expected nonetype, got " + v.type_name());
-        }
-        return;
-    }
-    if (type_name == "vector") {
-        if (!v.isVector()) {
-            throw RuntimeError("expected vector, got " + v.type_name());
-        }
-        return;
-    }
-    if (type_name == "AST") {
-        if (!v.isRuntimeAst()) {
-            throw RuntimeError("expected AST, got " + v.type_name());
-        }
-        return;
-    }
-    if (type_name == "table") {
-        if (!v.isDictionary()) {
-            throw RuntimeError("expected table, got " + v.type_name());
-        }
-        return;
-    }
-
-    if (const StructTypeDef* def = find_type_def_raw(type_name)) {
-        if (def->kind == TypeKind::User && struct_instance_is_a(value, type_name)) {
-            return;
-        }
-    }
-
-    throw RuntimeError("expected " + type_name + ", got " + v.type_name());
+    throw RuntimeError("expected " + type_name + ", got " + value.deref().type_name());
 }
 
 Value make_struct_instance(
@@ -522,7 +677,11 @@ Value make_struct_instance(
     for (size_t i = 0; i < def->fields.size(); ++i) {
         if (i < positional.size()) {
             if (def->typed && def->fields[i].has_type_annotation) {
-                check_struct_field_type(def->fields[i].type_name, positional[i]);
+                if (def->fields[i].type_desc) {
+                    check_struct_field_type(def->fields[i].type_desc, positional[i], vm);
+                } else {
+                    check_struct_field_type(def->fields[i].type_name, positional[i]);
+                }
             }
             instance->slots[i] = store_field_value(vm, positional[i]);
         } else if (def->fields[i].has_default) {
@@ -550,7 +709,11 @@ void struct_set_field(VM& vm, Value& struct_val, const std::string& field_name, 
                 throw RuntimeError("cannot assign to immutable field: " + field_name);
             }
             if (inst->type->typed && inst->type->fields[i].has_type_annotation) {
-                check_struct_field_type(inst->type->fields[i].type_name, value);
+                if (inst->type->fields[i].type_desc) {
+                    check_struct_field_type(inst->type->fields[i].type_desc, value, vm);
+                } else {
+                    check_struct_field_type(inst->type->fields[i].type_name, value);
+                }
             }
             inst->slots[i] = store_field_value(vm, value);
             return;
@@ -630,8 +793,12 @@ std::optional<Value> struct_try_bind_method(
     ));
 }
 
+Value::Value(std::shared_ptr<TypeDescriptor> type_desc)
+    : type(Type::TypeHandle), data(std::move(type_desc)) {
+}
+
 Value::Value(std::shared_ptr<StructTypeDef> type_def)
-    : type(Type::TypeHandle), data(std::move(type_def)) {
+    : type(Type::TypeHandle), data(make_nominal_type(std::move(type_def))) {
 }
 
 } // namespace irgen

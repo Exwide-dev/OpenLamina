@@ -38,11 +38,12 @@ struct CellPool::Impl {
         bool is_free = false;
     };
 
-    std::vector<std::unique_ptr<Value[]>> chunks;
+    // chunks 必须最后声明，以便析构时最先销毁；此时 cell_index 仍有效，
+    // 避免 shared_ptr deleter 在 cell_index 已销毁后误对池内地址 delete。
     std::vector<Value*> free_list;
     std::unordered_map<Value*, CellRecord> cell_index;
-
     size_t allocations_since_gc = 0;
+    std::vector<std::unique_ptr<Value[]>> chunks;
 
     static constexpr size_t kChunkSize = 4096;
 
@@ -65,13 +66,22 @@ CellPool::CellPool(CellPool&&) noexcept = default;
 
 CellPool& CellPool::operator=(CellPool&&) noexcept = default;
 
-CellPool::~CellPool() = default;
+CellPool::~CellPool() {
+    markDestroying();
+}
 
 void CellPool::bindOwner(VM* vm) {
     owner_vm_ = vm;
 }
 
+void CellPool::markDestroying() noexcept {
+    destroying_ = true;
+}
+
 void CellPool::releaseCell(Value* cell) const {
+    if (destroying_ || cell == nullptr) {
+        return;
+    }
     impl_->recycle(cell);
 }
 
@@ -160,7 +170,7 @@ CellPool::CellPtr CellPool::allocateValue(Value&& value) {
 
 void CellPool::Impl::recycle(Value* cell) {
     if (!owns(cell)) {
-        delete cell;
+        // 非本池分配的堆槽位（理论上不应出现）；池内地址在 owns 失败时绝不能 delete。
         return;
     }
 

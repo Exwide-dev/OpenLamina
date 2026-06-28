@@ -205,12 +205,6 @@ public:
      * @return 字节码向量
      */
     [[nodiscard]] std::vector<::irgen::Opcode> gen() const;
-
-    /**
-     * @brief 将字符串操作数替换为字符串池ID
-     * @param codes 字节码向量
-     */
-    static void replace_string(std::vector<::irgen::Opcode>& codes) {}
 };
 
 /**

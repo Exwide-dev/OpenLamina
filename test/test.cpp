@@ -303,7 +303,7 @@ struct Counter {
     }
 }
 
-let out = vec[]
+let out = []
 for (i in Counter(3)) {
     out.append(i)
 }
@@ -339,7 +339,7 @@ try {
     bare = 1
 }
 
-let summary = vec[]
+let summary = []
 summary.append(out.len())
 summary.append(hit)
 summary.append(else_hit)
@@ -406,7 +406,7 @@ noMain.__dispatch__.append(
     }
 )
 
-let summary = vec[]
+let summary = []
 summary.append(addOne(5))
 summary.append(addOne("hi"))
 summary.append(noMain(7))
@@ -459,7 +459,7 @@ struct Counter {
     }
 }
 
-let via_iter = vec[]
+let via_iter = []
 let it = iter(Counter(2))
 via_iter.append(next(it))
 via_iter.append(next(it))
@@ -480,7 +480,7 @@ try {
     base_hit = 1
 }
 
-let out = vec[]
+let out = []
 out.append(via_iter.len())
 out.append(via_iter[0])
 out.append(via_iter[1])
@@ -778,7 +778,7 @@ void test_type_handle() {
     const std::string src = R"(
 print(type(42) == num)
 print(type("x") == text)
-print(type(vec[]) == vector)
+print(type([]) == vector)
 
 macro inspect(x) {
     return quote(ex) with (x) {
@@ -845,7 +845,7 @@ print(forty_two{})
 void test_container_methods_and_format() {
     const std::string src = R"(
 use std.format.{format, join}
-let v = vec[10, 20, 30]
+let v = [10, 20, 30]
 v.set(1, 99)
 v.insert(0, 5)
 let a = v.get(2)
@@ -855,7 +855,7 @@ d.set("x", 9)
 let got = d.get("x")
 let items = d.items().len()
 let fmt = format("{} + {} = {}", 1, 2, 3)
-let joined = join("-", vec["a", "b"])
+let joined = join("-", ["a", "b"])
 struct Box { var n func fail(self) { throw ValueError("boom") } }
 let caught = 0
 let after_fail = 0
@@ -907,7 +907,7 @@ flag
 
 void test_elif_and_or_not() {
     const std::string src = R"(
-let side = vec[]
+let side = []
 
 func bump(tag) {
     side.append(tag)
@@ -923,7 +923,7 @@ if (false) {
 }
 
 let and_val = 0 and bump("and_lhs") or bump("or_lhs")
-let sc = vec[]
+let sc = []
 if (1 and bump("sc_and") and 0) {
     sc.append(1)
 } else {
@@ -933,7 +933,7 @@ if (1 and bump("sc_and") and 0) {
 let not_ok = not ""
 let not_fail = not 0
 
-let summary = vec[]
+let summary = []
 summary.append(branch)
 summary.append(and_val)
 summary.append(side.len())
@@ -959,6 +959,368 @@ summary
         ASSERT(slots[4]->deref().asBool());
         ASSERT(slots[5]->deref().isBool());
         ASSERT(slots[5]->deref().asBool());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_std_typing() {
+    const std::string src = R"(
+use std.typing.{Union, Maybe, Covariant, Contravariant, Invariant}
+
+let union_rt = Union(num, text)
+let maybe_rt = Maybe(num)
+
+typed struct Mixed {
+    let value: Union[num, text]
+}
+
+typed struct OptionalNum {
+    let x: Maybe[num]
+}
+
+typed struct VarianceBox {
+    let cov: Covariant[num]
+    let contra: Contravariant[num]
+    let inv: Invariant[num]
+}
+
+let ok1 = Mixed(42)
+let ok2 = Mixed("hello")
+let ok4 = OptionalNum(7)
+let ok5 = VarianceBox(1, 2, 3)
+
+let union_eq = union_rt == Union(num, text)
+let maybe_eq = maybe_rt == Maybe(num)
+let union_ne = union_rt == Union(num, bool)
+
+let bad_union = false
+try {
+    let bad = Mixed(true)
+} catch (e) {
+    bad_union = true
+}
+
+let bad_maybe = false
+try {
+    let bad2 = OptionalNum("x")
+} catch (e) {
+    bad_maybe = true
+}
+
+let results = [
+    union_eq,
+    maybe_eq,
+    not union_ne,
+    bad_union,
+    bad_maybe,
+    type(ok1.value) == num,
+    type(ok2.value) == text
+]
+results
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 7);
+        for (size_t i = 0; i < 5; ++i) {
+            ASSERT(slots[i]->deref().isBool());
+            ASSERT(slots[i]->deref().asBool());
+        }
+        ASSERT(slots[5]->deref().isBool());
+        ASSERT(slots[5]->deref().asBool());
+        ASSERT(slots[6]->deref().isBool());
+        ASSERT(slots[6]->deref().asBool());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_generic_struct() {
+    const std::string src = R"(
+use std.typing.{Contravariant, Union}
+
+struct a [t: num] {
+    var value: t
+}
+
+struct b [
+    t: num
+    p: Contravariant[text]
+] {
+    var value: t
+    var name: p
+}
+
+struct Box [t: Union[num, text]] {
+    var value: t
+}
+
+struct SubText : text {
+    var value: text
+}
+
+let aInstance = a(42)
+let bInstance = b(3.14, "Example")
+
+let bError = false
+try {
+    b(1, SubText("a"))
+} catch (e) {
+    bError = true
+}
+
+let boxNum = Box(1)
+let boxText = Box("x")
+
+let results = [
+    bError,
+    aInstance.value == 42,
+    bInstance.name == "Example",
+    type(boxNum) != type(boxText),
+    type(aInstance) == type(a(42))
+]
+results
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 5);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            ASSERT(slots[i]->deref().isBool());
+            ASSERT(slots[i]->deref().asBool());
+        }
+        return true;
+    }));
+    delete ast;
+}
+
+void test_decimal_literal() {
+    const std::string src = R"(
+let pi = 3.14
+let half = .5
+let scaled = 1.5e1
+let results = [
+    pi + pi == 6.28,
+    half + half == 1,
+    scaled == 15,
+    42 == 42
+]
+results
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 4);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            ASSERT(slots[i]->deref().isBool());
+            ASSERT(slots[i]->deref().asBool());
+        }
+        return true;
+    }));
+    delete ast;
+}
+
+void test_vec_template() {
+    const std::string src = R"(
+struct Student {
+    var name: text
+    var id: num
+}
+
+let list_type = vec[Student]
+let good = [Student("Ann", 1), Student("Bob", 2)]
+let bad = [1, 2, 3]
+
+let results = [
+    list_type.__check_type__(good),
+    not list_type.__check_type__(bad),
+    list_type.__check_type__([]),
+    type([]) == vector
+]
+results
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 4);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            ASSERT(slots[i]->deref().isBool());
+            ASSERT(slots[i]->deref().asBool());
+        }
+        return true;
+    }));
+    delete ast;
+}
+
+void test_vec_generic_struct() {
+    const std::string src = R"(
+struct Student {
+    var name: text
+    var id: num
+}
+
+struct Class [T: Student] {
+    var students: vec[T]
+}
+
+let roster = Class([
+    Student("Ann", 1),
+    Student("Bob", 2)
+])
+
+let results = [
+    roster.students.len() == 2,
+    roster.students[0].name == "Ann"
+]
+results
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 2);
+        for (size_t i = 0; i < slots.size(); ++i) {
+            ASSERT(slots[i]->deref().isBool());
+            ASSERT(slots[i]->deref().asBool());
+        }
+        return true;
+    }));
+    delete ast;
+}
+
+void test_outside_func() {
+    const std::string src = R"(
+struct A {
+    func out() outside {
+        return 42
+    }
+}
+out()
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isNumber());
+        ASSERT(result.asNumber() == irgen::Value(42).asNumber());
+        return true;
+    }));
+    delete ast;
+}
+
+void test_outside_module_scope_error() {
+    ASSERT(parse("func bad() outside { }") == nullptr);
+}
+
+void test_outside_convert_overload() {
+    const std::string src = R"(
+struct Student {
+    var name: text
+    var id: text
+
+    func text.__convert__(a: Student) outside overload -> text {
+        return a.name + ":" + a.id
+    }
+}
+
+text(Student("Alice", "1"))
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isString());
+        ASSERT(result.asString() == "Alice:1");
+        return true;
+    }));
+    delete ast;
+}
+
+void test_std_random() {
+    const std::string src = R"(
+use std.random.{randint, randstring}
+let a = randint(1, 3)
+let b = randstring(5)
+[a, b.len()]
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isVector());
+        const auto& slots = result.deref().asVector();
+        ASSERT(slots.size() == 2);
+        ASSERT(slots[0]->deref().isNumber());
+        const int64_t n = slots[0]->deref().asInt();
+        ASSERT(n >= 1 && n <= 3);
+        ASSERT(slots[1]->deref().isNumber());
+        ASSERT(slots[1]->deref().asInt() == 5);
+        return true;
+    }));
+    delete ast;
+}
+
+void test_vector_join() {
+    const std::string src = R"(
+["a", "b", "c"].join("-")
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isString());
+        ASSERT(result.asString() == "a-b-c");
+        return true;
+    }));
+    delete ast;
+}
+
+void test_comprehension_join_chain() {
+    lm::irgen::bytecode_optimize_enabled = false;
+    const std::string src = R"(
+[item for (item in ["a", "b", "c"])].join("-")
+)";
+
+    lmx::ProgramASTNode* ast = parse(src);
+    ASSERT(ast != nullptr);
+    ASSERT(lm::irgen::execute(ast, [](irgen::VM& vm) {
+        ASSERT(!vm.op_stack.empty());
+        const irgen::Value& result = vm.op_stack.top();
+        ASSERT(result.isString());
+        ASSERT(result.asString() == "a-b-c");
         return true;
     }));
     delete ast;

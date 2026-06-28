@@ -245,6 +245,8 @@ private:
 
     ASTNode* parseStructDecl();
 
+    TypeNode* parseType();
+
     TypeNode* parseTypeName();
 
     TypeNode* parseOptionalReturnType();
@@ -478,6 +480,16 @@ private:
      * @brief 解析 struct 内部方法
      */
     FuncDeclNode* parseStructMethod();
+
+    /**
+     * @brief 解析 func 参数列表后的 outside 修饰符
+     */
+    bool parseFuncOutsideModifier();
+
+    /**
+     * @brief 解析 func 参数列表后的 overload 修饰符
+     */
+    bool parseFuncOverloadModifier();
 
     /**
      * @brief 解析推导式绑定列表 (a in b, ...)

@@ -1,10 +1,121 @@
 #include "rational.hpp"
 
+#include <cctype>
 #include <cmath>
 #include <string>
 #include <unordered_map>
 
 namespace lang::lammp {
+namespace {
+
+std::string trim_ascii_whitespace(const std::string& str) {
+    size_t start = 0;
+    while (start < str.size() && std::isspace(static_cast<unsigned char>(str[start]))) {
+        ++start;
+    }
+    size_t end = str.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(str[end - 1]))) {
+        --end;
+    }
+    return str.substr(start, end - start);
+}
+
+} // namespace
+
+bool Rational::looksLikeDecimalLiteral(const std::string& str) {
+    const std::string trimmed = trim_ascii_whitespace(str);
+    size_t idx = 0;
+    if (idx < trimmed.size() && (trimmed[idx] == '+' || trimmed[idx] == '-')) {
+        ++idx;
+    }
+    for (; idx < trimmed.size(); ++idx) {
+        const char c = trimmed[idx];
+        if (c == '.' || c == 'e' || c == 'E') {
+            return true;
+        }
+    }
+    return false;
+}
+
+Rational Rational::fromDecimalString(const std::string& str) {
+    std::string s = trim_ascii_whitespace(str);
+    if (s.empty()) {
+        throw RuntimeError("empty numeric literal");
+    }
+
+    bool neg = false;
+    if (s[0] == '+') {
+        s = s.substr(1);
+    } else if (s[0] == '-') {
+        neg = true;
+        s = s.substr(1);
+    }
+    if (s.empty()) {
+        throw RuntimeError(std::string("invalid numeric literal: ") + str);
+    }
+
+    std::string exp_str;
+    const size_t e_pos = s.find_first_of("eE");
+    if (e_pos != std::string::npos) {
+        exp_str = s.substr(e_pos + 1);
+        s = s.substr(0, e_pos);
+        if (s.empty()) {
+            throw RuntimeError(std::string("invalid numeric literal: ") + str);
+        }
+    }
+
+    std::string int_part;
+    std::string frac_part;
+    const size_t dot_pos = s.find('.');
+    if (dot_pos == std::string::npos) {
+        int_part = s;
+    } else {
+        int_part = s.substr(0, dot_pos);
+        frac_part = s.substr(dot_pos + 1);
+    }
+
+    if (int_part.empty() && frac_part.empty()) {
+        throw RuntimeError(std::string("invalid numeric literal: ") + str);
+    }
+    if (int_part.empty()) {
+        int_part = "0";
+    }
+
+    Number numerator(int_part);
+    Number denominator(1);
+
+    if (!frac_part.empty()) {
+        const Number frac_value(frac_part);
+        const Number scale = Number(10).pow(Number(static_cast<int64_t>(frac_part.size())));
+        numerator = numerator * scale + frac_value;
+        denominator = denominator * scale;
+    }
+
+    if (!exp_str.empty()) {
+        bool exp_neg = false;
+        if (exp_str[0] == '+') {
+            exp_str = exp_str.substr(1);
+        } else if (exp_str[0] == '-') {
+            exp_neg = true;
+            exp_str = exp_str.substr(1);
+        }
+        if (exp_str.empty()) {
+            throw RuntimeError(std::string("invalid numeric literal: ") + str);
+        }
+        const Number exp_value(exp_str);
+        const Number ten(10);
+        const Number power = ten.pow(exp_value);
+        if (exp_neg) {
+            denominator = denominator * power;
+        } else {
+            numerator = numerator * power;
+        }
+    }
+
+    Rational result(numerator, denominator);
+    return neg ? -result : result;
+}
+
 Rational Rational::fromDouble(long double x, long double epsilon) {
     if (std::isnan(x)) {
         throw RuntimeError("invalid numeric value: NaN");

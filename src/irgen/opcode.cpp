@@ -96,7 +96,7 @@ std::string Value::type_name() const {
         case Type::RuntimeAst:
             return "AST";
         case Type::TypeHandle:
-            return asTypeDef()->name;
+            return asTypeDesc()->repr();
         case Type::Iterator:
             return "iter";
         case Type::Reference:
@@ -121,7 +121,7 @@ std::string Value::displayString() const {
         case Type::Function: return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
         case Type::Rational: return asRational().toString();
         case Type::Vector: {
-            std::string result = "vec[";
+            std::string result = "[";
             const auto& elements = std::get<std::vector<std::shared_ptr<Value>>>(data);
             for (size_t i = 0; i < elements.size(); ++i) {
                 if (i > 0) result += ", ";
@@ -172,11 +172,14 @@ std::string Value::displayString() const {
             );
         }
         case Type::TypeHandle: {
-            const auto& def = asTypeDef();
-            if (def->kind == TypeKind::Primitive) {
-                return std::format("<type {}>", def->name);
+            const auto& desc = asTypeDesc();
+            if (const StructTypeDef* raw = desc->as_nominal_def()) {
+                if (raw->kind == TypeKind::Primitive) {
+                    return std::format("<type {}>", raw->name);
+                }
+                return std::format("<type {} (struct)>", raw->name);
             }
-            return std::format("<type {} (struct)>", def->name);
+            return std::format("<type {}>", desc->repr());
         }
         case Type::Iterator:
             return "<iter>";
@@ -203,7 +206,7 @@ std::string Value::printString() const {
         case Type::Function: return std::format("<function at 0x{:x}>", reinterpret_cast<uintptr_t>(this));
         case Type::Rational: return asRational().toString();
         case Type::Vector: {
-            std::string result = "vec[";
+            std::string result = "[";
             const auto& elements = asVector();
             for (size_t i = 0; i < elements.size(); ++i) {
                 if (i > 0) result += ", ";
@@ -255,11 +258,14 @@ std::string Value::printString() const {
             );
         }
         case Type::TypeHandle: {
-            const auto& def = asTypeDef();
-            if (def->kind == TypeKind::Primitive) {
-                return std::format("<type {}>", def->name);
+            const auto& desc = asTypeDesc();
+            if (const StructTypeDef* raw = desc->as_nominal_def()) {
+                if (raw->kind == TypeKind::Primitive) {
+                    return std::format("<type {}>", raw->name);
+                }
+                return std::format("<type {} (struct)>", raw->name);
             }
-            return std::format("<type {} (struct)>", def->name);
+            return std::format("<type {}>", desc->repr());
         }
         case Type::Iterator:
             return "<iter>";
@@ -537,6 +543,10 @@ void VM::init_builtins() {
         main_module->set_attr(type_name, make_type_value(type_name));
     }
 
+    if (const auto vec_ctor = get_type_constructor("vec")) {
+        main_module->set_attr("vec", make_type_value(vec_ctor));
+    }
+
     for (const char* type_name :
          {"BaseException", "Exception", "StopIteration", "RuntimeError", "ValueError", "TypeError"}) {
         main_module->set_attr(type_name, make_type_value(type_name));
@@ -558,25 +568,183 @@ void VM::init_builtins() {
     main_module->set_attr("std", Value(std_module));
 }
 
+namespace {
+
+void init_frame_self_slot(std::vector<Value>& frame, const std::shared_ptr<FunctionObject>& func) {
+    if (!func->self_local_slot.has_value()) {
+        return;
+    }
+    const size_t slot = *func->self_local_slot;
+    if (slot >= frame.size()) {
+        frame.resize(slot + 1);
+    }
+    frame[slot] = Value(func);
+}
+
+bool try_inplace_add(Value& lhs, const Value& rhs) {
+    if (lhs.getType() != Value::Type::Number || rhs.getType() != Value::Type::Number) {
+        return false;
+    }
+    lang::lammp::Number& la = lhs.asNumber();
+    const lang::lammp::Number& ra = rhs.asNumber();
+    if (la.isSmall() && ra.isSmall()) {
+        la.try_add_inplace(ra.toInt64());
+        return true;
+    }
+    la = la + ra;
+    return true;
+}
+
+bool try_inplace_sub(Value& lhs, const Value& rhs) {
+    if (lhs.getType() != Value::Type::Number || rhs.getType() != Value::Type::Number) {
+        return false;
+    }
+    lang::lammp::Number& la = lhs.asNumber();
+    const lang::lammp::Number& ra = rhs.asNumber();
+    if (la.isSmall() && ra.isSmall()) {
+        la.try_sub_inplace(ra.toInt64());
+        return true;
+    }
+    la = la - ra;
+    return true;
+}
+
+void emit_opcode(VM& vm, Opcode& op) {
+    switch (op.index()) {
+        case 0: std::get<PUSH>(op).emit(vm); break;
+        case 1: std::get<ADD>(op).emit(vm); break;
+        case 2: std::get<MUL>(op).emit(vm); break;
+        case 3: std::get<SUB>(op).emit(vm); break;
+        case 4: std::get<DIV>(op).emit(vm); break;
+        case 5: std::get<NEG>(op).emit(vm); break;
+        case 6: std::get<DEREF>(op).emit(vm); break;
+        case 7: std::get<ADDR_OF>(op).emit(vm); break;
+        case 8: std::get<DEREF_PTR>(op).emit(vm); break;
+        case 9: std::get<PTR_TO_REF>(op).emit(vm); break;
+        case 10: std::get<NOT>(op).emit(vm); break;
+        case 11: std::get<TRUTHY_NOT>(op).emit(vm); break;
+        case 12: std::get<AND>(op).emit(vm); break;
+        case 13: std::get<OR>(op).emit(vm); break;
+        case 14: std::get<EQ>(op).emit(vm); break;
+        case 15: std::get<NEQ>(op).emit(vm); break;
+        case 16: std::get<LT>(op).emit(vm); break;
+        case 17: std::get<LTE>(op).emit(vm); break;
+        case 18: std::get<GT>(op).emit(vm); break;
+        case 19: std::get<GTE>(op).emit(vm); break;
+        case 20: std::get<STORE>(op).emit(vm); break;
+        case 21: std::get<LOAD>(op).emit(vm); break;
+        case 22: std::get<LOAD_FAST>(op).emit(vm); break;
+        case 23: std::get<STORE_FAST>(op).emit(vm); break;
+        case 24: std::get<BIND_FAST>(op).emit(vm); break;
+        case 25: std::get<LABEL>(op).emit(vm); break;
+        case 26: std::get<GOTO>(op).emit(vm); break;
+        case 27: std::get<GOTOIF>(op).emit(vm); break;
+        case 28: std::get<GOTOIFNOT>(op).emit(vm); break;
+        case 29: std::get<ENTER_SCOPE>(op).emit(vm); break;
+        case 30: std::get<LEAVE_SCOPE>(op).emit(vm); break;
+        case 31: std::get<CALL>(op).emit(vm); break;
+        case 32: std::get<RET>(op).emit(vm); break;
+        case 33: std::get<FINDMOD>(op).emit(vm); break;
+        case 34: std::get<GETATTR>(op).emit(vm); break;
+        case 35: std::get<VEC_NEW>(op).emit(vm); break;
+        case 36: std::get<DICT_NEW>(op).emit(vm); break;
+        case 37: std::get<INDEX>(op).emit(vm); break;
+        case 38: std::get<STORE_ARG>(op).emit(vm); break;
+        case 39: std::get<NEW_VAR>(op).emit(vm); break;
+        case 40: std::get<NEW_CONST>(op).emit(vm); break;
+        case 41: std::get<NEW_INTERN_VAR>(op).emit(vm); break;
+        case 42: std::get<NEW_INTERN_CONST>(op).emit(vm); break;
+        case 43: std::get<NEW_VAR_OR_LOAD>(op).emit(vm); break;
+        case 44: std::get<RET_THEN_LEAVE_SCOPE>(op).emit(vm); break;
+        case 45: std::get<ITER_NEW>(op).emit(vm); break;
+        case 46: std::get<ITER_NEXT>(op).emit(vm); break;
+        case 47: std::get<ITER_END>(op).emit(vm); break;
+        case 48: std::get<THROW>(op).emit(vm); break;
+        case 49: std::get<ENTER_TRY>(op).emit(vm); break;
+        case 50: std::get<END_TRY>(op).emit(vm); break;
+        case 51: std::get<POP_TRY>(op).emit(vm); break;
+        case 52: std::get<PUSH_EXC>(op).emit(vm); break;
+        case 53: std::get<EXC_MATCH>(op).emit(vm); break;
+        case 54: std::get<IS_INSTANCE>(op).emit(vm); break;
+        case 55: std::get<RETHROW>(op).emit(vm); break;
+        case 56: std::get<STRUCT_NEW>(op).emit(vm); break;
+        case 57: std::get<SET_FIELD>(op).emit(vm); break;
+        case 58: std::get<IS_VECTOR>(op).emit(vm); break;
+        case 59: std::get<VEC_LEN>(op).emit(vm); break;
+        case 60: std::get<MATCH_EQ>(op).emit(vm); break;
+        case 61: std::get<POP>(op).emit(vm); break;
+        default:
+            std::visit([&](auto& instruction) { instruction.emit(vm); }, op);
+            break;
+    }
+}
+
+void jump_to_user_function_entry(VM& vm, const std::shared_ptr<FunctionObject>& func_obj) {
+    const auto label_it = vm.label_table.find(func_obj->location);
+    if (label_it != vm.label_table.end()) {
+        vm.pc = label_it->second;
+        func_obj->entry_pc = label_it->second;
+        return;
+    }
+    if (func_obj->entry_pc != static_cast<size_t>(-1)) {
+        vm.pc = func_obj->entry_pc;
+        return;
+    }
+    VM_RUNTIME_ERROR(vm, "Function label not found: " + std::to_string(func_obj->location));
+}
+
+void invoke_user_function_fast(
+    VM& vm,
+    const std::shared_ptr<FunctionObject>& func_obj,
+    Value arg
+) {
+    if (!func_obj->owner_vm) {
+        func_obj->owner_vm = &vm;
+    }
+    if (func_obj->owner_vm != &vm) {
+        vm.op_stack.push(func_obj->call(vm, {std::move(arg)}));
+        return;
+    }
+
+    vm.call_func_stack.push_back(func_obj);
+    vm.call_stack.push_back(vm.pc);
+    vm.op_stack.push(std::move(arg));
+
+    if (!func_obj->closure.empty()) {
+        for (const auto& scope : func_obj->closure) {
+            vm.symbol_stack.push_back(scope);
+        }
+    }
+
+    jump_to_user_function_entry(vm, func_obj);
+}
+
+} // namespace
+
+const Value& empty_kwargs_value() {
+    static const Value kEmpty{
+        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{}
+    };
+    return kEmpty;
+}
+
 void VM::run() {
 #ifdef ANALYSE
     std::unordered_map<std::string, int> callmap{};
 #endif
-    size_t ops_since_gc = 0;
+#ifdef DEBUG
+    int i = 0;
+    for (const auto& c : code) {
+        LOG(i << "|" << std::visit([](auto& the_code){return the_code.toString();}, c));
+        i++;
+    }
+#endif
     try {
+        size_t ops_since_gc = 0;
         scan_labels();
         for (; pc < code.size(); pc++) {
             try {
-                std::visit(
-                    [&](auto& op) -> void {
-                        LOG("Exec " << pc << " | " << op.name() << " " << op.stringArgs());
-                        op.emit(*this);
-#ifdef ANALYSE
-                        ++callmap[op.name()];
-#endif
-                    },
-                    code[pc]
-                );
+                emit_opcode(*this, code[pc]);
             } catch (const RuntimeError& e) {
                 op_stack.clear();
                 if (is_stop_iteration(e)) {
@@ -588,7 +756,7 @@ void VM::run() {
                 throw;
             }
 
-            if (++ops_since_gc >= 1000000 && gc_suppress_depth == 0) {
+            if (++ops_since_gc >= 10000000 && gc_suppress_depth == 0) {
                 LOG("GC");
                 collectGarbage();
                 ops_since_gc = 0;
@@ -603,7 +771,10 @@ void VM::run() {
         }
 #endif
 
-        if (!op_stack.empty()) {
+        // Top-level run() collapses the stack to a single return value. Nested
+        // FunctionObject::call uses the same loop but must preserve outer stack
+        // slots below op_stack_base (e.g. earlier call arguments).
+        if (nested_function_run_depth == 0 && !op_stack.empty()) {
             Value top = detach_value(op_stack.popValue());
             op_stack.clear();
             op_stack.push(std::move(top));
@@ -715,10 +886,15 @@ void VM::shutdown() {
         clear_module_owner_backrefs(*main_module, this);
     }
     main_module.reset();
+    cell_pool.markDestroying();
 }
 
 VM::~VM() {
-    LOG("~VM");
+    if (main_module) {
+        shutdown();
+    } else {
+        cell_pool.markDestroying();
+    }
 }
 
 std::optional<Value> VM::get_symbol(const std::string& name) const {
@@ -791,6 +967,9 @@ inline void PUSH::emit(VM& vm) const {
 
 inline void ADD::emit(VM& vm) {
     Value rhs = vm.op_stack.popValue();
+    if (try_inplace_add(vm.op_stack.top(), rhs)) {
+        return;
+    }
     Value lhs = vm.op_stack.popValue();
     vm.op_stack.push(lhs.deref() + rhs.deref());
 }
@@ -806,6 +985,9 @@ inline void MUL::emit(VM& vm) {
 
 inline void SUB::emit(VM& vm) {
     Value rhs = vm.op_stack.popValue();
+    if (try_inplace_sub(vm.op_stack.top(), rhs)) {
+        return;
+    }
     Value lhs = vm.op_stack.popValue();
     vm.op_stack.push(lhs.deref() - rhs.deref());
 }
@@ -894,8 +1076,12 @@ inline void LT::emit(VM& vm) {
 }
 
 inline void LTE::emit(VM& vm) {
-    auto b = vm.op_stack.popValue();
-    auto a = vm.op_stack.popValue();
+    Value b = vm.op_stack.popValue();
+    Value a = vm.op_stack.popValue();
+    if (a.getType() == Value::Type::Number && b.getType() == Value::Type::Number) {
+        vm.op_stack.push(Value(a.asNumber() <= b.asNumber()));
+        return;
+    }
     vm.op_stack.push(a.deref() <= b.deref());
 }
 
@@ -1037,33 +1223,61 @@ inline void GOTO::emit(VM& vm) const {
 }
 
 inline void GOTOIF::emit(VM& vm) const {
-    if (vm.op_stack.popValue().isTruthy()) {
-        if (not vm.label_table.contains(label_id)) {
-            VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
+    const Value cond = vm.op_stack.popValue();
+    if (cond.getType() == Value::Type::Bool) {
+        if (cond.asBool()) {
+            vm.pc = vm.label_table.at(label_id);
         }
-        vm.pc = vm.label_table[label_id];
+        return;
+    }
+    if (cond.getType() == Value::Type::Number) {
+        if (!cond.asNumber().isZero()) {
+            vm.pc = vm.label_table.at(label_id);
+        }
+        return;
+    }
+    if (cond.isTruthy()) {
+        vm.pc = vm.label_table.at(label_id);
     }
 }
 
 inline void GOTOIFNOT::emit(VM& vm) const {
-    if (!vm.op_stack.popValue().isTruthy()) {
-        if (not vm.label_table.contains(label_id)) {
-            VM_RUNTIME_ERROR(vm,"Unknown label: " + std::to_string(label_id));
+    const Value cond = vm.op_stack.popValue();
+    if (cond.getType() == Value::Type::Bool) {
+        if (!cond.asBool()) {
+            vm.pc = vm.label_table.at(label_id);
         }
-        vm.pc = vm.label_table[label_id];
+        return;
+    }
+    if (cond.getType() == Value::Type::Number) {
+        if (cond.asNumber().isZero()) {
+            vm.pc = vm.label_table.at(label_id);
+        }
+        return;
+    }
+    if (!cond.isTruthy()) {
+        vm.pc = vm.label_table.at(label_id);
     }
 }
 
 inline void ENTER_SCOPE::emit(VM& vm) {
-    LOG("ENTER_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
     vm.symbol_stack.emplace_back();
-    vm.locals_stack.emplace_back();
+    auto& frame = vm.locals_stack.emplace_back();
+    if (!vm.call_func_stack.empty()) {
+        const auto& func = vm.call_func_stack.back();
+        if (func->fast_local_slot_count > 0) {
+            frame.resize(func->fast_local_slot_count);
+        }
+        if (func->uses_light_frame()) {
+            // light_frame: no self slot, no symbol_bind
+        } else {
+            init_frame_self_slot(frame, func);
+        }
+    }
     vm.cache.enter_scope();
-    LOG("ENTER_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
 }
 
 inline void LEAVE_SCOPE::emit(VM& vm) {
-    LOG("LEAVE_SCOPE: symbol_stack before=" << vm.symbol_stack.size());
     if (vm.symbol_stack.size() > 1) {
         vm.symbol_stack.pop_back();
     }
@@ -1071,7 +1285,6 @@ inline void LEAVE_SCOPE::emit(VM& vm) {
         vm.locals_stack.pop_back();
     }
     vm.cache.leave_scope();
-    LOG("LEAVE_SCOPE: symbol_stack after=" << vm.symbol_stack.size());
 }
 
 Value eval_param_default(VM& vm, const std::vector<Opcode>& ir) {
@@ -1121,7 +1334,7 @@ void run_vm_until_call_depth(VM& vm, const size_t target_depth) {
             throw RuntimeError("nested call ran past end of bytecode");
         }
         try {
-            std::visit([&](auto& op) { op.emit(vm); }, vm.code[vm.pc]);
+            emit_opcode(vm, vm.code[vm.pc]);
         } catch (const RuntimeError& e) {
             vm.op_stack.clear();
             if (is_stop_iteration(e)) {
@@ -1206,6 +1419,17 @@ Value run_ir_snippet(VM& vm, const std::vector<Opcode>& ir) {
 namespace {
 
 std::vector<Value> pop_positional_args(VM& vm, const size_t count) {
+    LOG("[CALL] pop_positional_args count=" << count << " stack=" << vm.op_stack.size());
+    if (vm.op_stack.size() < count) {
+        VM_RUNTIME_ERROR(
+            vm,
+            std::format(
+                "CALL: need {} positional arg(s) on stack, have {}",
+                count,
+                vm.op_stack.size()
+            )
+        );
+    }
     std::vector<Value> positional;
     positional.reserve(count);
     for (size_t i = count; i > 0; --i) {
@@ -1215,10 +1439,7 @@ std::vector<Value> pop_positional_args(VM& vm, const size_t count) {
     return positional;
 }
 
-Value pop_kwargs_dict(VM& vm, const bool has_kwargs) {
-    if (!has_kwargs) {
-        return Value(std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{});
-    }
+Value take_kwargs_dict(VM& vm) {
     return vm.op_stack.popValue();
 }
 
@@ -1233,6 +1454,13 @@ std::vector<Value> resolve_user_function_args(
     const size_t param_count = func_obj.params.size();
     if (func_obj.param_default_ir.size() != param_count) {
         VM_RUNTIME_ERROR(vm, "internal error: parameter metadata mismatch");
+    }
+
+    if (!func_obj.variadic_param_index && param_count == 1 && positional.size() == 1) {
+        const Value& kwargs = kwargs_value.deref();
+        if (kwargs.getType() == Value::Type::Dictionary && kwargs.asDictionary().empty()) {
+            return positional;
+        }
     }
 
     std::vector<Value> resolved(param_count);
@@ -1289,14 +1517,20 @@ std::vector<Value> resolve_user_function_args(
             VM_RUNTIME_ERROR(vm, "keyword argument names must be strings");
         }
         const std::string& kw_name = key.asString();
-        auto it = std::ranges::find(func_obj.params, kw_name);
-        if (it == func_obj.params.end()) {
+        if (func_obj.param_name_to_index.empty() && !func_obj.params.empty()) {
+            auto& cache = func_obj.param_name_to_index;
+            for (size_t i = 0; i < func_obj.params.size(); ++i) {
+                cache[func_obj.params[i]] = i;
+            }
+        }
+        const auto name_it = func_obj.param_name_to_index.find(kw_name);
+        if (name_it == func_obj.param_name_to_index.end()) {
             VM_RUNTIME_ERROR(
                 vm,
                 std::format("function {} has no parameter named '{}'", func_obj.name, kw_name)
             );
         }
-        const size_t index = static_cast<size_t>(std::distance(func_obj.params.begin(), it));
+        const size_t index = name_it->second;
         if (filled[index]) {
             VM_RUNTIME_ERROR(
                 vm,
@@ -1353,11 +1587,7 @@ void invoke_user_function_with_args_impl(VM& vm, const std::shared_ptr<FunctionO
         }
     }
 
-    const auto label_it = vm.label_table.find(func_obj->location);
-    if (label_it == vm.label_table.end()) {
-        VM_RUNTIME_ERROR(vm, "Function label not found: " + std::to_string(func_obj->location));
-    }
-    vm.pc = label_it->second;
+    jump_to_user_function_entry(vm, func_obj);
 }
 
 } // namespace
@@ -1389,9 +1619,12 @@ Value call_user_function_sync(
 
     const size_t call_depth = vm.call_stack.size();
     const size_t op_depth = vm.op_stack.size();
+    const size_t saved_pc = vm.pc;
 
     invoke_user_function_with_args_impl(vm, func_obj, std::move(args));
     run_vm_until_call_depth(vm, call_depth);
+
+    vm.pc = saved_pc;
 
     if (vm.op_stack.size() > op_depth) {
         Value result = vm.op_stack.popValue();
@@ -1404,22 +1637,49 @@ Value call_user_function_sync(
 }
 
 inline void CALL::emit(VM& vm) const {
+    LOG("[CALL] enter pc=" << vm.pc << " arg_count=" << arg_count
+        << " has_kwargs=" << has_kwargs << " splat_mask=" << splat_mask
+        << " stack=" << vm.op_stack.size());
     Value func = vm.op_stack.popValue();
-    LOG(ITIS(,func,.toString()) << ", true val type: " << func.deref().type_name());
+    LOG("[CALL] callee type=" << func.deref().type_name()
+        << " isTypeHandle=" << func.isTypeHandle()
+        << " isFriendFunction=" << func.isFriendFunction()
+        << " isFunction=" << func.isFunction()
+        << " isUserFunction=" << func.isUserFunction()
+        << " stack_after_pop_callee=" << vm.op_stack.size());
+    if (func.isUserFunction()) {
+        LOG("[CALL] user fn name=" << func.asFunctionObject()->name
+            << " params=" << func.asFunctionObject()->params.size()
+            << " entry_pc=" << func.asFunctionObject()->entry_pc);
+    }
 
     if (func.isTypeHandle()) {
-        const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
-        std::vector<Value> raw = pop_positional_args(vm, arg_count);
-        const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
-        vm.op_stack.push(type_call(vm, func.asTypeDef(), positional, kwargs));
+        LOG("[CALL] branch=TypeHandle");
+        if (has_kwargs) {
+            const Value kwargs = take_kwargs_dict(vm);
+            std::vector<Value> raw = pop_positional_args(vm, arg_count);
+            const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
+            vm.op_stack.push(type_call(vm, func.asTypeDesc(), positional, kwargs));
+        } else {
+            std::vector<Value> raw = pop_positional_args(vm, arg_count);
+            const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
+            vm.op_stack.push(type_call(vm, func.asTypeDesc(), positional, empty_kwargs_value()));
+        }
         return;
     }
 
     if (func.isFriendFunction()) {
-        const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
-        std::vector<Value> raw = pop_positional_args(vm, arg_count);
-        const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
-        friend_invoke_dispatch(vm, func.asFriendFunction(), positional, kwargs);
+        LOG("[CALL] branch=FriendFunction");
+        if (has_kwargs) {
+            const Value kwargs = take_kwargs_dict(vm);
+            std::vector<Value> raw = pop_positional_args(vm, arg_count);
+            const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
+            friend_invoke_dispatch(vm, func.asFriendFunction(), positional, kwargs);
+        } else {
+            std::vector<Value> raw = pop_positional_args(vm, arg_count);
+            const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
+            friend_invoke_dispatch(vm, func.asFriendFunction(), positional, empty_kwargs_value());
+        }
         return;
     }
 
@@ -1428,8 +1688,38 @@ inline void CALL::emit(VM& vm) const {
     }
 
     if (func.isUserFunction()) {
+        LOG("[CALL] branch=UserFunction");
         auto func_obj = func.asFunctionObject();
-        const Value kwargs = pop_kwargs_dict(vm, has_kwargs);
+        if (!func_obj->is_macro && arg_count == 1 && !has_kwargs && splat_mask == 0 &&
+            func_obj->params.size() == 1 && !func_obj->variadic_param_index &&
+            func_obj->param_default_ir[0].empty()) {
+            LOG("[CALL] user fast-path 1-arg");
+            Value arg = vm.op_stack.popValue();
+            invoke_user_function_fast(vm, func_obj, std::move(arg));
+            return;
+        }
+
+        if (!has_kwargs) {
+            std::vector<Value> raw = pop_positional_args(vm, arg_count);
+            const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
+            std::vector<Value> resolved =
+                resolve_user_function_args(vm, *func_obj, positional, empty_kwargs_value());
+
+            if (func_obj->is_macro) {
+                if (!func_obj->owner_vm) {
+                    func_obj->owner_vm = &vm;
+                }
+                vm.macro_eval_scope_stack.push_back(vm.symbol_stack);
+                invoke_user_function_with_args(vm, func_obj, std::move(resolved));
+                return;
+            }
+
+            invoke_user_function_with_args(vm, func_obj, std::move(resolved));
+            LOG("[CALL] user invoke done pc=" << vm.pc << " call_depth=" << vm.call_stack.size());
+            return;
+        }
+
+        const Value kwargs = take_kwargs_dict(vm);
         std::vector<Value> raw = pop_positional_args(vm, arg_count);
         const std::vector<Value> positional = resolve_call_args_with_splat(vm, raw, splat_mask);
         std::vector<Value> resolved = resolve_user_function_args(vm, *func_obj, positional, kwargs);
@@ -1444,9 +1734,11 @@ inline void CALL::emit(VM& vm) const {
         }
 
         invoke_user_function_with_args(vm, func_obj, std::move(resolved));
+        LOG("[CALL] user invoke (kwargs) done pc=" << vm.pc);
         return;
     }
 
+    LOG("[CALL] branch=Builtin");
     if (has_kwargs) {
         VM_RUNTIME_ERROR(vm, "keyword arguments are not supported for builtin functions");
     }
@@ -1562,13 +1854,13 @@ inline void GETATTR::emit(VM& vm) const {
             return;
         }
         if (val.getType() == Value::Type::TypeHandle) {
-            if (const auto attr = type_get_attr(vm, val.asTypeDef(), attr_name)) {
+            if (const auto attr = type_get_attr(vm, val.asTypeDesc(), attr_name)) {
                 vm.op_stack.push(*attr);
                 return;
             }
             VM_RUNTIME_ERROR(
                 vm,
-                std::format("Attribute '{}' not found on type {}", attr_name, val.asTypeDef()->name)
+                std::format("Attribute '{}' not found on type {}", attr_name, val.asTypeDesc()->repr())
             );
         }
         if (val.getType() == Value::Type::FriendFunction) {
@@ -1601,7 +1893,7 @@ inline void GETATTR::emit(VM& vm) const {
         return;
     }
     if (val.getType() == Value::Type::TypeHandle) {
-        if (const auto attr = type_get_attr(vm, val.asTypeDef(), attr_name)) {
+        if (const auto attr = type_get_attr(vm, val.asTypeDesc(), attr_name)) {
             vm.op_stack.push(*attr);
             return;
         }
@@ -1691,6 +1983,10 @@ inline void MATCH_EQ::emit(VM& vm) const {
     const Value b = vm.op_stack.popValue();
     const Value a = vm.op_stack.popValue();
     vm.op_stack.push(Value(match_values_equal(a, b)));
+}
+
+inline void POP::emit(VM& vm) const {
+    (void)vm.op_stack.popValue();
 }
 
 inline void VEC_NEW::emit(VM& vm) const {
@@ -1846,20 +2142,20 @@ void NEW_VAR_OR_LOAD::emit(VM& vm) const {
 }
 
 void RET_THEN_LEAVE_SCOPE::emit(VM& vm) const {
-    LOG("[ret_leave] step1 RET begin sym=" << vm.symbol_stack.size()
-        << " loc=" << vm.locals_stack.size());
     RET().emit(vm);
-    LOG("[ret_leave] step2 RET done sym=" << vm.symbol_stack.size()
-        << " op_stack=" << vm.op_stack.size());
-    LOG("[ret_leave] step3 LEAVE_SCOPE begin");
     LEAVE_SCOPE().emit(vm);
-    LOG("[ret_leave] step4 LEAVE_SCOPE done sym=" << vm.symbol_stack.size()
-        << " loc=" << vm.locals_stack.size()
-        << " cache=" << vm.cache.scope_depth());
 }
 
 inline void LOAD_FAST::emit(VM& vm) const {
     LOG("LOAD_FAST: slot_index=" << slot);
+
+    if (!vm.call_func_stack.empty()) {
+        const auto& func = vm.call_func_stack.back();
+        if (func->uses_light_frame() && func->self_local_slot && slot == *func->self_local_slot) {
+            vm.op_stack.push(Value(func));
+            return;
+        }
+    }
 
     if (vm.locals_stack.empty()) {
         VM_RUNTIME_ERROR(vm,"LOAD_FAST: No locals scope available");
@@ -2051,10 +2347,8 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
         VM_RUNTIME_ERROR(caller_vm, "Function has no owner VM");
     }
 
-    const Value empty_kwargs(
-        std::unordered_map<std::shared_ptr<Value>, std::shared_ptr<Value>>{}
-    );
-    const std::vector<Value> resolved = resolve_user_function_args(caller_vm, *this, args, empty_kwargs);
+    const std::vector<Value> resolved =
+        resolve_user_function_args(caller_vm, *this, args, empty_kwargs_value());
 
     VM& target_vm = *owner_vm;
 
@@ -2141,7 +2435,8 @@ Value FunctionObject::call(VM& caller_vm, const std::vector<Value>& args) {
 template<StringType string>
 ModuleObject::ModuleObject(string code, string package_name) : is_user(true) {
     const auto codes = lm::irgen::Generator(parse(code)).gen();
-    owner_vm = new VM(codes);
+    owned_vm_ = std::make_unique<VM>(codes);
+    owner_vm = owned_vm_.get();
     owner_vm->set_symbol("__package__", Value(std::move(package_name)));
     owner_vm->run();
 
