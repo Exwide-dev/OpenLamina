@@ -28,6 +28,9 @@ int main(const int argc, char* argv[]) {
     }
 
     if (!args.file_path.empty()) {
+        if (args.check) {
+            return cli::run_check(args.file_path, args.view_log);
+        }
         if (args.compile) {
             return cli::compile_file(args.file_path, args.output_path);
         }

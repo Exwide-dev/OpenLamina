@@ -713,10 +713,17 @@ ASTNode* Parser::parseVarDecl() {
     std::string name = current_token().value;
     const int decl_line = current_token().line;
     consume(TokenType::IDENTIFIER);
+
+    // Optional type annotation: `let a: Type = ...`
+    TypeNode* type_anno = nullptr;
+    if (match(TokenType::OPER_COLON)) {
+        type_anno = parseType();
+    }
+
     consume(TokenType::ASSIGN);
     ExprNode* value = parseExpression();
 
-    return make_node_at<VarDeclNode>(decl_line, name, value, is_const, visibility);
+    return make_node_at<VarDeclNode>(decl_line, name, value, is_const, visibility, type_anno);
 }
 
 ASTNode* Parser::parseAssignStmt() {

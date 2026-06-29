@@ -57,6 +57,16 @@ struct CellPool::Impl {
     void markModuleExports(const ModuleObject& module);
     void sweepUnmarked();
     void tryCollectBeforeGrow(CellPool& owner);
+
+    ~Impl() {
+        LOG("~Impl");
+        for (auto& chunk : chunks) {
+            if (not chunk) {
+                LOG("a chunk is nullptr");
+                chunk.release();
+            }
+        }
+    }
 };
 
 CellPool::CellPool() : impl_(std::make_unique<Impl>()) {
@@ -75,6 +85,7 @@ void CellPool::bindOwner(VM* vm) {
 }
 
 void CellPool::markDestroying() noexcept {
+    LOG("Set CellPool's destroying_ to true.");
     destroying_ = true;
 }
 

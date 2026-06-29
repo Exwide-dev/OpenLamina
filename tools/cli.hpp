@@ -20,6 +20,8 @@ struct Args {
     bool show_version = false;
     bool optimize = true;
     bool compile = false;
+    bool check = false;
+    bool view_log = false;
     std::string file_path;
     std::string output_path;
     std::vector<std::string> script_args;
@@ -47,9 +49,16 @@ int run_file(const std::string& file_path, const std::vector<std::string>& args)
 int run_bytecode_file(const std::string& file_path);
 
 /**
-     * @brief 将 .lm 源文件编译为 .lmc 字节码
-     */
+ * @brief 将 .lm 源文件编译为 .lmc 字节码
+ */
 int compile_file(const std::string& file_path, const std::string& output_path);
+
+/**
+ * @brief 运行静态类型检查
+ * @param file_path 要检查的文件路径
+ * @param verbose_log 是否输出详细日志
+ */
+int run_check(const std::string& file_path, bool verbose_log = false);
 
 /**
      * @brief 启动 REPL 交互环境

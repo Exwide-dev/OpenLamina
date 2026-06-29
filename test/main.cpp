@@ -218,6 +218,7 @@ void test_outside_convert_overload();
 void test_std_random();
 void test_vector_join();
 void test_comprehension_join_chain();
+void test_checker_diagnostics();
 
 int main() {
     //test::run("vm_goto", test_vm_goto);
@@ -257,6 +258,7 @@ int main() {
         test::run("std_random", test_std_random);
         test::run("vector_join", test_vector_join);
         test::run("comprehension_join_chain", test_comprehension_join_chain);
+        test::run("checker_diagnostics", test_checker_diagnostics);
     } catch (const std::exception& e) {
         std::cerr << e.what() << std::endl;
     } catch (...) {

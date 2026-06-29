@@ -425,6 +425,7 @@ Number& Number::operator=(Number&& other) noexcept {
 }
 
 bool Number::isZero() const {
+    LOG("isZero?");
     if (is_small()) {
         return get_small() == 0;
     }
@@ -707,6 +708,16 @@ Number Number::sqrt() const {
     return Number(result);
 }
 
+Number Number::abs() const {
+    if (is_small()) {
+        int64_t v = get_small();
+        return Number(v < 0 ? -v : v);
+    }
+    Number result(*this);
+    result.get_big().is_negative = false;
+    return result;
+}
+
 Number Number::gcd(const Number& other) const {
     Number a = abs();
     Number b = other.abs();
@@ -718,16 +729,6 @@ Number Number::gcd(const Number& other) const {
     }
 
     return a;
-}
-
-Number Number::abs() const {
-    if (is_small()) {
-        int64_t v = get_small();
-        return Number(v < 0 ? -v : v);
-    }
-    Number result(*this);
-    result.get_big().is_negative = false;
-    return result;
 }
 
 Number Number::fromString(const std::string& str, int base) {

@@ -71,7 +71,8 @@ Value next_builtin(VM& vm, ArgT args);
 void init_builtins(irgen::SymbolTable& symbols, irgen::CellPool& pool);
 
 /**
- * @brief 标准模块实例
+ * @brief 标准模块实例（首次访问时懒构造，避免静态初始化顺序问题）
+ * @return 标准模块的引用
  */
-extern irgen::ModuleObject standard_mod;
+irgen::ModuleObject& standard_mod();
 }

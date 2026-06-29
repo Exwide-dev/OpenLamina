@@ -1,4 +1,5 @@
 #include "test.hpp"
+#include "tools/checker.hpp"
 #include "front-end/front_end.hpp"
 #include "irgen/generator.hpp"
 #include "irgen/value_copy.hpp"
@@ -7,6 +8,7 @@
 
 #include <format>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -1324,4 +1326,282 @@ void test_comprehension_join_chain() {
         return true;
     }));
     delete ast;
+}
+
+// ---------------------------------------------------------------------------
+// Static type-checker diagnostics demo.
+//
+// This is an *observation* test: it writes a handful of small .lm programs to
+// a temp directory, runs `olmcheck::run_check` on each, and prints whatever
+// the new checker reports. There are deliberately no ASSERTs — the developer
+// is expected to eyeball the diagnostics (severity badges, source snippets,
+// caret, and "help:" hints) and confirm they look reasonable.
+// ---------------------------------------------------------------------------
+void test_checker_diagnostics() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::current_path() / "_Temp";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    struct Case {
+        const char* name;
+        const char* source;
+    };
+    const Case cases[] = {
+        // 1. Clean program — expect "No issues found."
+        {
+            "01_clean",
+            R"(
+typed struct Point {
+    let x: num
+    let y: num
+}
+func mk(x: num, y: num) -> Point {
+    return Point(x, y)
+}
+let p = mk(3, 4)
+let sum = p.x + p.y
+)"
+        },
+        // 2. Binary operator type mismatch
+        {
+            "02_binary_mismatch",
+            R"(
+let s = "hello"
+let bad = s - 1
+)"
+        },
+        // 3. Struct field default value type mismatch
+        {
+            "03_field_default_mismatch",
+            R"(
+typed struct Box {
+    let x: num = "oops"
+}
+)"
+        },
+        // 4. Function parameter default value type mismatch
+        {
+            "04_param_default_mismatch",
+            R"(
+func f(x: num = "nope") {
+    return x
+}
+)"
+        },
+        // 5. Return type mismatch
+        {
+            "05_return_mismatch",
+            R"(
+func f() -> text {
+    return 42
+}
+)"
+        },
+        // 6. Unknown type name (typo) — expect a "did you mean" hint
+        {
+            "06_unknown_type_typo",
+            R"(
+typed struct S {
+    let x: numerik
+}
+)"
+        },
+        // 7. Struct construction: wrong argument type
+        {
+            "07_construct_arg_type",
+            R"(
+typed struct Student {
+    let name: text
+    let id: text
+}
+let s = Student(42, "001")
+)"
+        },
+        // 8. Struct construction: too many arguments
+        {
+            "08_construct_arity",
+            R"(
+typed struct Student {
+    let name: text
+    let id: text
+}
+let s = Student("Ann", "001", "extra")
+)"
+        },
+        // 9. Member access: no such field — expect "did you mean `name`"
+        {
+            "09_no_such_field_access",
+            R"(
+typed struct Student {
+    let name: text
+    let id: text
+}
+let s = Student("Ann", "001")
+let n = s.namme
+)"
+        },
+        // 10. Assignment to a nonexistent field
+        {
+            "10_no_such_field_assign",
+            R"(
+typed struct Student {
+    let name: text
+    let id: text
+}
+let s = Student("Ann", "001")
+s.namme = "Bob"
+)"
+        },
+        // 11. Missing return annotation — expect a hint suggesting `num`
+        {
+            "11_missing_return_hint",
+            R"(
+func double(n) {
+    return n + n
+}
+)"
+        },
+        // 12. Untyped parameter with a default — expect a hint
+        {
+            "12_untyped_param_default_hint",
+            R"(
+func f(x = 3) {
+    return x
+}
+)"
+        },
+        // 13. Untyped parameter inferred from body usage — expect a hint
+        {
+            "13_untyped_param_usage_hint",
+            R"(
+func g(y) {
+    return y + 1
+}
+)"
+        },
+        // 14. Untyped struct field with a default — expect a hint
+        {
+            "14_untyped_field_hint",
+            R"(
+struct S {
+    let x = 3
+}
+)"
+        },
+        // 15. Non-bool if condition
+        {
+            "15_if_cond_mismatch",
+            R"(
+if (42) {
+    print("hi")
+}
+)"
+        },
+        // 16. Unannotated reassignment across types — NOT a problem (dynamic)
+        {
+            "16_dynamic_reassign",
+            R"(
+let x = 1
+x = "hello"
+)"
+        },
+        // 17. Optional/Maybe accepts both payload and none
+        {
+            "17_maybe_optional_ok",
+            R"(
+typed struct Opt {
+    let x: Maybe[num]
+}
+let a = Opt(7)
+let b = Opt(none)
+)"
+        },
+        // 18. Struct subtyping via `: base` — should be accepted
+        {
+            "18_struct_subtype_ok",
+            R"(
+struct SubLabel : text {
+    var value: text
+}
+func take_text(t: text) {
+    return t
+}
+let s = SubLabel("hi")
+take_text(s)
+)"
+        },
+        // 19. Vector element type inconsistency warning
+        {
+            "19_heterogeneous_vector",
+            R"(
+let xs = [1, "two", 3]
+)"
+        },
+        // 20. and/or with non-bool operand
+        {
+            "20_logic_non_bool",
+            R"(
+let r = 1 and 2
+)"
+        },
+        // 21. Annotated `let` with a matching initializer — no error
+        {
+            "21_let_annotation_ok",
+            R"(
+let a: num = 1
+let b: text = "hello"
+)"
+        },
+        // 22. Annotated `let` with a mismatched initializer — error
+        {
+            "22_let_annotation_mismatch",
+            R"(
+let a: num = "text"
+)"
+        },
+        // 23. Unannotated dynamic reassignment — NOT a problem
+        {
+            "23_dynamic_reassign_ok",
+            R"(
+let a = 1
+a = "a"
+a = true
+)"
+        },
+        // 24. Annotated variable reassigned to a wrong type — error
+        {
+            "24_annotated_reassign_mismatch",
+            R"(
+let a: num = 1
+a = "a"
+)"
+        },
+        // 25. Annotated `let` with a user-defined struct type
+        {
+            "25_let_annotation_struct",
+            R"(
+typed struct Student {
+    let name: text
+    let id: text
+}
+let s: Student = Student("Ann", "001")
+let bad: Student = 42
+)"
+        },
+    };
+
+    for (const auto& c : cases) {
+        const fs::path file = dir / (std::string(c.name) + ".lm");
+        std::ofstream out(file);
+        out << c.source;
+        out.close();
+
+        std::cerr << "\n========== " << c.name << " ==========\n";
+        std::cerr << "--- source ---\n" << c.source;
+        std::cerr << "--- checker output ---\n";
+        (void)olmcheck::run_check(file.string(), false);
+    }
+    std::cerr << "\n========== end of checker diagnostics ==========\n";
 }

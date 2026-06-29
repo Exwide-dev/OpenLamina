@@ -2337,7 +2337,7 @@ std::vector<::irgen::Opcode> gen_code(
             if (i > 0) full_module_name += ".";
             full_module_name += use_node->module_name[i];
         }
-        const std::string mod_temp = std::format("__use_mod_{}", label_counter++);
+        const std::string mod_temp = "__use_mod_" + std::to_string(label_counter++);
         push_op(code, src, src_line_no, ::irgen::FINDMOD(full_module_name));
         push_op(code, src, src_line_no, ::irgen::NEW_INTERN_VAR(mod_temp));
         push_op(code, src, src_line_no, ::irgen::STORE());

@@ -415,47 +415,53 @@ Value dict_get(VM& vm, const std::vector<Value>& args) {
     throw RuntimeError("Key not found: " + key->toString());
 }
 
-irgen::ModuleObject math_mod = [] {
-    std::map<size_t, std::shared_ptr<irgen::Value>> math_symbols;
+irgen::ModuleObject& math_mod() {
+    static irgen::ModuleObject inst = [] {
+        std::map<size_t, std::shared_ptr<irgen::Value>> math_symbols;
 
-    math_symbols[irgen::g_string_pool.add("sin")] = std::make_shared<
-        irgen::Value>(Value(irgen::FunctionType(math_sin)));
-    math_symbols[irgen::g_string_pool.add("cos")] = std::make_shared<
-        irgen::Value>(Value(irgen::FunctionType(math_cos)));
-    math_symbols[irgen::g_string_pool.add("tan")] = std::make_shared<
-        irgen::Value>(Value(irgen::FunctionType(math_tan)));
-    math_symbols[irgen::g_string_pool.add("sqrt")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(math_sqrt))
-    );
-    math_symbols[irgen::g_string_pool.add("abs")] = std::make_shared<
-        irgen::Value>(Value(irgen::FunctionType(math_abs)));
-    math_symbols[irgen::g_string_pool.add("range")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(math_range))
-    );
-    math_symbols[irgen::g_string_pool.add("pi")] = std::make_shared<irgen::Value>(
-        Value(Rational::fromDouble(3.14159265358979323846L))
-    );
+        math_symbols[irgen::g_string_pool.add("sin")] = std::make_shared<
+            irgen::Value>(Value(irgen::FunctionType(math_sin)));
+        math_symbols[irgen::g_string_pool.add("cos")] = std::make_shared<
+            irgen::Value>(Value(irgen::FunctionType(math_cos)));
+        math_symbols[irgen::g_string_pool.add("tan")] = std::make_shared<
+            irgen::Value>(Value(irgen::FunctionType(math_tan)));
+        math_symbols[irgen::g_string_pool.add("sqrt")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(math_sqrt))
+        );
+        math_symbols[irgen::g_string_pool.add("abs")] = std::make_shared<
+            irgen::Value>(Value(irgen::FunctionType(math_abs)));
+        math_symbols[irgen::g_string_pool.add("range")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(math_range))
+        );
+        math_symbols[irgen::g_string_pool.add("pi")] = std::make_shared<irgen::Value>(
+            Value(Rational::fromDouble(3.14159265358979323846L))
+        );
 
-    return irgen::ModuleObject(irgen::SymbolTable(math_symbols));
-}();
+        return irgen::ModuleObject(irgen::SymbolTable(math_symbols));
+    }();
+    return inst;
+}
 
-irgen::ModuleObject dict_mod = [] {
-    std::map<size_t, std::shared_ptr<irgen::Value>> dict_symbols;
+irgen::ModuleObject& dict_mod() {
+    static irgen::ModuleObject inst = [] {
+        std::map<size_t, std::shared_ptr<irgen::Value>> dict_symbols;
 
-    dict_symbols[irgen::g_string_pool.add("keys")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(dict_keys))
-    );
-    dict_symbols[irgen::g_string_pool.add("values")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(dict_values))
-    );
-    dict_symbols[irgen::g_string_pool.add("items")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(dict_items))
-    );
-    dict_symbols[irgen::g_string_pool.add("get")] = std::make_shared<
-        irgen::Value>(Value(irgen::FunctionType(dict_get)));
+        dict_symbols[irgen::g_string_pool.add("keys")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(dict_keys))
+        );
+        dict_symbols[irgen::g_string_pool.add("values")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(dict_values))
+        );
+        dict_symbols[irgen::g_string_pool.add("items")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(dict_items))
+        );
+        dict_symbols[irgen::g_string_pool.add("get")] = std::make_shared<
+            irgen::Value>(Value(irgen::FunctionType(dict_get)));
 
-    return irgen::ModuleObject(irgen::SymbolTable(dict_symbols));
-}();
+        return irgen::ModuleObject(irgen::SymbolTable(dict_symbols));
+    }();
+    return inst;
+}
 
 Value deco_memoize(VM& vm, const std::vector<Value>& args) {
     arg_must("memoize", 1);
@@ -786,86 +792,92 @@ Value deco_catch(VM& vm, const std::vector<Value>& args) {
     );
 }
 
-irgen::ModuleObject decos_mod = [] {
-    std::map<size_t, std::shared_ptr<irgen::Value>> decos_symbols;
+irgen::ModuleObject& decos_mod() {
+    static irgen::ModuleObject inst = [] {
+        std::map<size_t, std::shared_ptr<irgen::Value>> decos_symbols;
 
-    decos_symbols[irgen::g_string_pool.add("memoize")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_memoize))
-    );
-    decos_symbols[irgen::g_string_pool.add("timer")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_timer))
-    );
-    decos_symbols[irgen::g_string_pool.add("debug")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_debug))
-    );
-    decos_symbols[irgen::g_string_pool.add("log")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_log))
-    );
-    decos_symbols[irgen::g_string_pool.add("once")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_once))
-    );
-    decos_symbols[irgen::g_string_pool.add("retry")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_retry))
-    );
-    decos_symbols[irgen::g_string_pool.add("validate")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_validate))
-    );
-    decos_symbols[irgen::g_string_pool.add("catch")] = std::make_shared<irgen::Value>(
-        Value(irgen::FunctionType(deco_catch))
-    );
+        decos_symbols[irgen::g_string_pool.add("memoize")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_memoize))
+        );
+        decos_symbols[irgen::g_string_pool.add("timer")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_timer))
+        );
+        decos_symbols[irgen::g_string_pool.add("debug")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_debug))
+        );
+        decos_symbols[irgen::g_string_pool.add("log")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_log))
+        );
+        decos_symbols[irgen::g_string_pool.add("once")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_once))
+        );
+        decos_symbols[irgen::g_string_pool.add("retry")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_retry))
+        );
+        decos_symbols[irgen::g_string_pool.add("validate")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_validate))
+        );
+        decos_symbols[irgen::g_string_pool.add("catch")] = std::make_shared<irgen::Value>(
+            Value(irgen::FunctionType(deco_catch))
+        );
 
-    return irgen::ModuleObject(irgen::SymbolTable(decos_symbols));
-}();
+        return irgen::ModuleObject(irgen::SymbolTable(decos_symbols));
+    }();
+    return inst;
+}
 
-irgen::ModuleObject standard_mod = [] {
-    std::map<size_t, std::shared_ptr<irgen::Value>> std_symbols;
+irgen::ModuleObject& standard_mod() {
+    static irgen::ModuleObject inst = [] {
+        std::map<size_t, std::shared_ptr<irgen::Value>> std_symbols;
 
-    std_symbols[irgen::g_string_pool.add("concat")] = std::make_shared<irgen::Value>(
-        irgen::Value(
-            irgen::FunctionType(
-                [](VM&, const std::vector<Value>& args) -> Value {
-                    arg_must("concat", 2);
-                    if (args[0].getType() != Value::Type::String
-                        or args[1]
-                    .
-                    getType() != Value::Type::String
-                    )
-                    {
-                        throw RuntimeError("Not both string");
+        std_symbols[irgen::g_string_pool.add("concat")] = std::make_shared<irgen::Value>(
+            irgen::Value(
+                irgen::FunctionType(
+                    [](VM&, const std::vector<Value>& args) -> Value {
+                        arg_must("concat", 2);
+                        if (args[0].getType() != Value::Type::String
+                            or args[1]
+                        .
+                        getType() != Value::Type::String
+                        )
+                        {
+                            throw RuntimeError("Not both string");
+                        }
+                        return Value(args[0].asString() + args[1].asString());
                     }
-                    return Value(args[0].asString() + args[1].asString());
-                }
+                )
             )
-        )
-    );
+        );
 
-    std_symbols[irgen::g_string_pool.add("math")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(math_mod))
-    );
-    std_symbols[irgen::g_string_pool.add("dict")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(dict_mod))
-    );
-    std_symbols[irgen::g_string_pool.add("decos")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(decos_mod))
-    );
-    std_symbols[irgen::g_string_pool.add("iter")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(make_iter_module()))
-    );
-    std_symbols[irgen::g_string_pool.add("io")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(make_io_module()))
-    );
-    std_symbols[irgen::g_string_pool.add("format")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(make_format_module()))
-    );
-    std_symbols[irgen::g_string_pool.add("typing")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(make_typing_module()))
-    );
-    std_symbols[irgen::g_string_pool.add("random")] = std::make_shared<irgen::Value>(
-        Value(std::make_shared<irgen::ModuleObject>(make_random_module()))
-    );
+        std_symbols[irgen::g_string_pool.add("math")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(math_mod()))
+        );
+        std_symbols[irgen::g_string_pool.add("dict")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(dict_mod()))
+        );
+        std_symbols[irgen::g_string_pool.add("decos")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(decos_mod()))
+        );
+        std_symbols[irgen::g_string_pool.add("iter")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(make_iter_module()))
+        );
+        std_symbols[irgen::g_string_pool.add("io")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(make_io_module()))
+        );
+        std_symbols[irgen::g_string_pool.add("format")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(make_format_module()))
+        );
+        std_symbols[irgen::g_string_pool.add("typing")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(make_typing_module()))
+        );
+        std_symbols[irgen::g_string_pool.add("random")] = std::make_shared<irgen::Value>(
+            Value(std::make_shared<irgen::ModuleObject>(make_random_module()))
+        );
 
-    return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
-}();
+        return irgen::ModuleObject(irgen::SymbolTable(std_symbols));
+    }();
+    return inst;
+}
 
 Value eval_fn(VM& vm, const std::vector<Value>& args) {
     arg_must("eval", 1);

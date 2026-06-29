@@ -562,7 +562,7 @@ void VM::init_builtins() {
         }
     }
 
-    auto std_module = std::make_shared<ModuleObject>(lang::standard_mod);
+    auto std_module = std::make_shared<ModuleObject>(lang::standard_mod());
     std_module->name = "std";
     std_module->full_name = "std";
     main_module->set_attr("std", Value(std_module));
@@ -890,9 +890,12 @@ void VM::shutdown() {
 }
 
 VM::~VM() {
+    LOG("~VM");
     if (main_module) {
+        LOG("As main module, shutdown.");
         shutdown();
     } else {
+        LOG("Destroy cell pool");
         cell_pool.markDestroying();
     }
 }

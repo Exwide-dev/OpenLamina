@@ -842,12 +842,17 @@ struct QuoteExprNode final : ExprNode {
 /**
  * @struct VarDeclNode
  * @brief 变量声明节点
+ *
+ * 支持可选的类型标注：`let a: Type = expr`。当 `has_type_annotation` 为真时，
+ * `type_annotation` 指向声明的类型；否则为动态类型变量。
  */
 struct VarDeclNode final : ASTNode {
     std::string name;      ///< 变量名称
     ExprNode* init;        ///< 初始化表达式
     bool is_const;         ///< 是否为常量
     Visibility visibility; ///< 可见性
+    TypeNode* type_annotation = nullptr; ///< 可选的类型标注
+    bool has_type_annotation = false;    ///< 是否带类型标注
 
     /**
      * @brief 构造函数
@@ -855,18 +860,22 @@ struct VarDeclNode final : ASTNode {
      * @param i 初始化表达式
      * @param is_const 是否为常量
      * @param vis 可见性
+     * @param ty 可选的类型标注节点（为 nullptr 表示无标注）
      */
     VarDeclNode(
         std::string n,
         ExprNode* i,
         bool is_const = false,
-        Visibility vis = Visibility::Exported
+        Visibility vis = Visibility::Exported,
+        TypeNode* ty = nullptr
     )
         : ASTNode(ASTNodeType::VarDecl),
           name(std::move(n)),
           init(i),
           is_const(is_const),
-          visibility(vis) {
+          visibility(vis),
+          type_annotation(ty),
+          has_type_annotation(ty != nullptr) {
     }
 
     /**
@@ -874,6 +883,7 @@ struct VarDeclNode final : ASTNode {
      */
     ~VarDeclNode() override {
         delete init;
+        delete type_annotation;
     }
 };
 

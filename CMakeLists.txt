@@ -67,6 +67,8 @@ set(OPENLAMINA_CORE_SOURCES
         src/repl/repl.hpp
         tools/cli.cpp
         tools/cli.hpp
+        tools/checker.cpp
+        tools/checker.hpp
 )
 
 set(OPENLAMINA_TEST_SOURCES
@@ -96,6 +98,8 @@ set(OPENLAMINA_TEST_SOURCES
         src/irgen/value_copy.cpp
         src/irgen/runtime_ast.cpp
         src/irgen/macro_ops.cpp
+        tools/checker.hpp
+        tools/checker.cpp
 )
 
 add_executable(OpenLamina main.cpp ${OPENLAMINA_CORE_SOURCES})
@@ -124,6 +128,9 @@ endif ()
 option(BUILD_TESTS "Build OpenLamina test runner" ON)
 if (BUILD_TESTS)
     add_executable(OpenLaminaTests test/main.cpp ${OPENLAMINA_TEST_SOURCES})
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_options(OpenLaminaTests PRIVATE -mcmodel=large)
+    endif()
 endif ()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -172,7 +179,8 @@ target_compile_definitions(OpenLamina PRIVATE
         OPENLAMINA_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" OFF)
+option(FETCH_LAMMP "Fetch LAMMP from GitHub repository" ON)
+
 
 if (FETCH_LAMMP)
     message(STATUS "OpenLamina: Fetching LAMMP")

@@ -1,4 +1,5 @@
 #include "cli.hpp"
+#include "checker.hpp"
 #include "error.hpp"
 #include "front-end/front_end.hpp"
 #include "irgen/bytecode_file.hpp"
@@ -28,6 +29,10 @@ Args parse_args(const int argc, char* argv[]) {
             args.optimize = false;
         } else if (arg == "-c" || arg == "--compile") {
             args.compile = true;
+        } else if (arg == "--check") {
+            args.check = true;
+        } else if (arg == "--view-log") {
+            args.view_log = true;
         } else if (arg == "-o" || arg == "--output") {
             if (i + 1 >= argc) {
                 std::cerr << "Error: " << arg << " requires an argument\n";
@@ -261,6 +266,10 @@ Contact OpenLamina-Developing for more information)",
     }
 }
 
+int run_check(const std::string& file_path, bool verbose_log) {
+    return olmcheck::run_check(file_path, verbose_log);
+}
+
 void show_help() {
     std::cout <<
             "Usage: OpenLamina [options] [file]\n\n"
@@ -270,7 +279,9 @@ void show_help() {
             "  -O               Optimize bytecode when running .lm (default: on)\n"
             "  -O0              Disable bytecode optimization for .lm\n"
             "  -c, --compile    Compile .lm source to .lmc bytecode\n"
-            "  -o, --output     Output path for -c\n\n"
+            "  -o, --output     Output path for -c\n"
+            "  --check          Run static type checker on .lm file\n"
+            "  --view-log       Show detailed type checking logs\n\n"
             "If no file is specified, the REPL will start.\n"
             ".lm  interpreted  |  .lmc  binary bytecode\n"
             << std::endl;

@@ -6,9 +6,12 @@
 #include <memory>
 #include <variant>
 #include <stdexcept>
+#include <iostream>
 #include <cstring>
 #include <vector>
 #include <concepts>
+
+#include "tools/debug.hpp"
 
 namespace lang::lammp {
 
@@ -198,13 +201,13 @@ class Number {
      * @brief 检查是否为小整数
      * @return 如果是小整数返回true
      */
-    [[nodiscard]] bool is_small() const { return std::holds_alternative<int64_t>(value); }
+    [[nodiscard]] bool is_small() const { LOG("is small?"); return std::holds_alternative<int64_t>(value); }
 
     /**
      * @brief 获取小整数值
      * @return int64_t值
      */
-    [[nodiscard]] int64_t get_small() const { return std::get<int64_t>(value); }
+    [[nodiscard]] int64_t get_small() const { LOG("get small"); return std::get<int64_t>(value); }
 
     /**
      * @brief 获取大整数引用（const）
